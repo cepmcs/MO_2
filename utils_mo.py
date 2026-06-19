@@ -547,8 +547,8 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
     save_metrics(os.path.join(alg_dir, "metrics.csv"), metrics)
     save_molecules(pareto, run_dir)
     save_tracking(tracker, run_dir)
-    # Las gráficas individuales ya no se generan aquí;
-    # plot_comparison.py las regenera desde los CSV.
+    # Las gráficas no se generan aquí; se regeneran desde los CSV en el
+    # repo de graficación.
 
     return metrics, pareto, hv, spacing, validity
 
