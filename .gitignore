@@ -53,7 +53,7 @@ env/
 # Data and results (adjust as needed)
 # Uncomment if you want to ignore these folders entirely:
 # data/
-# results/
+results/
 
 # Logs
 *.log

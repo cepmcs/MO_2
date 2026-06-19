@@ -10,7 +10,7 @@ import pandas as pd
 
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED as QED_module, Descriptors, Lipinski
-from pymoo.core.problem import ElementwiseProblem
+from pymoo.core.problem import Problem
 from pymoo.core.sampling import Sampling
 from pymoo.core.callback import Callback
 from pymoo.indicators.hv import HV
@@ -118,27 +118,54 @@ def encode_smiles(model, smiles_list, stoi):
     return np.array(mus)
 
 
-def decode_z(model, z_np, stoi, itos):
-    """Decodifica vector latente z → SMILES canónico (argmax greedy)."""
-    z = torch.tensor(z_np, dtype=torch.float32).unsqueeze(0).to(DEVICE)
-    h = model.decoder_input_h(z).unsqueeze(0).repeat(model.num_layers, 1, 1)
-    c = model.decoder_input_c(z).unsqueeze(0).repeat(model.num_layers, 1, 1)
-    cur = torch.full((1, 1), stoi['[SOS]'], dtype=torch.long, device=DEVICE)
-    special = {'[PAD]', '[SOS]', '[EOS]', '[UNK]'}
-    tokens = []
+def decode_z_batch(model, z_np, stoi, itos):
+    """Decodifica un lote de vectores latentes z → lista de SMILES canónicos
+    (argmax greedy, batcheado). Cada entrada es None si el SMILES es inválido.
+
+    Equivale a aplicar la decodificación greedy individual a cada fila de z,
+    pero ejecuta los pasos del LSTM sobre todo el lote a la vez (batch=n en
+    lugar de n decodes con batch=1), lo que aprovecha la GPU."""
+    z = torch.as_tensor(np.asarray(z_np, dtype=np.float32), device=DEVICE)
+    if z.dim() == 1:
+        z = z.unsqueeze(0)
+    n = z.shape[0]
+
+    h = model.decoder_input_h(z).unsqueeze(0).repeat(model.num_layers, 1, 1).contiguous()
+    c = model.decoder_input_c(z).unsqueeze(0).repeat(model.num_layers, 1, 1).contiguous()
+    cur = torch.full((n, 1), stoi['[SOS]'], dtype=torch.long, device=DEVICE)
+
+    eos_idx  = stoi['[EOS]']
+    special  = {'[PAD]', '[SOS]', '[EOS]', '[UNK]'}
+    finished = [False] * n
+    n_done   = 0
+    tokens   = [[] for _ in range(n)]
+
     with torch.no_grad():
         for _ in range(MAX_LEN):
             emb = model.embedding(cur)
             out, (h, c) = model.decoder_rnn(emb, (h, c))
-            idx = model.fc_out(out.squeeze(1)).argmax(dim=-1).item()
-            if idx == stoi['[EOS]']:
+            idx = model.fc_out(out.squeeze(1)).argmax(dim=-1)   # [n]
+            idx_list = idx.tolist()
+            for i in range(n):
+                if finished[i]:
+                    continue
+                ti = idx_list[i]
+                if ti == eos_idx:
+                    finished[i] = True
+                    n_done += 1
+                else:
+                    tok = itos[ti]
+                    if tok not in special:
+                        tokens[i].append(tok)
+            if n_done == n:
                 break
-            tok = itos[idx]
-            if tok not in special:
-                tokens.append(tok)
-            cur = torch.full((1, 1), idx, dtype=torch.long, device=DEVICE)
-    mol = Chem.MolFromSmiles("".join(tokens))
-    return Chem.MolToSmiles(mol) if mol else None
+            cur = idx.unsqueeze(1)
+
+    results = []
+    for i in range(n):
+        mol = Chem.MolFromSmiles("".join(tokens[i]))
+        results.append(Chem.MolToSmiles(mol) if mol else None)
+    return results
 
 
 @functools.lru_cache(maxsize=1)
@@ -174,8 +201,15 @@ def lipinski_score(mol):
     return round(1.0 / (1.0 + penalty), 4)
 
 
+@functools.lru_cache(maxsize=None)
 def calc_properties(smi):
-    """Calcula propiedades de un SMILES. Retorna dict o None si inválido."""
+    """Calcula propiedades de un SMILES. Retorna dict o None si inválido.
+
+    Cacheado por string SMILES: a medida que la población converge, muchos
+    vectores latentes distintos decodifican al mismo SMILES, así que el cálculo
+    RDKit (QED/SA/Lipinski) se reutiliza en lugar de recomputarse cada vez.
+    Los callers solo leen el dict (build_pareto copia con dict.update sobre otro
+    objeto), por lo que compartir la instancia cacheada es seguro."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
@@ -193,9 +227,12 @@ def calc_properties(smi):
 
 # ─── Problema pymoo ──────────────────────────────────────────────────────────
 
-class MolecularLatentProblem(ElementwiseProblem):
+class MolecularLatentProblem(Problem):
     """Optimización tri-objetivo en espacio latente VAE.
-    F = [-QED, SA, -Lipinski] → pymoo minimiza los 3."""
+    F = [-QED, SA, -Lipinski] → pymoo minimiza los 3.
+
+    Problema vectorizado: pymoo entrega la población como matriz [n, latent_dim]
+    y se decodifica todo el lote en una sola pasada batcheada del LSTM."""
 
     def __init__(self, model, stoi, itos, latent_dim):
         self.model, self.stoi, self.itos = model, stoi, itos
@@ -203,21 +240,24 @@ class MolecularLatentProblem(ElementwiseProblem):
         super().__init__(n_var=latent_dim, n_obj=3, xl=-5.0, xu=5.0)
 
     def _evaluate(self, x, out, *args, **kwargs):
-        smi   = decode_z(self.model, x, self.stoi, self.itos)
-        props = calc_properties(smi)
-        if props is None:
-            out["F"] = INVALID_F
-            self.eval_log.append({
-                'smiles': None, 'qed': None, 'sa': None,
-                'lipinski': None, 'valid': False,
-            })
-        else:
-            out["F"] = [-props['qed'], props['sa'], -props['lipinski']]
-            self.eval_log.append({
-                'smiles': props['smiles'], 'qed': props['qed'],
-                'sa': props['sa'], 'lipinski': props['lipinski'],
-                'valid': True,
-            })
+        smiles = decode_z_batch(self.model, x, self.stoi, self.itos)
+        F = np.empty((len(smiles), self.n_obj), dtype=float)
+        for i, smi in enumerate(smiles):
+            props = calc_properties(smi)
+            if props is None:
+                F[i] = INVALID_F
+                self.eval_log.append({
+                    'smiles': None, 'qed': None, 'sa': None,
+                    'lipinski': None, 'valid': False,
+                })
+            else:
+                F[i] = (-props['qed'], props['sa'], -props['lipinski'])
+                self.eval_log.append({
+                    'smiles': props['smiles'], 'qed': props['qed'],
+                    'sa': props['sa'], 'lipinski': props['lipinski'],
+                    'valid': True,
+                })
+        out["F"] = F
 
 
 class NormalizedMolecularLatentProblem(MolecularLatentProblem):
@@ -236,8 +276,7 @@ class NormalizedMolecularLatentProblem(MolecularLatentProblem):
 
     def _evaluate(self, x, out, *args, **kwargs):
         super()._evaluate(x, out, *args, **kwargs)
-        raw_F = np.array(out["F"], dtype=float)
-        out["F"] = ((raw_F - self._F_MIN) / self._F_RANGE).tolist()
+        out["F"] = (out["F"] - self._F_MIN) / self._F_RANGE
 
 
 class LatentSampling(Sampling):
