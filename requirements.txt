@@ -1,0 +1,9 @@
+# Dependencias del proyecto MO_prueba
+# Instalar: pip install -r requirements.txt
+torch
+pymoo
+rdkit
+pandas
+matplotlib
+numpy
+scipy

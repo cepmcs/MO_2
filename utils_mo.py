@@ -1,0 +1,513 @@
+"""
+Utilidades para optimización multi-objetivo de moléculas en espacio latente VAE.
+Objetivos: QED (↑), SA (↓), Lipinski (↑)  →  pymoo minimiza [-QED, SA, -Lipinski].
+"""
+
+import re, os, sys, functools
+import torch
+import numpy as np
+import pandas as pd
+
+from rdkit import Chem, RDLogger
+from rdkit.Chem import QED as QED_module, Descriptors, Lipinski
+from pymoo.core.problem import ElementwiseProblem
+from pymoo.core.sampling import Sampling
+from pymoo.core.callback import Callback
+from pymoo.indicators.hv import HV
+from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+from pymoo.operators.crossover.sbx import SBX
+from pymoo.operators.crossover.pcx import PCX
+from pymoo.operators.mutation.pm import PM
+from pymoo.operators.mutation.gauss import GaussianMutation
+
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(ROOT_DIR, 'SA_Score'))
+import sascorer
+from vae_model_lstm import MolecularVAE_LSTM
+RDLogger.DisableLog('rdApp.*')
+
+# ─── Configuración ───────────────────────────────────────────────────────────
+MODEL_PATH  = os.path.join(ROOT_DIR, "SMILES_LSTM_2_256_300_lr1e4_b64.pth")
+MOSES_CSV   = os.path.join(ROOT_DIR, "data", "moses.csv")
+RESULTS_DIR = os.path.join(ROOT_DIR, "results")
+DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MAX_LEN     = 100
+
+# Ref point HV: peor que cualquier molécula válida en los 3 objetivos
+HV_REF    = np.array([0.1, 11.0, 0.1])
+# Penalización para inválidas: fuera del hipercubo de referencia
+INVALID_F = [1.0, 12.0, 1.0]
+
+SMILES_REGEX = re.compile(
+    r"(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|\=|#|-|\+|\\\\|\/|:|~|@|\?|>|<|\*|\$|%[0-9]{2}|[0-9])"
+)
+
+
+# ─── Operadores genéticos ────────────────────────────────────────────────────
+
+CROSSOVERS = {
+    'sbx': lambda: SBX(prob=0.9, eta=15),
+    'pcx': lambda: PCX(eta=0.1, zeta=0.1),
+}
+MUTATIONS = {
+    'pm':    lambda: PM(eta=20),
+    'gauss': lambda: GaussianMutation(sigma=0.1),
+}
+
+
+def get_operators(crossover, mutation):
+    """Instancia los operadores de pymoo a partir de sus nombres."""
+    return CROSSOVERS[crossover](), MUTATIONS[mutation]()
+
+
+def get_results_dir(crossover, mutation):
+    """La combinación base (sbx+pm) escribe en results/;
+    el resto en results_operadores/<crossover>_<mutation>/."""
+    if (crossover, mutation) == ('sbx', 'pm'):
+        return RESULTS_DIR
+    return os.path.join(ROOT_DIR, "results_operadores", f"{crossover}_{mutation}")
+
+
+
+# ─── VAE: cargar, encodear, decodificar ──────────────────────────────────────
+
+def load_model():
+    """Carga modelo VAE desde checkpoint y retorna (model, stoi, itos, latent_dim)."""
+    ckpt = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
+    h    = ckpt['hyperparams']
+    model = MolecularVAE_LSTM(
+        vocab_size=h['vocab_size'], embed_size=h['embed'],
+        hidden_size=h['hidden'], latent_size=h['latent'],
+        num_layers=h.get('num_layers', 1)
+    ).to(DEVICE)
+    model.load_state_dict(ckpt['model_state'])
+    model.eval()
+    return model, ckpt['vocab_stoi'], ckpt['vocab_itos'], h['latent']
+
+
+def _smiles_to_tensor(smi, stoi):
+    """Tokeniza SMILES → tensor de índices [SOS, ..., EOS, PAD]. None si falla."""
+    tokens = SMILES_REGEX.findall(smi)
+    if not tokens:
+        return None
+    ids = [stoi['[SOS]']]
+    for t in tokens:
+        idx = stoi.get(t)
+        if idx is None:
+            return None
+        ids.append(idx)
+    ids.append(stoi['[EOS]'])
+    pad = stoi.get('[PAD]', 0)
+    ids = ids[:MAX_LEN] + [pad] * max(0, MAX_LEN - len(ids))
+    return torch.tensor(ids, dtype=torch.long)
+
+
+def encode_smiles(model, smiles_list, stoi):
+    """Codifica lista de SMILES → vectores latentes μ. Descarta no-tokenizables."""
+    mus = []
+    with torch.no_grad():
+        for smi in smiles_list:
+            t = _smiles_to_tensor(smi, stoi)
+            if t is None:
+                continue
+            _, (h, _) = model.encoder_rnn(model.embedding(t.unsqueeze(0).to(DEVICE)))
+            mu = model.fc_mu(h[-1])
+            mus.append(mu.squeeze(0).cpu().numpy())
+    return np.array(mus)
+
+
+def decode_z(model, z_np, stoi, itos):
+    """Decodifica vector latente z → SMILES canónico (argmax greedy)."""
+    z = torch.tensor(z_np, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+    h = model.decoder_input_h(z).unsqueeze(0).repeat(model.num_layers, 1, 1)
+    c = model.decoder_input_c(z).unsqueeze(0).repeat(model.num_layers, 1, 1)
+    cur = torch.full((1, 1), stoi['[SOS]'], dtype=torch.long, device=DEVICE)
+    special = {'[PAD]', '[SOS]', '[EOS]', '[UNK]'}
+    tokens = []
+    with torch.no_grad():
+        for _ in range(MAX_LEN):
+            emb = model.embedding(cur)
+            out, (h, c) = model.decoder_rnn(emb, (h, c))
+            idx = model.fc_out(out.squeeze(1)).argmax(dim=-1).item()
+            if idx == stoi['[EOS]']:
+                break
+            tok = itos[idx]
+            if tok not in special:
+                tokens.append(tok)
+            cur = torch.full((1, 1), idx, dtype=torch.long, device=DEVICE)
+    mol = Chem.MolFromSmiles("".join(tokens))
+    return Chem.MolToSmiles(mol) if mol else None
+
+
+@functools.lru_cache(maxsize=1)
+def _load_moses_df():
+    """Carga y cachea MOSES CSV (~1.9M filas)."""
+    return pd.read_csv(MOSES_CSV)
+
+
+def load_seed_mus(model, stoi, n_samples, run_id):
+    """Encodea n_samples moléculas de MOSES train como población inicial.
+    Sobremuestrea 20% para compensar descartes por tokenización."""
+    df = _load_moses_df()
+    train_smi = df[df['SPLIT'] == 'train']['SMILES'].dropna()
+    pool = train_smi.sample(int(n_samples * 1.2), random_state=run_id).tolist()
+    mus = encode_smiles(model, pool, stoi)
+    return mus[:n_samples]
+
+
+# ─── Propiedades moleculares ─────────────────────────────────────────────────
+
+def lipinski_score(mol):
+    """Score continuo de Lipinski [0, 1]. Penalización suave por exceder umbrales."""
+    mw   = Descriptors.MolWt(mol)
+    logp = Descriptors.MolLogP(mol)
+    hbd  = Lipinski.NumHDonors(mol)
+    hba  = Lipinski.NumHAcceptors(mol)
+
+    penalty = (max(0, mw - 500) / 100.0
+             + max(0, logp - 5) / 1.0
+             + max(0, hbd - 5) / 2.0
+             + max(0, hba - 10) / 4.0)
+
+    return round(1.0 / (1.0 + penalty), 4)
+
+
+def calc_properties(smi):
+    """Calcula propiedades de un SMILES. Retorna dict o None si inválido."""
+    mol = Chem.MolFromSmiles(smi) if smi else None
+    if mol is None:
+        return None
+    return {
+        'smiles': smi,
+        'qed': QED_module.qed(mol),
+        'sa': sascorer.calculateScore(mol),
+        'lipinski': lipinski_score(mol),
+        'mw': Descriptors.MolWt(mol),
+        'logp': Descriptors.MolLogP(mol),
+        'hbd': Lipinski.NumHDonors(mol),
+        'hba': Lipinski.NumHAcceptors(mol),
+    }
+
+
+# ─── Problema pymoo ──────────────────────────────────────────────────────────
+
+class MolecularLatentProblem(ElementwiseProblem):
+    """Optimización tri-objetivo en espacio latente VAE.
+    F = [-QED, SA, -Lipinski] → pymoo minimiza los 3."""
+
+    def __init__(self, model, stoi, itos, latent_dim):
+        self.model, self.stoi, self.itos = model, stoi, itos
+        self.eval_log = []
+        super().__init__(n_var=latent_dim, n_obj=3, xl=-5.0, xu=5.0)
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        smi   = decode_z(self.model, x, self.stoi, self.itos)
+        props = calc_properties(smi)
+        if props is None:
+            out["F"] = INVALID_F
+            self.eval_log.append({
+                'smiles': None, 'qed': None, 'sa': None,
+                'lipinski': None, 'valid': False,
+            })
+        else:
+            out["F"] = [-props['qed'], props['sa'], -props['lipinski']]
+            self.eval_log.append({
+                'smiles': props['smiles'], 'qed': props['qed'],
+                'sa': props['sa'], 'lipinski': props['lipinski'],
+                'valid': True,
+            })
+
+
+class NormalizedMolecularLatentProblem(MolecularLatentProblem):
+    """MolecularLatentProblem con normalización estática de objetivos.
+
+    Normaliza F a [0,1]^3 usando bounds teóricos fijos:
+      -QED ∈ [-1, 0],  SA ∈ [1, 10],  -Lipinski ∈ [-1, 0]
+
+    eval_log mantiene valores crudos → post-procesamiento comparable.
+    Diseñado para MOEA/D y MOPSO donde la escala cruda de SA
+    domina la descomposición Tchebycheff / velocidad de partículas.
+    """
+
+    _F_MIN   = np.array([-1.0,  1.0, -1.0])   # mejor caso por objetivo
+    _F_RANGE = np.array([ 1.0,  9.0,  1.0])   # F_MAX - F_MIN
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        super()._evaluate(x, out, *args, **kwargs)
+        raw_F = np.array(out["F"], dtype=float)
+        out["F"] = ((raw_F - self._F_MIN) / self._F_RANGE).tolist()
+
+
+class LatentSampling(Sampling):
+    """Sampling inicial desde vectores μ de moléculas MOSES."""
+    def __init__(self, mus):
+        super().__init__()
+        self.mus = mus
+
+    def _do(self, problem, n_samples, **kwargs):
+        idx = np.random.choice(len(self.mus), size=n_samples,
+                               replace=len(self.mus) < n_samples)
+        return self.mus[idx]
+
+
+# ─── Callback: tracking por generación ───────────────────────────────────────
+
+def load_train_smiles():
+    """Retorna set de SMILES de entrenamiento de MOSES (para novelty)."""
+    df = _load_moses_df()
+    return set(df[df['SPLIT'] == 'train']['SMILES'].dropna().tolist())
+
+
+class GenerationTracker(Callback):
+    """Registra HV, validez, unicidad y novedad por generación."""
+
+    def __init__(self, problem, train_smiles):
+        super().__init__()
+        self.problem = problem
+        self.train_smiles = train_smiles
+        self.history = []
+        self._last_idx = 0
+
+    def notify(self, algorithm):
+        gen = algorithm.n_gen
+
+        new = self.problem.eval_log[self._last_idx:]
+        self._last_idx = len(self.problem.eval_log)
+        for e in new:
+            e['gen'] = gen
+
+        F = algorithm.pop.get("F")
+        # Des-normalizar si el problema usa normalización estática
+        if hasattr(self.problem, '_F_MIN'):
+            F = F * self.problem._F_RANGE + self.problem._F_MIN
+        try:
+            hv = float(HV(ref_point=HV_REF)(F))
+        except Exception:
+            hv = 0.0
+
+        valid  = [e['smiles'] for e in new if e['valid']]
+        n_valid = len(valid)
+        unique  = set(valid)
+        n_novel = sum(1 for s in valid if s not in self.train_smiles)
+
+        self.history.append({
+            'gen': gen,
+            'hv': round(hv, 6),
+            'n_eval': len(new),
+            'n_valid': n_valid,
+            'validity': round(n_valid / len(new), 4) if new else 0.0,
+            'uniqueness': round(len(unique) / n_valid, 4) if n_valid else 0.0,
+            'novelty': round(n_novel / n_valid, 4) if n_valid else 0.0,
+        })
+
+
+# ─── Métricas: Pareto, HV, Spacing ──────────────────────────────────────────
+
+def non_dominated(results):
+    """Filtra soluciones no-dominadas usando NDS de pymoo."""
+    if not results:
+        return []
+    F = np.array([[-r['qed'], r['sa'], -r['lipinski']] for r in results])
+    front_idx = NonDominatedSorting().do(F, only_non_dominated_front=True)
+    return [results[i] for i in front_idx]
+
+
+def compute_hv(pareto):
+    """Calcula hypervolume del frente de Pareto."""
+    if not pareto:
+        return 0.0
+    F = np.array([[-r['qed'], r['sa'], -r['lipinski']] for r in pareto])
+    try:
+        return float(HV(ref_point=HV_REF)(F))
+    except Exception:
+        return 0.0
+
+
+def compute_spacing(pareto):
+    """Spacing de Schott normalizado (CV de distancias al vecino más cercano)."""
+    if len(pareto) < 2:
+        return 0.0
+    F = np.array([[-r['qed'], r['sa'], -r['lipinski']] for r in pareto])
+    # Normalizar ejes para compensar escalas distintas (SA~[1,10] vs QED/Lip~[0,1])
+    ranges = F.max(axis=0) - F.min(axis=0)
+    ranges[ranges == 0] = 1.0
+    F_norm = F / ranges
+    dmin = []
+    for i in range(len(F_norm)):
+        d = np.sqrt(np.sum((F_norm - F_norm[i]) ** 2, axis=1))
+        d[i] = np.inf
+        dmin.append(np.min(d))
+    dmin = np.array(dmin)
+    mu = np.mean(dmin)
+    return round(float(np.std(dmin) / mu), 6) if mu > 0 else 0.0
+
+
+def build_pareto(eval_log):
+    """Construye frente de Pareto desde el log completo. Retorna (pareto, validity)."""
+    n_valid = 0
+    seen = {}
+    for e in eval_log:
+        if not e['valid']:
+            continue
+        n_valid += 1
+        smi = e['smiles']
+        if smi not in seen:
+            seen[smi] = {
+                'smiles': smi, 'qed': e['qed'],
+                'sa': e['sa'], 'lipinski': e['lipinski'],
+            }
+    validity = round(n_valid / len(eval_log), 4) if eval_log else 0.0
+    pareto = non_dominated(list(seen.values()))
+
+    # Agregar propiedades extendidas (mw, logp, hbd, hba) para el CSV
+    for m in pareto:
+        props = calc_properties(m['smiles'])
+        if props:
+            m.update(props)
+
+    return pareto, validity
+
+
+# ─── I/O ─────────────────────────────────────────────────────────────────────
+
+def save_metrics(path, row):
+    """Agrega una fila al CSV de métricas (crea header si no existe)."""
+    df = pd.DataFrame([row])
+    header = not os.path.exists(path)
+    with open(path, 'a') as f:
+        df.to_csv(f, header=header, index=False)
+
+
+def save_molecules(pareto, run_dir):
+    """Guarda moléculas del frente de Pareto en CSV."""
+    if not pareto:
+        return
+    cols = ['smiles', 'qed', 'sa', 'lipinski', 'mw', 'logp', 'hbd', 'hba']
+    df = pd.DataFrame(pareto).sort_values('qed', ascending=False)
+    df[[c for c in cols if c in df.columns]].to_csv(
+        os.path.join(run_dir, "molecules.csv"), index=False)
+
+
+def save_tracking(tracker, run_dir):
+    """Guarda convergencia por generación y log completo de evaluaciones."""
+    pd.DataFrame(tracker.history).to_csv(
+        os.path.join(run_dir, "convergence.csv"), index=False)
+    pd.DataFrame(tracker.problem.eval_log).to_csv(
+        os.path.join(run_dir, "all_molecules.csv.gz"),
+        index=False, compression='gzip')
+
+
+def generate_summary(alg_name, pop_size, results_dir=None):
+    """Genera y muestra resumen estadístico (media ± std) de todas las runs.
+    También genera una tabla LaTeX con el resumen."""
+    base = results_dir if results_dir is not None else RESULTS_DIR
+    alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
+    path = os.path.join(alg_dir, "metrics.csv")
+    if not os.path.exists(path):
+        print(f"ERROR: {path} no existe")
+        return
+    df = pd.read_csv(path)
+    agg_cols = ['n_pareto', 'hypervolume', 'spacing', 'validity', 'novelty',
+                'best_qed', 'best_sa', 'best_lipinski', 'time_sec']
+    summary = df[[c for c in agg_cols if c in df.columns]].agg(['mean', 'std'])
+    summary.to_csv(os.path.join(alg_dir, "summary.csv"))
+
+    n = len(df)
+    print(f"\n{'='*55}")
+    print(f"  {alg_name} pop={pop_size} ({n} runs)")
+    print(f"{'='*55}")
+    for col, fmt in [('hypervolume', '.4f'), ('spacing', '.4f'),
+                     ('best_qed', '.4f'), ('best_sa', '.2f'),
+                     ('best_lipinski', '.2f')]:
+        if col in df.columns:
+            print(f"  {col:15s} {df[col].mean():{fmt}} ± {df[col].std():{fmt}}")
+    if 'validity' in df.columns:
+        print(f"  {'validity':15s} {df['validity'].mean():.2%} ± {df['validity'].std():.2%}")
+    if 'novelty' in df.columns:
+        print(f"  {'novelty':15s} {df['novelty'].mean():.2%} ± {df['novelty'].std():.2%}")
+    if 'n_pareto' in df.columns:
+        print(f"  {'n_pareto':15s} {df['n_pareto'].mean():.1f} ± {df['n_pareto'].std():.1f}")
+
+    # ─── Tabla LaTeX ─────────────────────────────────────────────────────
+    _generate_latex_table(alg_name, pop_size, df, alg_dir)
+
+
+def _generate_latex_table(alg_name, pop_size, df, alg_dir):
+    """Genera tabla LaTeX con resumen de métricas (media ± std)."""
+    n = len(df)
+    metrics_cfg = [
+        ('Hipervolumen',     'hypervolume',   '.4f'),
+        ('Espaciamiento',    'spacing',       '.4f'),
+        ('Validez',          'validity',      '.4f'),
+        ('Novedad',          'novelty',       '.4f'),
+        ('Mejor QED',        'best_qed',      '.4f'),
+        ('Mejor SA',         'best_sa',       '.2f'),
+        ('Mejor Lipinski',   'best_lipinski', '.2f'),
+        ('Tamaño de Pareto', 'n_pareto',      '.1f'),
+        ('Tiempo (s)',       'time_sec',      '.1f'),
+    ]
+
+    lines = [
+        r'\begin{table}[htbp]',
+        r'\centering',
+        f'\\caption{{{alg_name} ($N={pop_size}$, {n} runs)}}',
+        f'\\label{{tab:{alg_name.lower()}_pop{pop_size}}}',
+        r'\begin{tabular}{lc}',
+        r'\toprule',
+        r'Métrica & Media $\pm$ Desv. \\',
+        r'\midrule',
+    ]
+
+    for label, col, fmt in metrics_cfg:
+        if col not in df.columns:
+            continue
+        mean_val = df[col].mean()
+        std_val  = df[col].std()
+        lines.append(f'{label} & ${mean_val:{fmt}} \\pm {std_val:{fmt}}$ \\\\')
+
+    lines.extend([
+        r'\bottomrule',
+        r'\end{tabular}',
+        r'\end{table}',
+    ])
+
+    tex_path = os.path.join(alg_dir, "summary_table.tex")
+    with open(tex_path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    print(f"  LaTeX table: {tex_path}")
+
+
+# ─── Post-procesamiento ─────────────────────────────────────────────────────
+
+def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, results_dir=None):
+    """Calcula métricas, guarda resultados y genera gráficas para una run."""
+    pareto, validity = build_pareto(problem.eval_log)
+    hv      = compute_hv(pareto)
+    spacing = compute_spacing(pareto)
+
+    # Novelty: fracción de moléculas válidas no presentes en el training set
+    valid_smiles = [e['smiles'] for e in problem.eval_log if e['valid']]
+    n_novel = sum(1 for s in valid_smiles if s not in tracker.train_smiles)
+    novelty = round(n_novel / len(valid_smiles), 4) if valid_smiles else 0.0
+
+    metrics = {
+        'algorithm': alg_name, 'pop_size': pop_size, 'n_gen': n_gen,
+        'run': run_id + 1, 'n_pareto': len(pareto),
+        'hypervolume': round(hv, 6), 'spacing': spacing,
+        'validity': validity, 'novelty': novelty,
+        'best_qed': round(max((r['qed'] for r in pareto), default=float('nan')), 4),
+        'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
+        'best_lipinski': round(max((r['lipinski'] for r in pareto), default=0), 4),
+        'time_sec': round(elapsed, 1),
+    }
+
+    base = results_dir if results_dir is not None else RESULTS_DIR
+    alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
+    save_metrics(os.path.join(alg_dir, "metrics.csv"), metrics)
+    save_molecules(pareto, run_dir)
+    save_tracking(tracker, run_dir)
+    # Las gráficas individuales ya no se generan aquí;
+    # plot_comparison.py las regenera desde los CSV.
+
+    return metrics, pareto, hv, spacing, validity
+
