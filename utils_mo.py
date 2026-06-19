@@ -439,8 +439,7 @@ def save_tracking(tracker, run_dir):
 
 
 def generate_summary(alg_name, pop_size, results_dir=None):
-    """Genera y muestra resumen estadístico (media ± std) de todas las runs.
-    También genera una tabla LaTeX con el resumen."""
+    """Genera y muestra resumen estadístico (media ± std) de todas las runs."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
     path = os.path.join(alg_dir, "metrics.csv")
@@ -448,10 +447,6 @@ def generate_summary(alg_name, pop_size, results_dir=None):
         print(f"ERROR: {path} no existe")
         return
     df = pd.read_csv(path)
-    agg_cols = ['n_pareto', 'hypervolume', 'spacing', 'validity', 'novelty',
-                'best_qed', 'best_sa', 'best_lipinski', 'time_sec']
-    summary = df[[c for c in agg_cols if c in df.columns]].agg(['mean', 'std'])
-    summary.to_csv(os.path.join(alg_dir, "summary.csv"))
 
     n = len(df)
     print(f"\n{'='*55}")
@@ -468,54 +463,6 @@ def generate_summary(alg_name, pop_size, results_dir=None):
         print(f"  {'novelty':15s} {df['novelty'].mean():.2%} ± {df['novelty'].std():.2%}")
     if 'n_pareto' in df.columns:
         print(f"  {'n_pareto':15s} {df['n_pareto'].mean():.1f} ± {df['n_pareto'].std():.1f}")
-
-    # ─── Tabla LaTeX ─────────────────────────────────────────────────────
-    _generate_latex_table(alg_name, pop_size, df, alg_dir)
-
-
-def _generate_latex_table(alg_name, pop_size, df, alg_dir):
-    """Genera tabla LaTeX con resumen de métricas (media ± std)."""
-    n = len(df)
-    metrics_cfg = [
-        ('Hipervolumen',     'hypervolume',   '.4f'),
-        ('Espaciamiento',    'spacing',       '.4f'),
-        ('Validez',          'validity',      '.4f'),
-        ('Novedad',          'novelty',       '.4f'),
-        ('Mejor QED',        'best_qed',      '.4f'),
-        ('Mejor SA',         'best_sa',       '.2f'),
-        ('Mejor Lipinski',   'best_lipinski', '.2f'),
-        ('Tamaño de Pareto', 'n_pareto',      '.1f'),
-        ('Tiempo (s)',       'time_sec',      '.1f'),
-    ]
-
-    lines = [
-        r'\begin{table}[htbp]',
-        r'\centering',
-        f'\\caption{{{alg_name} ($N={pop_size}$, {n} runs)}}',
-        f'\\label{{tab:{alg_name.lower()}_pop{pop_size}}}',
-        r'\begin{tabular}{lc}',
-        r'\toprule',
-        r'Métrica & Media $\pm$ Desv. \\',
-        r'\midrule',
-    ]
-
-    for label, col, fmt in metrics_cfg:
-        if col not in df.columns:
-            continue
-        mean_val = df[col].mean()
-        std_val  = df[col].std()
-        lines.append(f'{label} & ${mean_val:{fmt}} \\pm {std_val:{fmt}}$ \\\\')
-
-    lines.extend([
-        r'\bottomrule',
-        r'\end{tabular}',
-        r'\end{table}',
-    ])
-
-    tex_path = os.path.join(alg_dir, "summary_table.tex")
-    with open(tex_path, 'w') as f:
-        f.write('\n'.join(lines) + '\n')
-    print(f"  LaTeX table: {tex_path}")
 
 
 # ─── Post-procesamiento ─────────────────────────────────────────────────────
