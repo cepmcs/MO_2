@@ -60,12 +60,14 @@ def get_operators(crossover, mutation):
     return CROSSOVERS[crossover](), MUTATIONS[mutation]()
 
 
+BASELINE_COMBO = ('sbx', 'pm')   # combo canónico: comparación entre algoritmos + baseline de la ablación
+
+
 def get_results_dir(crossover, mutation):
-    """La combinación base (sbx+pm) escribe en results/;
-    el resto en results_operadores/<crossover>_<mutation>/."""
-    if (crossover, mutation) == ('sbx', 'pm'):
-        return RESULTS_DIR
-    return os.path.join(ROOT_DIR, "results_operadores", f"{crossover}_{mutation}")
+    """Cada combinación de operadores escribe en results/<crossover>_<mutation>/.
+    sbx_pm es el combo canónico (comparación entre algoritmos y baseline de la
+    ablación de operadores); no recibe trato especial en disco."""
+    return os.path.join(RESULTS_DIR, f"{crossover}_{mutation}")
 
 
 

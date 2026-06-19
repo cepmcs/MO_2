@@ -54,7 +54,6 @@ env/
 # Uncomment if you want to ignore these folders entirely:
 # data/
 # results/
-# results_operadores/
 
 # Logs
 *.log

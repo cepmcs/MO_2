@@ -30,7 +30,7 @@ POP_SIZES=(200)
 N_RUNS=20
 
 # Combinaciones de operadores: "crossover mutation"
-# sbx+pm es la base (escribe en results/); el resto en results_operadores/
+# Cada combo escribe en results/<cx>_<mut>/ (sbx_pm es el base)
 OPERATORS=(
     "sbx pm"
     "sbx gauss"
@@ -50,12 +50,8 @@ echo "======================================================"
 for OP in "${OPERATORS[@]}"; do
     read -r CX MUT <<< "$OP"
 
-    # Directorio de resultados según la combinación
-    if [ "$CX" == "sbx" ] && [ "$MUT" == "pm" ]; then
-        RESULTS_DIR="results"
-    else
-        RESULTS_DIR="results_operadores/${CX}_${MUT}"
-    fi
+    # Directorio de resultados: un combo por carpeta (sbx_pm es el base)
+    RESULTS_DIR="results/${CX}_${MUT}"
 
     echo "------------------------------------------------------"
     echo "  Operadores: crossover=${CX}  mutation=${MUT}  ->  ${RESULTS_DIR}"

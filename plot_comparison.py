@@ -2,16 +2,18 @@
 Gráficas comparativas entre algoritmos MOO.
 Genera automáticamente todas las gráficas estándar de la literatura.
 
+Layout en disco: cada combinación de operadores es una carpeta uniforme bajo
+results/<combo>/<ALGO>/pop{N}/, donde sbx_pm es el combo base.
+
 Dos modos de comparación (mismo suite de gráficas):
 
-  1. Algoritmos (default): superpone los algoritmos entre sí, leyendo de
-     results/<ALGO>/pop{N}/.  Salida en results/comparison/pop{N}/.
+  1. Algoritmos (default): superpone los algoritmos entre sí, leyendo el combo
+     base de results/sbx_pm/<ALGO>/pop{N}/.  Salida en results/comparison/pop{N}/.
 
   2. Operadores (--operadores): para cada algoritmo, superpone las variantes
-     de operadores genéticos (sbx+pm base vs. pcx_gauss vs. ...), leyendo el
-     baseline de results/<ALGO>/ y las variantes de
-     results_operadores/<combo>/<ALGO>/.  Salida en
-     results_operadores/comparison/<ALGO>/pop{N}/.
+     de operadores genéticos (sbx+pm vs. pcx_gauss vs. ...), leyendo todos los
+     combos de results/<combo>/<ALGO>/pop{N}/.  Salida en
+     results/comparison/operadores/<ALGO>/pop{N}/.
 
 Uso:
     python plot_comparison.py                          # Algoritmos (auto-detecta)
@@ -49,7 +51,8 @@ plt.rcParams.update({
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(ROOT_DIR, "results")
-RESULTS_OPERADORES_DIR = os.path.join(ROOT_DIR, "results_operadores")
+BASELINE_COMBO = "sbx_pm"                              # combo canónico (base)
+BASELINE_DIR = os.path.join(RESULTS_DIR, BASELINE_COMBO)
 
 # Paleta de colores distinguibles.  Para algoritmos se usa el nombre como clave;
 # para operadores (claves no presentes aquí) se cae al ciclo DEFAULT por índice.
@@ -96,8 +99,11 @@ def _has_runs(pop_dir):
 
 # ─── Carga de datos ──────────────────────────────────────────────────────────
 
-def discover_algorithms(pop_size, base_dir=RESULTS_DIR):
-    """Descubre qué algoritmos tienen resultados para un pop_size dado."""
+def discover_algorithms(pop_size, base_dir=None):
+    """Descubre qué algoritmos tienen resultados para un pop_size dado,
+    dentro de un combo concreto (default: el combo base)."""
+    if base_dir is None:
+        base_dir = BASELINE_DIR
     algorithms = []
     if not os.path.exists(base_dir):
         return algorithms
@@ -111,16 +117,19 @@ def discover_algorithms(pop_size, base_dir=RESULTS_DIR):
     return algorithms
 
 
-def discover_operator_variants():
-    """Lista los nombres de combos de operadores bajo results_operadores/."""
-    variants = []
-    if not os.path.isdir(RESULTS_OPERADORES_DIR):
-        return variants
-    for name in sorted(os.listdir(RESULTS_OPERADORES_DIR)):
-        path = os.path.join(RESULTS_OPERADORES_DIR, name)
+def discover_combos():
+    """Lista los combos de operadores (results/<combo>/), con el base primero."""
+    combos = []
+    if not os.path.isdir(RESULTS_DIR):
+        return combos
+    for name in sorted(os.listdir(RESULTS_DIR)):
+        path = os.path.join(RESULTS_DIR, name)
         if os.path.isdir(path) and name != "comparison":
-            variants.append(name)
-    return variants
+            combos.append(name)
+    if BASELINE_COMBO in combos:   # el base siempre primero
+        combos.remove(BASELINE_COMBO)
+        combos.insert(0, BASELINE_COMBO)
+    return combos
 
 
 def load_convergence_data(pop_dir):
@@ -737,7 +746,7 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
         ('Novedad',  'novelty',       '.4f', True),
     ]
 
-    # Contexto: en modo operadores output_dir es .../comparison/<ALG>/pop{N},
+    # Contexto: en modo operadores output_dir es .../comparison/operadores/<ALG>/pop{N},
     # así que el padre del dir pop es el algoritmo; en modo algoritmos es
     # "comparison".  Se usa para desambiguar caption y \label entre reportes.
     ctx = os.path.basename(os.path.dirname(output_dir))
@@ -1106,26 +1115,23 @@ def _generate_report(series, pop_size, output_dir, report_label):
 # ─── Construcción de series por modo ────────────────────────────────────────
 
 def build_algorithm_series(algorithms, pop_size):
-    """Modo algoritmos: una serie por algoritmo, leyendo de results/."""
+    """Modo algoritmos: una serie por algoritmo, leyendo el combo base."""
     series = []
     for alg in algorithms:
-        pop_dir = os.path.join(RESULTS_DIR, alg, f"pop{pop_size}")
+        pop_dir = os.path.join(BASELINE_DIR, alg, f"pop{pop_size}")
         series.append(Series(alg, pop_dir, color_key=alg))
     return series
 
 
-def build_operator_series(alg, pop_size, variants):
-    """Modo operadores: para un algoritmo, una serie por variante de operadores.
-    El baseline sbx+pm vive en results/; las variantes en
-    results_operadores/<combo>/."""
+def build_operator_series(alg, pop_size, combos):
+    """Modo operadores: para un algoritmo, una serie por combo de operadores.
+    Todos los combos viven en results/<combo>/ (sbx_pm es el base)."""
     series = []
-    base_pop = os.path.join(RESULTS_DIR, alg, f"pop{pop_size}")
-    if _has_runs(base_pop):
-        series.append(Series("sbx+pm", base_pop, color_key="sbx+pm"))
-    for v in variants:
-        v_pop = os.path.join(RESULTS_OPERADORES_DIR, v, alg, f"pop{pop_size}")
-        if _has_runs(v_pop):
-            series.append(Series(v, v_pop, color_key=v))
+    for combo in combos:
+        pop_dir = os.path.join(RESULTS_DIR, combo, alg, f"pop{pop_size}")
+        if _has_runs(pop_dir):
+            label = combo.replace('_', '+')
+            series.append(Series(label, pop_dir, color_key=label))
     return series
 
 
@@ -1137,10 +1143,10 @@ def run_algorithm_comparison(algorithms, pop_size):
         algorithms = discover_algorithms(pop_size)
         if not algorithms:
             print(f"No se encontraron resultados para pop_size={pop_size}")
-            print(f"Directorios disponibles en {RESULTS_DIR}:")
-            if os.path.exists(RESULTS_DIR):
-                for d in os.listdir(RESULTS_DIR):
-                    full = os.path.join(RESULTS_DIR, d)
+            print(f"Directorios disponibles en {BASELINE_DIR}:")
+            if os.path.exists(BASELINE_DIR):
+                for d in os.listdir(BASELINE_DIR):
+                    full = os.path.join(BASELINE_DIR, d)
                     if os.path.isdir(full):
                         pops = [p for p in os.listdir(full)
                                 if os.path.isdir(os.path.join(full, p))]
@@ -1164,35 +1170,35 @@ def run_algorithm_comparison(algorithms, pop_size):
 
 
 def run_operator_comparison(algorithms, pop_size):
-    """Comparación de variantes de operadores, un reporte por algoritmo."""
-    variants = discover_operator_variants()
-    if not variants:
-        print(f"No se encontraron variantes de operadores en {RESULTS_OPERADORES_DIR}")
+    """Comparación de combos de operadores, un reporte por algoritmo."""
+    combos = discover_combos()
+    if not combos:
+        print(f"No se encontraron combos de operadores en {RESULTS_DIR}")
         return
 
-    # Algoritmos candidatos: los presentes en baseline o en alguna variante.
+    # Algoritmos candidatos: los presentes en cualquier combo.
     if algorithms is None:
-        algs = set(discover_algorithms(pop_size))
-        for v in variants:
+        algs = set()
+        for combo in combos:
             algs |= set(discover_algorithms(pop_size,
-                        base_dir=os.path.join(RESULTS_OPERADORES_DIR, v)))
+                        base_dir=os.path.join(RESULTS_DIR, combo)))
         algorithms = sorted(algs)
 
     print(f"\n{'='*60}")
     print(f"  Comparación de operadores (por algoritmo)")
-    print(f"  Variantes detectadas: sbx+pm (base), {', '.join(variants)}")
+    print(f"  Combos detectados: {', '.join(combos)}")
     print(f"  Algoritmos candidatos: {', '.join(algorithms)}")
     print(f"  pop_size: {pop_size}")
     print(f"{'='*60}")
 
     generated = []
     for alg in algorithms:
-        series = build_operator_series(alg, pop_size, variants)
+        series = build_operator_series(alg, pop_size, combos)
         if len(series) < 2:
-            print(f"\n  ⚠ {alg}: solo {len(series)} variante(s) con datos; "
+            print(f"\n  ⚠ {alg}: solo {len(series)} combo(s) con datos; "
                   f"se omite (se requieren ≥2 para comparar).")
             continue
-        output_dir = os.path.join(RESULTS_OPERADORES_DIR, "comparison",
+        output_dir = os.path.join(RESULTS_DIR, "comparison", "operadores",
                                   alg, f"pop{pop_size}")
         _generate_report(series, pop_size, output_dir,
                          f"Comparación de Operadores — {alg}")
@@ -1205,7 +1211,7 @@ def run_operator_comparison(algorithms, pop_size):
             print(f"     {alg}: {out}")
     else:
         print(f"  ⚠ No se generó ningún reporte (cada algoritmo necesita "
-              f"baseline + ≥1 variante con datos).")
+              f"≥2 combos con datos).")
     print(f"{'='*60}\n")
 
 
@@ -1216,8 +1222,8 @@ def main():
     parser.add_argument('--pop_size', type=int, default=200,
                         help="Tamaño de población (default: 200)")
     parser.add_argument('--operadores', action='store_true',
-                        help="Compara variantes de operadores por algoritmo "
-                             "(results/ vs results_operadores/)")
+                        help="Compara combos de operadores por algoritmo "
+                             "(todos los results/<combo>/)")
     args = parser.parse_args()
 
     if args.operadores:

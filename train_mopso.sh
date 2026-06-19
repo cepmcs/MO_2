@@ -27,7 +27,8 @@ ALG="MOPSO"
 POP_SIZES=(200)
 N_RUNS=20
 
-RESULTS_DIR="results"
+# MOPSO no tiene operadores GA: vive en el combo base sbx_pm
+RESULTS_DIR="results/sbx_pm"
 
 echo "======================================================"
 echo "  MOPSO — Optimización Multi-Objetivo"

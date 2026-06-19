@@ -9,8 +9,8 @@ Operadores configurables:
   - Crossover: SBX (default) o PCX
   - Mutation:  PM (default) o Gaussian
 
-La combinación base (sbx+pm) guarda en results/; el resto en
-results_operadores/<crossover>_<mutation>/.
+Cada combinación guarda en results/<crossover>_<mutation>/
+(sbx_pm es el combo base de la comparación entre algoritmos).
 
 Uso:
     python experimento_nsga3.py --pop_size 200 --run_id 0

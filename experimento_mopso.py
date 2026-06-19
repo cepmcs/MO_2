@@ -16,7 +16,7 @@ from pymoo.optimize import minimize
 from utils_mo import (
     load_model, load_seed_mus, load_train_smiles,
     NormalizedMolecularLatentProblem, LatentSampling, GenerationTracker,
-    postprocess_run, generate_summary, RESULTS_DIR,
+    postprocess_run, generate_summary, get_results_dir, BASELINE_COMBO,
 )
 
 ALG_NAME = "MOPSO"
@@ -30,8 +30,11 @@ def main():
     parser.add_argument('--generate_summary', action='store_true')
     args = parser.parse_args()
 
+    # MOPSO no tiene crossover/mutation: vive en el combo base sbx_pm.
+    results_dir = get_results_dir(*BASELINE_COMBO)
+
     if args.generate_summary:
-        generate_summary(ALG_NAME, args.pop_size)
+        generate_summary(ALG_NAME, args.pop_size, results_dir=results_dir)
         return
 
     assert args.run_id is not None, "Se requiere --run_id"
@@ -41,7 +44,7 @@ def main():
         torch.cuda.manual_seed_all(args.run_id)
 
     # Directorios
-    alg_dir = os.path.join(RESULTS_DIR, ALG_NAME, f"pop{args.pop_size}")
+    alg_dir = os.path.join(results_dir, ALG_NAME, f"pop{args.pop_size}")
     run_dir = os.path.join(alg_dir, f"run_{args.run_id+1:02d}")
     os.makedirs(run_dir, exist_ok=True)
 
@@ -69,7 +72,7 @@ def main():
     # Post-procesamiento
     metrics, pareto, hv, spacing, validity = postprocess_run(
         ALG_NAME, args.pop_size, N_GEN, args.run_id,
-        problem, tracker, elapsed, run_dir)
+        problem, tracker, elapsed, run_dir, results_dir=results_dir)
 
     print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Valid={validity:.0%}  "
           f"n={len(pareto)}  QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
