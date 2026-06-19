@@ -21,7 +21,7 @@ Uso:
 import os, time, argparse
 import numpy as np
 import torch
-from pymoo.algorithms.moo.moead import MOEAD
+from pymoo.algorithms.moo.moead import ParallelMOEAD
 from pymoo.optimize import minimize
 from pymoo.util.ref_dirs import get_reference_directions
 
@@ -87,7 +87,12 @@ def main():
     crossover, mutation = get_operators(args.crossover, args.mutation)
     problem  = NormalizedMolecularLatentProblem(model, stoi, itos, latent_dim)
     tracker  = GenerationTracker(problem, train_smiles)
-    algorithm = MOEAD(
+    # ParallelMOEAD: variante generacional/síncrona de MOEA/D. Genera todos los
+    # offspring desde la misma población y los evalúa en lote (vs. el MOEA/D
+    # steady-state que evalúa de a uno). Permite el decode batcheado en GPU
+    # (~20x más rápido) con calidad de frente equivalente (HV +1%, mismas mejores
+    # moléculas; ver comparación con 3 seeds × 300 gen).
+    algorithm = ParallelMOEAD(
         ref_dirs=ref_dirs,
         n_neighbors=20,
         prob_neighbor_mating=0.9,
