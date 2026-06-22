@@ -75,8 +75,17 @@ for OP in "${OPERATORS[@]}"; do
                 --pop_size "$POP" \
                 --run_id "$RUN" \
                 --crossover "$CX" \
-                --mutation "$MUT" \
-            && touch "$DONE_FILE"
+                --mutation "$MUT"
+
+            # No atamos el .done al exit code: estos nodos segfaultean en el
+            # teardown (bad marshal de conda, CUDA) DESPUÉS de guardar los
+            # resultados. Marcamos completado si el output existe de verdad.
+            RUN_OUT="${ALG_DIR}/run_$(printf '%02d' $((RUN + 1)))/molecules.csv"
+            if [ -f "$RUN_OUT" ]; then
+                touch "$DONE_FILE"
+            else
+                echo "[$RUN_LABEL] FALLÓ (sin molecules.csv). Se reintentará."
+            fi
 
         done
 

@@ -54,8 +54,17 @@ for POP in "${POP_SIZES[@]}"; do
 
         "$PYTHON" experimento_mopso.py \
             --pop_size "$POP" \
-            --run_id "$RUN" \
-        && touch "$DONE_FILE"
+            --run_id "$RUN"
+
+        # No atamos el .done al exit code: estos nodos segfaultean en el
+        # teardown (bad marshal de conda, CUDA) DESPUÉS de guardar los
+        # resultados. Marcamos completado si el output existe de verdad.
+        RUN_OUT="${ALG_DIR}/run_$(printf '%02d' $((RUN + 1)))/molecules.csv"
+        if [ -f "$RUN_OUT" ]; then
+            touch "$DONE_FILE"
+        else
+            echo "[$RUN_LABEL] FALLÓ (sin molecules.csv). Se reintentará."
+        fi
 
     done
 
