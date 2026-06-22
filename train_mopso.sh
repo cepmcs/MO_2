@@ -12,17 +12,10 @@
 
 source /etc/profile
 
-# ─── Entorno conda ───────────────────────────────────────────────────────────
-source /home/cperez/miniconda3/bin/activate
-
-if ! conda info --envs | grep -q "pymoo_env"; then
-    echo "Creando entorno conda pymoo_env..."
-    conda create -n pymoo_env python=3.12 -y
-    conda activate pymoo_env
-    pip install torch pymoo rdkit pandas matplotlib numpy scipy
-else
-    conda activate pymoo_env
-fi
+# ─── Entorno ──────────────────────────────────────────────────────────────────
+# Usamos el python del env directamente. NO usar `conda activate`: segfaultea en
+# los nodos por bytecode corrupto de conda (bad marshal data en conda-content-trust).
+PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 
 ALG="MOPSO"
 POP_SIZES=(300)
@@ -56,7 +49,7 @@ for POP in "${POP_SIZES[@]}"; do
 
         echo "[$RUN_LABEL] Lanzando..."
 
-        python experimento_mopso.py \
+        "$PYTHON" experimento_mopso.py \
             --pop_size "$POP" \
             --run_id "$RUN" \
         && touch "$DONE_FILE"
@@ -64,7 +57,7 @@ for POP in "${POP_SIZES[@]}"; do
     done
 
     echo "Generando resumen para ${ALG} pop${POP}..."
-    python experimento_mopso.py --pop_size "$POP" --generate_summary
+    "$PYTHON" experimento_mopso.py --pop_size "$POP" --generate_summary
 
 done
 
