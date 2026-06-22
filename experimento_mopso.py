@@ -61,6 +61,7 @@ def main():
     tracker  = GenerationTracker(problem, train_smiles)
     algorithm = MOPSO_CD(
         pop_size=args.pop_size,
+        archive_size=args.pop_size,   # archivo de líderes a la misma escala que el enjambre (convención MOPSO)
         sampling=LatentSampling(mus),
     )
 
