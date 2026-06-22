@@ -71,3 +71,6 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
+# Notas internas
+justificacion_operadores.md

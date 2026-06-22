@@ -46,7 +46,7 @@ SMILES_REGEX = re.compile(
 # ─── Operadores genéticos ────────────────────────────────────────────────────
 
 CROSSOVERS = {
-    'sbx': lambda: SBX(prob=0.9, eta=15),
+    'sbx': lambda: SBX(prob=0.9, eta=20),
     'pcx': lambda: PCX(eta=0.1, zeta=0.1),
 }
 MUTATIONS = {
