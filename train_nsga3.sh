@@ -26,7 +26,7 @@ fi
 # ─── Configuración NSGA-III ───────────────────────────────────────────────────
 ALG="NSGA3"
 SCRIPT="experimento_nsga3.py"
-POP_SIZES=(200)
+POP_SIZES=(300)
 N_RUNS=20
 
 # Combinaciones de operadores: "crossover mutation"

@@ -26,7 +26,7 @@ fi
 # ─── Configuración NSGA-II ───────────────────────────────────────────────────
 ALG="NSGA2"
 SCRIPT="experimento_nsga2.py"
-POP_SIZES=(200)
+POP_SIZES=(300)
 N_RUNS=20
 
 # Combinaciones de operadores: "crossover mutation"

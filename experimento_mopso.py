@@ -3,8 +3,8 @@ Experimento MOPSO — Optimización multi-objetivo del espacio latente VAE.
 Objetivos: QED (↑), SA (↓), Lipinski (↑)
 
 Uso:
-    python experimento_mopso.py --pop_size 200 --run_id 0
-    python experimento_mopso.py --pop_size 200 --generate_summary
+    python experimento_mopso.py --pop_size 300 --run_id 0
+    python experimento_mopso.py --pop_size 300 --generate_summary
 """
 
 import os, time, argparse

@@ -24,7 +24,7 @@ else
 fi
 
 ALG="MOPSO"
-POP_SIZES=(200)
+POP_SIZES=(300)
 N_RUNS=20
 
 # MOPSO no tiene operadores GA: vive en el combo base sbx_pm

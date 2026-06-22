@@ -10,9 +10,9 @@ Cada combinación guarda en results/<crossover>_<mutation>/
 (sbx_pm es el combo base de la comparación entre algoritmos).
 
 Uso:
-    python experimento_nsga2.py --pop_size 200 --run_id 0
-    python experimento_nsga2.py --pop_size 200 --run_id 0 --crossover pcx --mutation gauss
-    python experimento_nsga2.py --pop_size 200 --crossover pcx --mutation gauss --generate_summary
+    python experimento_nsga2.py --pop_size 300 --run_id 0
+    python experimento_nsga2.py --pop_size 300 --run_id 0 --crossover pcx --mutation gauss
+    python experimento_nsga2.py --pop_size 300 --crossover pcx --mutation gauss --generate_summary
 """
 
 import os, time, argparse

@@ -26,7 +26,7 @@ fi
 # ─── Configuración MOEA/D ───────────────────────────────────────────────────
 ALG="MOEAD"
 SCRIPT="experimento_moead.py"
-POP_SIZES=(200)
+POP_SIZES=(300)
 N_RUNS=20
 
 # Combinaciones de operadores: "crossover mutation"
