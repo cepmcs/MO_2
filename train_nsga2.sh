@@ -15,6 +15,9 @@ source /etc/profile
 # ─── Entorno ──────────────────────────────────────────────────────────────────
 # Usamos el python del env directamente. NO usar `conda activate`: segfaultea en
 # los nodos por bytecode corrupto de conda (bad marshal data en conda-content-trust).
+# PYTHONDONTWRITEBYTECODE: no escribir .pyc. El /home es NFS compartido y casi
+# lleno; procesos concurrentes escribiendo bytecode corrompen los .pyc (bad marshal).
+export PYTHONDONTWRITEBYTECODE=1
 PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 
 # ─── Configuración NSGA-II ───────────────────────────────────────────────────
