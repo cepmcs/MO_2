@@ -420,13 +420,19 @@ def save_metrics(path, row):
 
 
 def save_molecules(pareto, run_dir):
-    """Guarda moléculas del frente de Pareto en CSV."""
-    if not pareto:
-        return
+    """Guarda moléculas del frente de Pareto en CSV.
+
+    Aunque el frente esté vacío escribe el CSV (solo header): la run terminó de
+    verdad y el .sh marca el .done por la existencia de molecules.csv. Si no lo
+    escribiéramos, una run con frente vacío nunca generaría el archivo y se
+    relanzaría en cada job para siempre."""
     cols = ['smiles', 'qed', 'sa', 'lipinski', 'mw', 'logp', 'hbd', 'hba']
+    out = os.path.join(run_dir, "molecules.csv")
+    if not pareto:
+        pd.DataFrame(columns=cols).to_csv(out, index=False)
+        return
     df = pd.DataFrame(pareto).sort_values('qed', ascending=False)
-    df[[c for c in cols if c in df.columns]].to_csv(
-        os.path.join(run_dir, "molecules.csv"), index=False)
+    df[[c for c in cols if c in df.columns]].to_csv(out, index=False)
 
 
 def save_tracking(tracker, run_dir):

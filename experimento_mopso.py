@@ -7,7 +7,7 @@ Uso:
     python experimento_mopso.py --pop_size 300 --generate_summary
 """
 
-import os, time, argparse
+import os, sys, time, argparse
 import numpy as np
 import torch
 from pymoo.algorithms.moo.mopso_cd import MOPSO_CD
@@ -82,3 +82,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # Salida limpia: en estos nodos torch revienta en el teardown del intérprete
+    # (c10::Dispatcher::deregisterImpl_ en Dispatcher.cpp -> Segmentation fault /
+    # Aborted), DESPUÉS de que los resultados ya están en disco. os._exit salta
+    # los destructores estáticos de C++ y evita el crash. Solo se llega aquí si
+    # main() terminó bien; si lanza excepción, se propaga y el proceso sale != 0.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
