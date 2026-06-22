@@ -6,7 +6,8 @@
 #SBATCH --nodelist=gpu2
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
+#SBATCH --exclusive
 #SBATCH --time=12:00:00
 
 source /etc/profile
