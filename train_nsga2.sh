@@ -3,7 +3,7 @@
 #SBATCH --output=salida_nsga2.out
 #SBATCH --error=error_nsga2.err
 #SBATCH --partition=gpu
-#SBATCH --nodelist=gpu2
+#SBATCH --nodelist=gpu1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
