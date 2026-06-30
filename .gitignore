@@ -53,6 +53,9 @@ env/
 # Data and results (adjust as needed)
 # Uncomment if you want to ignore these folders entirely:
 # data/
+# moses.csv: dataset local pesado (symlink o copia), específico de cada
+# máquina; no se versiona, cada entorno (local/servidor) debe tener el suyo.
+data/moses.csv
 results/
 
 # Logs
