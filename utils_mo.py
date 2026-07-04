@@ -33,9 +33,14 @@ RESULTS_DIR = os.path.join(ROOT_DIR, "results")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
-# Ref point HV: peor que cualquier molécula válida en los 3 objetivos
-HV_REF    = np.array([0.1, 11.0, 0.1])
-# Penalización para inválidas: fuera del hipercubo de referencia
+# Bounds teóricos por objetivo [-QED, SA, -Lip] para normalizar el HV a [0,1]^3:
+#   -QED ∈ [-1, 0],  SA ∈ [1, 10],  -Lip ∈ [-1, 0]
+F_MIN   = np.array([-1.0, 1.0, -1.0])   # mejor caso por objetivo
+F_RANGE = np.array([ 1.0, 9.0, 1.0])    # peor - mejor
+# Ref point HV en el espacio normalizado: 10% más allá del peor (1.0) en cada eje.
+# Los 3 objetivos pesan igual y el HV queda en [0, 1.1^3 ≈ 1.331].
+HV_REF    = np.array([1.1, 1.1, 1.1])
+# Penalización para inválidas: fuera del hipercubo de referencia (escala cruda).
 INVALID_F = [1.0, 12.0, 1.0]
 
 SMILES_REGEX = re.compile(
@@ -187,18 +192,19 @@ def load_seed_mus(model, stoi, n_samples, run_id):
 # ─── Propiedades moleculares ─────────────────────────────────────────────────
 
 def lipinski_score(mol):
-    """Score continuo de Lipinski [0, 1]. Penalización suave por exceder umbrales."""
+    """Score de Lipinski (Rule of Five) en {0, 0.25, 0.5, 0.75, 1.0}.
+    Suma 0.25 por cada una de las 4 condiciones que se cumple."""
     mw   = Descriptors.MolWt(mol)
     logp = Descriptors.MolLogP(mol)
     hbd  = Lipinski.NumHDonors(mol)
     hba  = Lipinski.NumHAcceptors(mol)
 
-    penalty = (max(0, mw - 500) / 100.0
-             + max(0, logp - 5) / 1.0
-             + max(0, hbd - 5) / 2.0
-             + max(0, hba - 10) / 4.0)
+    score = (0.25 * (mw   <= 500)
+           + 0.25 * (logp <= 5)
+           + 0.25 * (hbd  <= 5)
+           + 0.25 * (hba  <= 10))
 
-    return round(1.0 / (1.0 + penalty), 4)
+    return round(score, 4)
 
 
 @functools.lru_cache(maxsize=None)
@@ -271,8 +277,8 @@ class NormalizedMolecularLatentProblem(MolecularLatentProblem):
     domina la descomposición Tchebycheff / velocidad de partículas.
     """
 
-    _F_MIN   = np.array([-1.0,  1.0, -1.0])   # mejor caso por objetivo
-    _F_RANGE = np.array([ 1.0,  9.0,  1.0])   # F_MAX - F_MIN
+    _F_MIN   = F_MIN     # bounds teóricos compartidos con el cálculo del HV
+    _F_RANGE = F_RANGE
 
     def _evaluate(self, x, out, *args, **kwargs):
         super()._evaluate(x, out, *args, **kwargs)
@@ -318,9 +324,11 @@ class GenerationTracker(Callback):
             e['gen'] = gen
 
         F = algorithm.pop.get("F")
-        # Des-normalizar si el problema usa normalización estática
-        if hasattr(self.problem, '_F_MIN'):
-            F = F * self.problem._F_RANGE + self.problem._F_MIN
+        # El HV se mide sobre objetivos normalizados a [0,1]^3 (ver HV_REF).
+        # NormalizedMolecularLatentProblem ya entrega F normalizado; el problema
+        # crudo entrega [-QED, SA, -Lip] y hay que normalizarlo aquí.
+        if not hasattr(self.problem, '_F_MIN'):
+            F = (F - F_MIN) / F_RANGE
         try:
             hv = float(HV(ref_point=HV_REF)(F))
         except Exception:
@@ -354,10 +362,11 @@ def non_dominated(results):
 
 
 def compute_hv(pareto):
-    """Calcula hypervolume del frente de Pareto."""
+    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^3."""
     if not pareto:
         return 0.0
     F = np.array([[-r['qed'], r['sa'], -r['lipinski']] for r in pareto])
+    F = (F - F_MIN) / F_RANGE
     try:
         return float(HV(ref_point=HV_REF)(F))
     except Exception:
