@@ -2,8 +2,8 @@
 Experimento NSGA-III — Optimización multi-objetivo del espacio latente VAE.
 Objetivos: QED (↑), SA (↓), Lipinski (↑)
 
-NSGA-III usa vectores de referencia (Das-Dennis), por lo que el pop_size
-real se ajusta al número de vectores más cercano al solicitado.
+NSGA-III usa vectores de referencia; se generan exactamente pop_size
+direcciones bien repartidas con el método Riesz s-energy.
 
 Operadores configurables:
   - Crossover: SBX (default) o PCX
@@ -35,15 +35,6 @@ ALG_NAME = "NSGA3"
 N_GEN    = 500
 
 
-def get_ref_dirs_for_pop(target_pop, n_obj=3):
-    """Encuentra n_partitions de Das-Dennis cuyo pop_size sea >= target_pop."""
-    for n in range(2, 50):
-        ref_dirs = get_reference_directions("das-dennis", n_obj, n_partitions=n)
-        if len(ref_dirs) >= target_pop:
-            return ref_dirs
-    return get_reference_directions("das-dennis", n_obj, n_partitions=12)
-
-
 def main():
     parser = argparse.ArgumentParser(description="NSGA-III — Multi-objective optimization")
     parser.add_argument('--pop_size',  type=int, required=True)
@@ -65,7 +56,7 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.run_id)
 
-    # Directorios (usa pop_size solicitado, no el ajustado)
+    # Directorios
     alg_dir = os.path.join(results_dir, ALG_NAME, f"pop{args.pop_size}")
     run_dir = os.path.join(alg_dir, f"run_{args.run_id+1:02d}")
     os.makedirs(run_dir, exist_ok=True)
@@ -73,14 +64,12 @@ def main():
     label = f"{ALG_NAME}[{args.crossover}+{args.mutation}]/pop{args.pop_size}/run_{args.run_id+1:02d}"
     print(f"[{label}] Iniciando...", flush=True)
 
-    # Vectores de referencia Das-Dennis
-    ref_dirs = get_ref_dirs_for_pop(args.pop_size)
-    actual_pop = len(ref_dirs)
-    print(f"[{label}] ref_dirs: solicitado={args.pop_size}, real={actual_pop}", flush=True)
+    # Direcciones de referencia: exactamente pop_size, bien repartidas (Riesz s-energy)
+    ref_dirs = get_reference_directions("energy", 3, args.pop_size, seed=1)
 
     # Cargar modelo y datos
     model, stoi, itos, latent_dim = load_model()
-    mus = load_seed_mus(model, stoi, actual_pop, args.run_id)
+    mus = load_seed_mus(model, stoi, args.pop_size, args.run_id)
     train_smiles = load_train_smiles()
 
     # Configurar y ejecutar
@@ -89,7 +78,7 @@ def main():
     tracker  = GenerationTracker(problem, train_smiles)
     algorithm = NSGA3(
         ref_dirs=ref_dirs,
-        pop_size=actual_pop,
+        pop_size=args.pop_size,
         sampling=LatentSampling(mus),
         crossover=crossover,
         mutation=mutation,
