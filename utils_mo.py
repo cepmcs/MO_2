@@ -3,7 +3,7 @@ Utilidades para optimización multi-objetivo de moléculas en espacio latente VA
 Objetivos: QED (↑), SA (↓), Lipinski (↑)  →  pymoo minimiza [-QED, SA, -Lipinski].
 """
 
-import re, os, sys, functools
+import re, os, sys, glob, functools
 import torch
 import numpy as np
 import pandas as pd
@@ -421,11 +421,14 @@ def build_pareto(eval_log):
 # ─── I/O ─────────────────────────────────────────────────────────────────────
 
 def save_metrics(path, row):
-    """Agrega una fila al CSV de métricas (crea header si no existe)."""
-    df = pd.DataFrame([row])
-    header = not os.path.exists(path)
-    with open(path, 'a') as f:
-        df.to_csv(f, header=header, index=False)
+    """Escribe la fila de métricas de UNA run en su propio CSV (sobreescribe).
+
+    Un archivo por run (en run_dir), NO compartido entre runs. Al correr en
+    paralelo cada proceso escribe su propio archivo -> sin escritura concurrente
+    al mismo CSV (sin filas corruptas). Modo overwrite (no append): un reintento
+    de la misma run pisa su fila en vez de duplicarla. generate_summary consolida
+    todos los metrics.csv por-run en alg_dir/metrics.csv al terminar el job."""
+    pd.DataFrame([row]).to_csv(path, index=False)
 
 
 def save_molecules(pareto, run_dir):
@@ -457,11 +460,20 @@ def generate_summary(alg_name, pop_size, results_dir=None):
     """Genera y muestra resumen estadístico (media ± std) de todas las runs."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
-    path = os.path.join(alg_dir, "metrics.csv")
-    if not os.path.exists(path):
-        print(f"ERROR: {path} no existe")
+
+    # Consolida los metrics.csv por-run (run_*/metrics.csv) en uno solo por
+    # config. Cada run escribió el suyo sin race; acá, ya en serie al final del
+    # job, se juntan y se (re)genera alg_dir/metrics.csv para consumo externo
+    # (repo de graficación). Se regenera de cero: refleja exacto las runs
+    # presentes, sin filas viejas ni duplicadas.
+    run_files = sorted(glob.glob(os.path.join(alg_dir, "run_*", "metrics.csv")))
+    if not run_files:
+        print(f"ERROR: no hay run_*/metrics.csv en {alg_dir}")
         return
-    df = pd.read_csv(path)
+    df = pd.concat([pd.read_csv(f) for f in run_files], ignore_index=True)
+    if 'run' in df.columns:
+        df = df.sort_values('run').reset_index(drop=True)
+    df.to_csv(os.path.join(alg_dir, "metrics.csv"), index=False)
 
     n = len(df)
     print(f"\n{'='*55}")
@@ -504,9 +516,10 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'time_sec': round(elapsed, 1),
     }
 
-    base = results_dir if results_dir is not None else RESULTS_DIR
-    alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
-    save_metrics(os.path.join(alg_dir, "metrics.csv"), metrics)
+    # metrics.csv por run (en run_dir): evita la escritura concurrente al CSV
+    # compartido de la config cuando varias runs corren en paralelo. El
+    # consolidado alg_dir/metrics.csv lo arma generate_summary al final del job.
+    save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_molecules(pareto, run_dir)
     save_tracking(tracker, run_dir)
     # Las gráficas no se generan aquí; se regeneran desde los CSV en el
