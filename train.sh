@@ -7,6 +7,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64       # el nodo entero (tienes un 2º nodo libre)
+#SBATCH --exclusive
 #SBATCH --time=12:00:00
 
 # ══════════════════════════════════════════════════════════════════════════════
