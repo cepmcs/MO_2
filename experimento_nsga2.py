@@ -79,7 +79,7 @@ def main():
 
     t0  = time.time()
     _   = minimize(problem, algorithm, ('n_gen', N_GEN),
-                   seed=args.run_id, verbose=True, callback=tracker)
+                   seed=args.run_id, verbose=False, callback=tracker)
     elapsed = time.time() - t0
 
     # Post-procesamiento

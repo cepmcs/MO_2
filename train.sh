@@ -2,11 +2,11 @@
 #SBATCH --job-name=MO_all
 #SBATCH --output=logs/mo_%j.out
 #SBATCH --error=logs/mo_%j.err
-#SBATCH --partition=XL  
-#SBATCH --nodelist=toko06        # <-- AJUSTA al nombre real de tu partición CPU
+#SBATCH --partition=XL           # <-- partición CPU; ajústala a tu clúster
+#SBATCH --nodelist=toko06        # <-- nodo concreto; ajústalo (o quítalo para que SLURM elija)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64       # el nodo entero (tienes un 2º nodo libre)
+#SBATCH --cpus-per-task=64       # el nodo entero
 #SBATCH --exclusive
 #SBATCH --time=3-00:00:00        # máximo de la partición (3 días)
 
@@ -32,12 +32,17 @@ export CUDA_VISIBLE_DEVICES=""       # forzar CPU
 PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 
 # ─── Concurrencia ─────────────────────────────────────────────────────────────
-# Nº de runs en paralelo. El proxy de scaling_bench daba el codo en 32, pero con
-# runs REALES (n_gen=500, eval_log de ~150k filas por run) a P=32 el nodo
-# terminó OOMeando en cascada (Killed en el .err) una vez varias runs llegaban
-# juntas al pico de memoria del post-procesamiento. A 16 no se vio ese problema.
-# Override: PARALLEL=24 sbatch ...
+# Nº de runs en paralelo. Con runs REALES (n_gen=500, eval_log de ~150k filas por
+# run) a P=32 el nodo terminó OOMeando en cascada (Killed en el .err) cuando varias
+# runs llegaban juntas al pico de memoria del post-procesamiento. A 16 no se vio ese
+# problema. Override: PARALLEL=24 sbatch ...
 PARALLEL=${PARALLEL:-16}
+
+# Progreso: cada PROGRESS_EVERY s se escribe una línea "hechas/total + ETA" en un
+# .out aparte (logs/progress_<jobid>.out). Es solo un contador de .done: no toca las
+# runs ni las frena. Override para smoke-tests: PROGRESS_EVERY=10 sbatch ...
+PROGRESS_EVERY=${PROGRESS_EVERY:-60}
+PROGRESS_OUT="logs/progress_${SLURM_JOB_ID:-local}.out"
 
 POP=300
 # N_RUNS por config. Override para smoke-test: N_RUNS=1 sbatch train.sh  (17 runs)
@@ -92,6 +97,44 @@ export -f run_one
 export PYTHON POP
 
 
+# ─── Monitor de progreso (contador de .done → hechas/total + ETA) ─────────────
+count_done() { find results -name 'run_*.done' 2>/dev/null | wc -l; }
+
+human_time() {   # segundos → "Xd Yh Zm"
+    local s=$1 d h m
+    d=$(( s / 86400 )); s=$(( s % 86400 ))
+    h=$(( s / 3600  )); s=$(( s % 3600  ))
+    m=$(( s / 60 ))
+    if   [ "$d" -gt 0 ]; then printf '%dd %dh %dm' "$d" "$h" "$m"
+    elif [ "$h" -gt 0 ]; then printf '%dh %dm' "$h" "$m"
+    else                      printf '%dm' "$m"
+    fi
+}
+
+# Corre en background durante el xargs. ETA = restantes × (tiempo/hecha), medido
+# SOLO sobre lo completado en ESTA corrida (ignora los .done de corridas previas).
+progress_monitor() {
+    local total="$1" start_done="$2" interval="$3"
+    local t0 now done_now completed remaining elapsed eta
+    t0=$(date +%s)
+    while true; do
+        sleep "$interval"
+        done_now=$(count_done)
+        now=$(date +%s)
+        completed=$(( done_now - start_done ))
+        remaining=$(( total - done_now ))
+        elapsed=$(( now - t0 ))
+        if [ "$completed" -le 0 ]; then
+            eta="estimando..."
+        else
+            eta=$(human_time $(( remaining * elapsed / completed )))
+        fi
+        printf '[%s] %d/%d hechas (%d en esta corrida) | restante estimado: %s\n' \
+            "$(date '+%F %T')" "$done_now" "$total" "$completed" "$eta" >> "$PROGRESS_OUT"
+    done
+}
+
+
 # ─── Genera la lista de las 340 tareas (una por línea: ALG SCRIPT CX MUT RUN) ──
 build_tasks() {
     local entry ALG SCRIPT OP CX MUT RUN
@@ -119,8 +162,19 @@ echo "  Nodo               : $(hostname)   cores: $(nproc)"
 echo "======================================================"
 
 # ─── Lanza todo en paralelo ───────────────────────────────────────────────────
+# Monitor de progreso en background (ver logs/progress_<jobid>.out).
+mkdir -p logs
+START_DONE=$(count_done)
+echo "[$(date '+%F %T')] arranque: $START_DONE/$TOTAL ya hechas de corridas previas" > "$PROGRESS_OUT"
+progress_monitor "$TOTAL" "$START_DONE" "$PROGRESS_EVERY" &
+MON_PID=$!
+
 # -L 1: una línea (5 campos) por invocación.  El '_' es $0 placeholder de bash -c.
 build_tasks | xargs -P "$PARALLEL" -L 1 bash -c 'run_one "$@"' _
+
+# Apaga el monitor y escribe la línea final.
+kill "$MON_PID" 2>/dev/null; wait "$MON_PID" 2>/dev/null
+echo "[$(date '+%F %T')] FIN: $(count_done)/$TOTAL hechas" >> "$PROGRESS_OUT"
 
 # ─── Resúmenes (rápidos, seriales) al terminar TODAS las runs ─────────────────
 echo "======================================================"

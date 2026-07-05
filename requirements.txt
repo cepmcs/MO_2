@@ -4,6 +4,5 @@ torch
 pymoo
 rdkit
 pandas
-matplotlib
 numpy
 scipy
