@@ -32,11 +32,16 @@ export CUDA_VISIBLE_DEVICES=""       # forzar CPU
 PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 
 # ─── Concurrencia ─────────────────────────────────────────────────────────────
-# Nº de runs en paralelo. Con runs REALES (n_gen=500, eval_log de ~150k filas por
-# run) a P=32 el nodo terminó OOMeando en cascada (Killed en el .err) cuando varias
-# runs llegaban juntas al pico de memoria del post-procesamiento. A 16 no se vio ese
-# problema. Override: PARALLEL=24 sbatch ...
-PARALLEL=${PARALLEL:-16}
+# Nº de runs en paralelo (1 hilo/proceso -> P = concurrencia real). El trabajo es
+# memory-bandwidth bound: el throughput tiene un "codo", pasado cierto P se añaden
+# procesos sin ganar velocidad. NO poner P = nº de cores a ciegas.
+#
+# Un OOM en cascada (Killed en el .err -> runs sin molecules.csv) venía de memoria
+# duplicada por proceso (df MOSES completo residente + caché sin cota en utils_mo.py);
+# ya resuelto. Con eso arreglado, P=32 corre holgado en el nodo de 64c/100GB. Calibra
+# empíricamente: vigila `grep -c Killed logs/mo_<jobid>.err` (=0) y `free -g` los
+# primeros ~15 min; si sobra RAM, sube a 48 la próxima corrida. Override: PARALLEL=48 sbatch ...
+PARALLEL=${PARALLEL:-32}
 
 # Progreso: cada PROGRESS_EVERY s se escribe una línea "hechas/total + ETA" en un
 # .out aparte (logs/progress_<jobid>.out). Es solo un contador de .done: no toca las
@@ -111,11 +116,12 @@ human_time() {   # segundos → "Xd Yh Zm"
     fi
 }
 
-# Corre en background durante el xargs. ETA = restantes × (tiempo/hecha), medido
-# SOLO sobre lo completado en ESTA corrida (ignora los .done de corridas previas).
+# Corre en background durante el xargs. ETA = restantes × (tiempo/hecha) y throughput
+# (runs/min) medidos SOLO sobre lo completado en ESTA corrida (ignora los .done de
+# corridas previas). El rate se calcula en entero *100 para 2 decimales sin float/awk.
 progress_monitor() {
     local total="$1" start_done="$2" interval="$3"
-    local t0 now done_now completed remaining elapsed eta
+    local t0 now done_now completed remaining elapsed eta rate rate_x100
     t0=$(date +%s)
     while true; do
         sleep "$interval"
@@ -124,13 +130,15 @@ progress_monitor() {
         completed=$(( done_now - start_done ))
         remaining=$(( total - done_now ))
         elapsed=$(( now - t0 ))
-        if [ "$completed" -le 0 ]; then
-            eta="estimando..."
+        if [ "$completed" -le 0 ] || [ "$elapsed" -le 0 ]; then
+            eta="estimando..."; rate="0.00"
         else
             eta=$(human_time $(( remaining * elapsed / completed )))
+            rate_x100=$(( completed * 6000 / elapsed ))
+            rate=$(printf '%d.%02d' $(( rate_x100 / 100 )) $(( rate_x100 % 100 )))
         fi
-        printf '[%s] %d/%d hechas (%d en esta corrida) | restante estimado: %s\n' \
-            "$(date '+%F %T')" "$done_now" "$total" "$completed" "$eta" >> "$PROGRESS_OUT"
+        printf '[%s] %d/%d hechas | %d pendientes | %d en esta corrida | %s runs/min | ETA: %s\n' \
+            "$(date '+%F %T')" "$done_now" "$total" "$remaining" "$completed" "$rate" "$eta" >> "$PROGRESS_OUT"
     done
 }
 
@@ -172,9 +180,22 @@ MON_PID=$!
 # -L 1: una línea (5 campos) por invocación.  El '_' es $0 placeholder de bash -c.
 build_tasks | xargs -P "$PARALLEL" -L 1 bash -c 'run_one "$@"' _
 
-# Apaga el monitor y escribe la línea final.
+# Apaga el monitor y escribe el resumen final (a stdout y al progress_*.out). El
+# contador de .done es fiable: tras el fix un .done = run realmente completa, así que
+# pendientes = TOTAL - hechas = runs que fallaron esta corrida (sin molecules.csv) y
+# se reintentan relanzando el job.
 kill "$MON_PID" 2>/dev/null; wait "$MON_PID" 2>/dev/null
-echo "[$(date '+%F %T')] FIN: $(count_done)/$TOTAL hechas" >> "$PROGRESS_OUT"
+FINAL_DONE=$(count_done)
+NEW_DONE=$(( FINAL_DONE - START_DONE ))
+FAILED=$(( TOTAL - FINAL_DONE ))
+{
+    echo "[$(date '+%F %T')] FIN: $FINAL_DONE/$TOTAL hechas ($NEW_DONE nuevas esta corrida)"
+    if [ "$FAILED" -gt 0 ]; then
+        echo "  $FAILED runs sin .done (fallaron esta corrida) -> relanza 'sbatch train.sh' para reintentarlas"
+    else
+        echo "  todas las runs completas"
+    fi
+} | tee -a "$PROGRESS_OUT"
 
 # ─── Resúmenes (rápidos, seriales) al terminar TODAS las runs ─────────────────
 echo "======================================================"
