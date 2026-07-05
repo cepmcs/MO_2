@@ -129,7 +129,7 @@ def decode_z_batch(model, z_np, stoi, itos):
 
     Equivale a aplicar la decodificación greedy individual a cada fila de z,
     pero ejecuta los pasos del LSTM sobre todo el lote a la vez (batch=n en
-    lugar de n decodes con batch=1), lo que aprovecha la GPU."""
+    lugar de n decodes con batch=1), lo que amortiza el overhead por paso."""
     z = torch.as_tensor(np.asarray(z_np, dtype=np.float32), device=DEVICE)
     if z.dim() == 1:
         z = z.unsqueeze(0)
@@ -421,13 +421,11 @@ def build_pareto(eval_log):
 # ─── I/O ─────────────────────────────────────────────────────────────────────
 
 def save_metrics(path, row):
-    """Escribe la fila de métricas de UNA run en su propio CSV (sobreescribe).
-
-    Un archivo por run (en run_dir), NO compartido entre runs. Al correr en
-    paralelo cada proceso escribe su propio archivo -> sin escritura concurrente
-    al mismo CSV (sin filas corruptas). Modo overwrite (no append): un reintento
-    de la misma run pisa su fila en vez de duplicarla. generate_summary consolida
-    todos los metrics.csv por-run en alg_dir/metrics.csv al terminar el job."""
+    """Escribe la fila de métricas de UNA run en su propio CSV (un archivo por
+    run, no compartido): al correr en paralelo cada proceso escribe el suyo, sin
+    escritura concurrente al mismo CSV. Overwrite (no append) para que un
+    reintento pise su fila en vez de duplicarla; generate_summary los consolida
+    en alg_dir/metrics.csv al final del job."""
     pd.DataFrame([row]).to_csv(path, index=False)
 
 
@@ -461,11 +459,8 @@ def generate_summary(alg_name, pop_size, results_dir=None):
     base = results_dir if results_dir is not None else RESULTS_DIR
     alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
 
-    # Consolida los metrics.csv por-run (run_*/metrics.csv) en uno solo por
-    # config. Cada run escribió el suyo sin race; acá, ya en serie al final del
-    # job, se juntan y se (re)genera alg_dir/metrics.csv para consumo externo
-    # (repo de graficación). Se regenera de cero: refleja exacto las runs
-    # presentes, sin filas viejas ni duplicadas.
+    # Consolida los metrics.csv por-run en uno por config (para el repo de
+    # graficación), regenerado de cero: refleja exacto las runs presentes.
     run_files = sorted(glob.glob(os.path.join(alg_dir, "run_*", "metrics.csv")))
     if not run_files:
         print(f"ERROR: no hay run_*/metrics.csv en {alg_dir}")
@@ -516,9 +511,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'time_sec': round(elapsed, 1),
     }
 
-    # metrics.csv por run (en run_dir): evita la escritura concurrente al CSV
-    # compartido de la config cuando varias runs corren en paralelo. El
-    # consolidado alg_dir/metrics.csv lo arma generate_summary al final del job.
+    # metrics.csv por-run: sin escritura concurrente (ver save_metrics).
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_molecules(pareto, run_dir)
     save_tracking(tracker, run_dir)

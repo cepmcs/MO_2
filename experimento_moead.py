@@ -78,9 +78,9 @@ def main():
     tracker  = GenerationTracker(problem, train_smiles)
     # ParallelMOEAD: variante generacional/síncrona de MOEA/D. Genera todos los
     # offspring desde la misma población y los evalúa en lote (vs. el MOEA/D
-    # steady-state que evalúa de a uno). Permite el decode batcheado en GPU
-    # (~20x más rápido) con calidad de frente equivalente (HV +1%, mismas mejores
-    # moléculas; ver comparación con 3 seeds × 300 gen).
+    # steady-state que evalúa de a uno), lo que permite el decode batcheado con
+    # calidad de frente equivalente (HV +1%, mismas mejores moléculas; ver
+    # comparación con 3 seeds × 300 gen).
     algorithm = ParallelMOEAD(
         ref_dirs=ref_dirs,
         n_neighbors=20,
@@ -107,11 +107,9 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # Salida limpia: en estos nodos torch revienta en el teardown del intérprete
-    # (c10::Dispatcher::deregisterImpl_ en Dispatcher.cpp -> Segmentation fault /
-    # Aborted), DESPUÉS de que los resultados ya están en disco. os._exit salta
-    # los destructores estáticos de C++ y evita el crash. Solo se llega aquí si
-    # main() terminó bien; si lanza excepción, se propaga y el proceso sale != 0.
+    # torch revienta en el teardown del intérprete (segfault en c10::Dispatcher),
+    # ya con los resultados en disco: os._exit(0) salta los destructores de C++ y
+    # evita el crash. Solo se llega aquí si main() terminó bien.
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)

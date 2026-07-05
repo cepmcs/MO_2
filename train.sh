@@ -13,8 +13,8 @@
 # ══════════════════════════════════════════════════════════════════════════════
 #  Experimentos multi-objetivo — TODO en un solo job, paralelizado en CPU.
 #
-#  Reemplaza los 5 train_*.sh. El trabajo es CPU/memory-bound (RDKit + decode),
-#  la GPU apenas aportaba (~1.8x) y su cola es de 1-2 días: por eso corre en CPU.
+#  El trabajo es CPU/memory-bound (RDKit + decode), la GPU apenas aportaba
+#  (~1.8x) y su cola es de 1-2 días: por eso corre en CPU.
 #
 #  Las 340 runs (4 algos GA × 4 operadores × 20  +  MOPSO × 20) son independientes
 #  y se lanzan concurrentes con `xargs -P`. Cada proceso usa 1 hilo (OMP=1), así

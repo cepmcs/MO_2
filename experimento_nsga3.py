@@ -102,11 +102,9 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # Salida limpia: en estos nodos torch revienta en el teardown del intérprete
-    # (c10::Dispatcher::deregisterImpl_ en Dispatcher.cpp -> Segmentation fault /
-    # Aborted), DESPUÉS de que los resultados ya están en disco. os._exit salta
-    # los destructores estáticos de C++ y evita el crash. Solo se llega aquí si
-    # main() terminó bien; si lanza excepción, se propaga y el proceso sale != 0.
+    # torch revienta en el teardown del intérprete (segfault en c10::Dispatcher),
+    # ya con los resultados en disco: os._exit(0) salta los destructores de C++ y
+    # evita el crash. Solo se llega aquí si main() terminó bien.
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
