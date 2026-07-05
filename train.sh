@@ -32,10 +32,12 @@ export CUDA_VISIBLE_DEVICES=""       # forzar CPU
 PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 
 # ─── Concurrencia ─────────────────────────────────────────────────────────────
-# Nº de runs en paralelo. 32 es el "codo" medido en toko06 (throughput casi se
-# duplica hasta 32; de 32->64 solo +10% y la eficiencia cae de 93% a 51%: el
-# trabajo es memory-bound y satura antes del nº de cores).  Override: PARALLEL=48 sbatch ...
-PARALLEL=${PARALLEL:-32}
+# Nº de runs en paralelo. El proxy de scaling_bench daba el codo en 32, pero con
+# runs REALES (n_gen=500, eval_log de ~150k filas por run) a P=32 el nodo
+# terminó OOMeando en cascada (Killed en el .err) una vez varias runs llegaban
+# juntas al pico de memoria del post-procesamiento. A 16 no se vio ese problema.
+# Override: PARALLEL=24 sbatch ...
+PARALLEL=${PARALLEL:-16}
 
 POP=300
 # N_RUNS por config. Override para smoke-test: N_RUNS=1 sbatch train.sh  (17 runs)
