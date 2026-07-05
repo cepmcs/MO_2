@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64       # el nodo entero (tienes un 2º nodo libre)
 #SBATCH --exclusive
-#SBATCH --time=12:00:00
+#SBATCH --time=3-00:00:00        # máximo de la partición (3 días)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Experimentos multi-objetivo — TODO en un solo job, paralelizado en CPU.
