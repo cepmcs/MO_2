@@ -36,7 +36,8 @@ PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 PARALLEL=${PARALLEL:-16}
 
 POP=300
-N_RUNS=20
+# N_RUNS por config. Override para smoke-test: N_RUNS=1 sbatch train.sh  (17 runs)
+N_RUNS=${N_RUNS:-20}
 
 # Algoritmos GA (con operadores):  "ALG  script"
 GA_ALGS=(
