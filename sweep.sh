@@ -2,7 +2,8 @@
 #SBATCH --job-name=MO_sweep
 #SBATCH --output=logs/sweep_%j.out
 #SBATCH --error=logs/sweep_%j.err
-#SBATCH --partition=toko06        # misma partición CPU que train.sh
+#SBATCH --partition=XL  
+#SBATCH --nodelist=toko06        # misma partición CPU que train.sh
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64        # nodo entero: para poder medir hasta N=64

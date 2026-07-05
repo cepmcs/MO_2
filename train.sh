@@ -2,7 +2,8 @@
 #SBATCH --job-name=MO_all
 #SBATCH --output=logs/mo_%j.out
 #SBATCH --error=logs/mo_%j.err
-#SBATCH --partition=toko06          # <-- AJUSTA al nombre real de tu partición CPU
+#SBATCH --partition=XL  
+#SBATCH --nodelist=toko06        # <-- AJUSTA al nombre real de tu partición CPU
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64       # el nodo entero (tienes un 2º nodo libre)
