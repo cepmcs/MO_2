@@ -23,12 +23,11 @@ import numpy as np
 import torch
 from pymoo.algorithms.moo.nsga3 import NSGA3
 from pymoo.optimize import minimize
-from pymoo.util.ref_dirs import get_reference_directions
 
 from utils_mo import (
-    load_model, load_seed_mus, load_train_smiles,
+    load_model, load_seed_mus, load_train_smiles, set_device,
     MolecularLatentProblem, LatentSampling, GenerationTracker,
-    postprocess_run, generate_summary, get_operators, get_results_dir,
+    postprocess_run, generate_summary, get_operators, get_results_dir, get_ref_dirs,
 )
 
 ALG_NAME = "NSGA3"
@@ -42,7 +41,13 @@ def main():
     parser.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
     parser.add_argument('--mutation',  choices=['pm', 'gauss'], default='pm')
     parser.add_argument('--generate_summary', action='store_true')
+    parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto',
+                        help="Dispositivo para el VAE (default: auto → GPU si hay CUDA).")
     args = parser.parse_args()
+
+    # Dispositivo de cómputo: 'auto' respeta el default del módulo (GPU si hay CUDA).
+    if args.device != 'auto':
+        set_device(args.device)
 
     results_dir = get_results_dir(args.crossover, args.mutation)
 
@@ -64,8 +69,9 @@ def main():
     label = f"{ALG_NAME}[{args.crossover}+{args.mutation}]/pop{args.pop_size}/run_{args.run_id+1:02d}"
     print(f"[{label}] Iniciando...", flush=True)
 
-    # Direcciones de referencia: exactamente pop_size, bien repartidas (Riesz s-energy)
-    ref_dirs = get_reference_directions("energy", 3, args.pop_size, seed=1)
+    # Direcciones de referencia: exactamente pop_size, bien repartidas (Riesz s-energy).
+    # Cacheadas en disco: deterministas, se calculan una vez y se reutilizan.
+    ref_dirs = get_ref_dirs(args.pop_size)
 
     # Cargar modelo y datos
     model, stoi, itos, latent_dim = load_model()

@@ -22,7 +22,7 @@ from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.optimize import minimize
 
 from utils_mo import (
-    load_model, load_seed_mus, load_train_smiles,
+    load_model, load_seed_mus, load_train_smiles, set_device,
     MolecularLatentProblem, LatentSampling, GenerationTracker,
     postprocess_run, generate_summary, get_operators, get_results_dir,
 )
@@ -38,7 +38,13 @@ def main():
     parser.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
     parser.add_argument('--mutation',  choices=['pm', 'gauss'], default='pm')
     parser.add_argument('--generate_summary', action='store_true')
+    parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto',
+                        help="Dispositivo para el VAE (default: auto → GPU si hay CUDA).")
     args = parser.parse_args()
+
+    # Dispositivo de cómputo: 'auto' respeta el default del módulo (GPU si hay CUDA).
+    if args.device != 'auto':
+        set_device(args.device)
 
     results_dir = get_results_dir(args.crossover, args.mutation)
 

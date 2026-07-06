@@ -74,8 +74,31 @@ def get_results_dir(crossover, mutation):
     return os.path.join(RESULTS_DIR, f"{crossover}_{mutation}")
 
 
+def get_ref_dirs(n_points, seed=1):
+    """Direcciones de referencia (Riesz s-energy, 3 objetivos) para NSGA-III / MOEA-D.
+    Deterministas (seed fijo) pero caras (~6 s). Se cachean en disco y se reutilizan
+    entre todas las runs, en vez de recalcularlas idénticas en cada proceso."""
+    cache = os.path.join(ROOT_DIR, "data", f"ref_dirs_energy_3obj_p{n_points}_s{seed}.npy")
+    if os.path.exists(cache):
+        return np.load(cache)
+    from pymoo.util.ref_dirs import get_reference_directions
+    rd  = get_reference_directions("energy", 3, n_points, seed=seed)
+    tmp = f"{cache}.{os.getpid()}.tmp"       # atómico: no deja un cache a medias
+    with open(tmp, "wb") as f:
+        np.save(f, rd)
+    os.replace(tmp, cache)
+    return rd
+
+
 
 # ─── VAE: cargar, encodear, decodificar ──────────────────────────────────────
+
+def set_device(name):
+    """Fuerza el dispositivo de cómputo ('cpu' / 'cuda'). Llamar antes de load_model().
+    El default (a nivel módulo) ya autoselecciona GPU si hay CUDA disponible."""
+    global DEVICE
+    DEVICE = torch.device(name)
+
 
 def load_model():
     """Carga modelo VAE desde checkpoint y retorna (model, stoi, itos, latent_dim)."""
@@ -177,7 +200,7 @@ def _build_moses_train_smiles():
 def _load_moses_train_smiles():
     """SMILES de train de MOSES (~1.6M) como Series, cacheada en MOSES_TRAIN_CACHE
     (pickle gzip). Se reconstruye si el cache no existe o si moses.csv es más nuevo.
-    Escritura atómica (tmp por-PID + os.replace) para lecturas concurrentes."""
+    Escritura atómica (tmp + os.replace) para no dejar un cache a medias si se interrumpe."""
     cache = MOSES_TRAIN_CACHE
     if (os.path.exists(cache)
             and os.path.getmtime(cache) >= os.path.getmtime(MOSES_CSV)):
@@ -447,8 +470,8 @@ def save_metrics(path, row):
 
 def save_molecules(pareto, run_dir):
     """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
-    Escribe aunque el frente esté vacío: train.sh usa la existencia de este archivo
-    como señal de run completa."""
+    Escribe aunque el frente esté vacío: el orquestador (run_experiments.py) usa la
+    existencia de este archivo como señal de run completa."""
     cols = ['smiles', 'qed', 'sa', 'lipinski', 'mw', 'logp', 'hbd', 'hba']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
@@ -525,7 +548,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'time_sec': round(elapsed, 1),
     }
 
-    # molecules.csv se escribe AL FINAL: train.sh lo usa como señal de run completa.
+    # molecules.csv se escribe AL FINAL: run_experiments.py lo usa como señal de run completa.
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_tracking(tracker, run_dir)
     save_molecules(pareto, run_dir)

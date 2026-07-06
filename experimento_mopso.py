@@ -14,7 +14,7 @@ from pymoo.algorithms.moo.mopso_cd import MOPSO_CD
 from pymoo.optimize import minimize
 
 from utils_mo import (
-    load_model, load_seed_mus, load_train_smiles,
+    load_model, load_seed_mus, load_train_smiles, set_device,
     NormalizedMolecularLatentProblem, LatentSampling, GenerationTracker,
     postprocess_run, generate_summary, get_results_dir, BASELINE_COMBO,
 )
@@ -28,7 +28,13 @@ def main():
     parser.add_argument('--pop_size', type=int, required=True)
     parser.add_argument('--run_id',   type=int, default=None)
     parser.add_argument('--generate_summary', action='store_true')
+    parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto',
+                        help="Dispositivo para el VAE (default: auto → GPU si hay CUDA).")
     args = parser.parse_args()
+
+    # Dispositivo de cómputo: 'auto' respeta el default del módulo (GPU si hay CUDA).
+    if args.device != 'auto':
+        set_device(args.device)
 
     # MOPSO no tiene crossover/mutation: vive en el combo base sbx_pm.
     results_dir = get_results_dir(*BASELINE_COMBO)
