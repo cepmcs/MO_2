@@ -111,17 +111,21 @@ def _smiles_to_tensor(smi, stoi):
 
 
 def encode_smiles(model, smiles_list, stoi):
-    """Codifica lista de SMILES → vectores latentes μ. Descarta no-tokenizables."""
-    mus = []
+    """Codifica lista de SMILES → vectores latentes μ. Descarta no-tokenizables.
+
+    Todos los SMILES tokenizables se apilan en un solo lote (ya vienen padeados a
+    MAX_LEN por _smiles_to_tensor) y se pasan por el encoder de una vez, en vez de uno
+    por uno. Cada secuencia es independiente en el LSTM → μ idénticos a la versión
+    secuencial, pero amortizando el overhead por-forward."""
+    tensors = [t for smi in smiles_list
+               if (t := _smiles_to_tensor(smi, stoi)) is not None]
+    if not tensors:
+        return np.array([])
     with torch.no_grad():
-        for smi in smiles_list:
-            t = _smiles_to_tensor(smi, stoi)
-            if t is None:
-                continue
-            _, (h, _) = model.encoder_rnn(model.embedding(t.unsqueeze(0).to(DEVICE)))
-            mu = model.fc_mu(h[-1])
-            mus.append(mu.squeeze(0).cpu().numpy())
-    return np.array(mus)
+        batch = torch.stack(tensors).to(DEVICE)             # [B, MAX_LEN]
+        _, (h, _) = model.encoder_rnn(model.embedding(batch))
+        mus = model.fc_mu(h[-1])                            # [B, latent]
+    return mus.cpu().numpy()
 
 
 def decode_z_batch(model, z_np, stoi, itos):
@@ -224,20 +228,22 @@ def load_seed_mus(model, stoi, n_samples, run_id):
 
 # ─── Propiedades moleculares ─────────────────────────────────────────────────
 
-def lipinski_score(mol):
-    """Score de Lipinski (Rule of Five) en {0, 0.25, 0.5, 0.75, 1.0}.
-    Suma 0.25 por cada una de las 4 condiciones que se cumple."""
-    mw   = Descriptors.MolWt(mol)
-    logp = Descriptors.MolLogP(mol)
-    hbd  = Lipinski.NumHDonors(mol)
-    hba  = Lipinski.NumHAcceptors(mol)
-
+def _lipinski_from_descriptors(mw, logp, hbd, hba):
+    """Score de Lipinski (Rule of Five) a partir de los 4 descriptores ya calculados.
+    Suma 0.25 por cada una de las 4 condiciones que se cumple → {0, .25, .5, .75, 1.0}."""
     score = (0.25 * (mw   <= 500)
            + 0.25 * (logp <= 5)
            + 0.25 * (hbd  <= 5)
            + 0.25 * (hba  <= 10))
-
     return round(score, 4)
+
+
+def lipinski_score(mol):
+    """Score de Lipinski (Rule of Five) en {0, 0.25, 0.5, 0.75, 1.0}."""
+    return _lipinski_from_descriptors(
+        Descriptors.MolWt(mol), Descriptors.MolLogP(mol),
+        Lipinski.NumHDonors(mol), Lipinski.NumHAcceptors(mol),
+    )
 
 
 @functools.lru_cache(maxsize=100_000)
@@ -247,19 +253,26 @@ def calc_properties(smi):
     Cacheado por string SMILES (LRU acotado): la población converge y muchos latentes
     distintos decodifican al mismo SMILES, así que se reutiliza el cálculo RDKit. La
     función es determinista -> una evicción solo recomputa un valor idéntico. Los
-    callers solo leen el dict, así que compartir la instancia cacheada es seguro."""
+    callers solo leen el dict, así que compartir la instancia cacheada es seguro.
+
+    MW/LogP/HBD/HBA se calculan una sola vez y se reutilizan para el score de Lipinski
+    y para los campos del dict (antes se computaban dos veces por molécula)."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
+    mw   = Descriptors.MolWt(mol)
+    logp = Descriptors.MolLogP(mol)
+    hbd  = Lipinski.NumHDonors(mol)
+    hba  = Lipinski.NumHAcceptors(mol)
     return {
         'smiles': smi,
         'qed': QED_module.qed(mol),
         'sa': sascorer.calculateScore(mol),
-        'lipinski': lipinski_score(mol),
-        'mw': Descriptors.MolWt(mol),
-        'logp': Descriptors.MolLogP(mol),
-        'hbd': Lipinski.NumHDonors(mol),
-        'hba': Lipinski.NumHAcceptors(mol),
+        'lipinski': _lipinski_from_descriptors(mw, logp, hbd, hba),
+        'mw': mw,
+        'logp': logp,
+        'hbd': hbd,
+        'hba': hba,
     }
 
 
