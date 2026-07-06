@@ -175,41 +175,25 @@ def decode_z_batch(model, z_np, stoi, itos):
 
 
 def _build_moses_train_smiles():
-    """Parsea el CSV de MOSES (1.9M filas) y devuelve la Series de SMILES del split
-    'train'. ÚNICO punto que toca el CSV: el DataFrame completo (~280MB con las 2
-    columnas) queda local y se libera al retornar. El parseo tiene un pico de RAM
-    alto (~0.6-1GB transitorio), por eso su resultado se serializa (ver
-    _load_moses_train_smiles) y NO se reconstruye por run.
-
-    reset_index(drop=True) descarta el índice con huecos del filtrado (ahorro de
-    memoria) sin alterar el muestreo posicional de .sample(random_state=...)."""
+    """Parsea el CSV de MOSES y devuelve la Series de SMILES del split 'train'. Único
+    punto que toca el CSV (pico de RAM alto); su resultado se serializa una vez (ver
+    _load_moses_train_smiles) en vez de reconstruirse por run.
+    reset_index(drop=True) no altera el muestreo posicional de .sample(random_state)."""
     df = pd.read_csv(MOSES_CSV, usecols=['SMILES', 'SPLIT'])
     return df[df['SPLIT'] == 'train']['SMILES'].dropna().reset_index(drop=True)
 
 
 @functools.lru_cache(maxsize=1)
 def _load_moses_train_smiles():
-    """SMILES del split 'train' de MOSES como Series (~1.6M), compartida entre
-    load_seed_mus y load_train_smiles y cacheada en memoria (lru_cache) durante el
-    arranque de cada run. load_train_smiles hace cache_clear() al terminar.
+    """SMILES de train de MOSES (~1.6M) como Series, compartida por load_seed_mus y
+    load_train_smiles.
 
-    Serialización a disco (data/moses_train_smiles.pkl.gz): reparsear el CSV de 1.9M
-    filas en cada run disparaba un pico de RAM SIMULTÁNEO cuando las N runs arrancaban
-    a la vez (xargs -P). Para evitarlo, la Series se guarda UNA vez (prebuild serial en
-    train.sh) y las demás lecturas la cargan del pickle. El ahorro por proceso es
-    modesto (pico ~304MB -> ~232MB, medido); lo que de verdad quita es tener N parseos
-    del CSV a la vez al arranque (una construcción serial en lugar de N simultáneas).
-
-    IDÉNTICO A ANTES (no cambia resultados): devuelve exactamente la Series de
-    _build_moses_train_smiles() (read_csv -> filtro train -> dropna -> reset_index).
-    pickle ronda-viaja valores, orden y dtype sin pérdida, así que el muestreo
-    POSICIONAL .sample(random_state=run_id) (sensible a orden y longitud) y set(...)
-    dan el mismo resultado. La caché se reconstruye si no existe o si moses.csv es más
-    nuevo (no queda desincronizada si el dataset cambia).
-
-    Escritura atómica (tmp por-PID + os.replace): dos runs concurrentes nunca leen un
-    pickle a medio escribir; si la escritura falla (NFS lleno/carrera) se sigue con la
-    Series ya en memoria, sin abortar la run."""
+    Se serializa a MOSES_TRAIN_CACHE (pickle gzip) la primera vez y las demás lecturas
+    la cargan de ahí, para que las N runs en paralelo no reparseen el CSV a la vez al
+    arrancar (el prebuild serial de train.sh la construye antes del xargs). Devuelve
+    exactamente la Series de _build_moses_train_smiles() -> mismos resultados. Se
+    reconstruye si no existe o si moses.csv es más nuevo. Escritura atómica (tmp
+    por-PID + os.replace) para lecturas concurrentes seguras."""
     cache = MOSES_TRAIN_CACHE
     if (os.path.exists(cache)
             and os.path.getmtime(cache) >= os.path.getmtime(MOSES_CSV)):
@@ -260,18 +244,10 @@ def lipinski_score(mol):
 def calc_properties(smi):
     """Calcula propiedades de un SMILES. Retorna dict o None si inválido.
 
-    Cacheado por string SMILES: a medida que la población converge, muchos
-    vectores latentes distintos decodifican al mismo SMILES, así que el cálculo
-    RDKit (QED/SA/Lipinski) se reutiliza en lugar de recomputarse cada vez.
-
-    maxsize acotado (antes None): sin cota la caché crecía sin límite durante
-    toda la run (un dict por cada SMILES único válido y por cada string inválido
-    distinto), engordando el proceso hasta el OOM. La función es determinista, así
-    que una evicción LRU solo obliga a recomputar un valor idéntico (LRU mantiene
-    calientes los SMILES frecuentes de la población ya convergida): no cambia
-    ningún resultado, solo acota la memoria.
-    Los callers solo leen el dict (build_pareto copia con dict.update sobre otro
-    objeto), por lo que compartir la instancia cacheada es seguro."""
+    Cacheado por string SMILES (LRU acotado): la población converge y muchos latentes
+    distintos decodifican al mismo SMILES, así que se reutiliza el cálculo RDKit. La
+    función es determinista -> una evicción solo recomputa un valor idéntico. Los
+    callers solo leen el dict, así que compartir la instancia cacheada es seguro."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
@@ -356,12 +332,8 @@ class LatentSampling(Sampling):
 # ─── Callback: tracking por generación ───────────────────────────────────────
 
 def load_train_smiles():
-    """Retorna set de SMILES de entrenamiento de MOSES (para novelty).
-
-    Último consumidor del CSV en el arranque (todos los scripts llaman
-    load_seed_mus y luego load_train_smiles): libera la Series cacheada tras
-    construir el set, de modo que solo el set (necesario para novelty durante
-    toda la run) quede residente y no también la Series intermedia."""
+    """Set de SMILES de train de MOSES (para novelty). Libera la Series cacheada
+    (cache_clear) tras construir el set, para no arrastrarla durante toda la run."""
     train_smi = _load_moses_train_smiles()
     smiles_set = set(train_smi)
     _load_moses_train_smiles.cache_clear()
@@ -484,26 +456,18 @@ def build_pareto(eval_log):
 # ─── I/O ─────────────────────────────────────────────────────────────────────
 
 def save_metrics(path, row):
-    """Escribe la fila de métricas de UNA run en su propio CSV (un archivo por
-    run, no compartido): al correr en paralelo cada proceso escribe el suyo, sin
-    escritura concurrente al mismo CSV. Overwrite (no append) para que un
-    reintento pise su fila en vez de duplicarla; generate_summary los consolida
-    en alg_dir/metrics.csv al final del job."""
+    """Escribe la fila de métricas de UNA run en su propio CSV (overwrite, no append):
+    sin escritura concurrente al correr en paralelo, y un reintento pisa su fila.
+    generate_summary los consolida en alg_dir/metrics.csv al final."""
     pd.DataFrame([row]).to_csv(path, index=False)
 
 
 def save_molecules(pareto, run_dir):
-    """Guarda moléculas del frente de Pareto en CSV.
+    """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
 
-    Aunque el frente esté vacío escribe el CSV (solo header): la run terminó de
-    verdad y el .sh marca el .done por la existencia de molecules.csv. Si no lo
-    escribiéramos, una run con frente vacío nunca generaría el archivo y se
-    relanzaría en cada job para siempre.
-
-    Escritura atómica (tmp + os.replace): como el .done depende de que exista
-    este archivo, un molecules.csv a medio escribir (proceso muerto a mitad del
-    to_csv) marcaría la run como hecha con un CSV truncado. El rename atómico
-    garantiza que el archivo aparece completo o no aparece."""
+    Escribe aunque el frente esté vacío (solo header): el .done del train.sh depende de
+    que exista este archivo, así que sin él la run se relanzaría para siempre. El rename
+    atómico evita marcar como hecha una run con un CSV truncado (proceso muerto a mitad)."""
     cols = ['smiles', 'qed', 'sa', 'lipinski', 'mw', 'logp', 'hbd', 'hba']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
@@ -581,18 +545,12 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'time_sec': round(elapsed, 1),
     }
 
-    # Orden de escritura = orden de "commit". molecules.csv va AL FINAL porque el
-    # .sh marca el .done por su existencia (train.sh): si el proceso muere a mitad
-    # del post-procesado (p.ej. OOM-killed durante el all_molecules.csv.gz),
-    # molecules.csv aún no existe -> no se crea el .done -> la run se reintenta
-    # entera, en vez de quedar marcada como hecha con convergence.csv /
-    # all_molecules.csv.gz truncados o ausentes.
-    # metrics.csv por-run: sin escritura concurrente (ver save_metrics).
+    # molecules.csv se escribe AL FINAL: el .done del train.sh depende de su existencia,
+    # así que si el proceso muere durante el post-procesado la run se reintenta entera
+    # en vez de quedar marcada como hecha con archivos truncados.
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_tracking(tracker, run_dir)
     save_molecules(pareto, run_dir)
-    # Las gráficas no se generan aquí; se regeneran desde los CSV en el
-    # repo de graficación.
 
     return metrics, pareto, hv, spacing, validity
 

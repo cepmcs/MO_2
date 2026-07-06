@@ -11,14 +11,9 @@
 #SBATCH --time=3-00:00:00        # máximo de la partición (3 días)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Experimentos multi-objetivo — TODO en un solo job, paralelizado en CPU.
-#
-#  El trabajo es CPU/memory-bound (RDKit + decode), la GPU apenas aportaba
-#  (~1.8x) y su cola es de 1-2 días: por eso corre en CPU.
-#
-#  Las 340 runs (4 algos GA × 4 operadores × 20  +  MOPSO × 20) son independientes
-#  y se lanzan concurrentes con `xargs -P`. Cada proceso usa 1 hilo (OMP=1), así
-#  PARALLEL controla la concurrencia real. Reanudable vía .done por run.
+#  Experimentos multi-objetivo — 340 runs (4 GA × 4 operadores × 20 + MOPSO × 20)
+#  en un solo job, concurrentes con `xargs -P` (1 hilo/proceso, OMP=1). Reanudable
+#  por .done. Corre en CPU: el trabajo es RDKit + decode, no GPU-bound.
 # ══════════════════════════════════════════════════════════════════════════════
 
 source /etc/profile
@@ -32,19 +27,10 @@ export CUDA_VISIBLE_DEVICES=""       # forzar CPU
 PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 
 # ─── Concurrencia ─────────────────────────────────────────────────────────────
-# Nº de runs en paralelo (1 hilo/proceso -> P = concurrencia real). El trabajo es
-# memory-bandwidth bound: el throughput tiene un "codo", pasado cierto P se añaden
-# procesos sin ganar velocidad. NO poner P = nº de cores a ciegas.
-#
-# Un OOM en cascada (Killed en el .err -> runs sin molecules.csv) venía de memoria
-# duplicada por proceso (df MOSES completo residente + caché sin cota en utils_mo.py).
-# OJO (toko01): el nodo tiene ~240GB físicos (no 100GB) y SLURM NO capa memoria aquí
-# (DefMemPerNode=UNLIMITED; RealMemory está mal-configurado a 1M -> NO añadir --mem, le
-# daría 1MB al job). Por tanto los `Killed` son el OOM killer del KERNEL, y el nodo es
-# COMPARTIDO (hay procesos fuera de SLURM: CPULoad alto con CPUAlloc=0), así que la RAM
-# libre fluctúa. P=32 OOMeó; probando P=16. Calibra empíricamente: vigila
-# `grep -c Killed logs/mo_<jobid>.err` (=0) y `free -g` los primeros ~15 min.
-# Override: PARALLEL=24 sbatch ...
+# Nº de runs en paralelo (1 hilo/proceso -> P = concurrencia real). El trabajo
+# satura por ancho de banda de memoria antes que por nº de cores: hay un "codo"
+# pasado el cual sumar procesos no acelera. Calibra P empíricamente en el nodo real
+# (no P = nº de cores a ciegas). Override: PARALLEL=24 sbatch ...
 PARALLEL=${PARALLEL:-16}
 
 # Progreso: cada PROGRESS_EVERY s se escribe una línea "hechas/total + ETA" en un
@@ -194,10 +180,9 @@ MON_PID=$!
 # -L 1: una línea (5 campos) por invocación.  El '_' es $0 placeholder de bash -c.
 build_tasks | xargs -P "$PARALLEL" -L 1 bash -c 'run_one "$@"' _
 
-# Apaga el monitor y escribe el resumen final (a stdout y al progress_*.out). El
-# contador de .done es fiable: tras el fix un .done = run realmente completa, así que
-# pendientes = TOTAL - hechas = runs que fallaron esta corrida (sin molecules.csv) y
-# se reintentan relanzando el job.
+# Apaga el monitor y escribe el resumen final (a stdout y al progress_*.out). Un
+# .done = run completa, así que pendientes = TOTAL - hechas = runs que fallaron esta
+# corrida (sin molecules.csv) y se reintentan relanzando el job.
 kill "$MON_PID" 2>/dev/null; wait "$MON_PID" 2>/dev/null
 FINAL_DONE=$(count_done)
 NEW_DONE=$(( FINAL_DONE - START_DONE ))
