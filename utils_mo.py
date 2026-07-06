@@ -14,7 +14,6 @@ from pymoo.core.problem import Problem
 from pymoo.core.sampling import Sampling
 from pymoo.core.callback import Callback
 from pymoo.indicators.hv import HV
-from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.crossover.pcx import PCX
 from pymoo.operators.mutation.pm import PM
@@ -394,13 +393,40 @@ class GenerationTracker(Callback):
 
 # ─── Métricas: Pareto, HV, Spacing ──────────────────────────────────────────
 
+def _non_dominated_front(F):
+    """Índices del frente no-dominado (minimización), exacto.
+
+    Sustituye a NonDominatedSorting de pymoo, que construye una matriz de
+    dominación O(n²) en RAM: con las ~100k moléculas únicas que acumula una run
+    exploradora (p. ej. PCX) eso son ~14 GB → OOM. Este filtro estilo Kung usa
+    memoria O(tamaño del frente): ordena lexicográficamente (todo dominador de un
+    punto aparece antes) y mantiene solo los puntos no-dominados vistos."""
+    n = len(F)
+    if n == 0:
+        return np.empty(0, dtype=int)
+    order = np.lexsort((F[:, 2], F[:, 1], F[:, 0]))   # asc por obj0, obj1, obj2
+    kept_idx = []
+    cap = 256
+    buf = np.empty((cap, F.shape[1]))                  # objetivos de los no-dominados
+    m = 0
+    for i in order:
+        f = F[i]
+        if m and np.any(np.all(buf[:m] <= f, axis=1) & np.any(buf[:m] < f, axis=1)):
+            continue                                   # dominado por alguno ya guardado
+        if m == cap:
+            cap *= 2
+            nb = np.empty((cap, F.shape[1])); nb[:m] = buf; buf = nb
+        buf[m] = f; m += 1
+        kept_idx.append(int(i))
+    return np.array(kept_idx, dtype=int)
+
+
 def non_dominated(results):
-    """Filtra soluciones no-dominadas usando NDS de pymoo."""
+    """Filtra soluciones no-dominadas (memoria O(frente); ver _non_dominated_front)."""
     if not results:
         return []
-    F = np.array([[-r['qed'], r['sa'], -r['lipinski']] for r in results])
-    front_idx = NonDominatedSorting().do(F, only_non_dominated_front=True)
-    return [results[i] for i in front_idx]
+    F = np.array([[-r['qed'], r['sa'], -r['lipinski']] for r in results], dtype=float)
+    return [results[i] for i in _non_dominated_front(F)]
 
 
 def compute_hv(pareto):
