@@ -3,7 +3,7 @@
 #SBATCH --output=logs/mo_%j.out
 #SBATCH --error=logs/mo_%j.err
 #SBATCH --partition=XL           # <-- partición CPU; ajústala a tu clúster
-#SBATCH --nodelist=toko06        # <-- nodo concreto; ajústalo (o quítalo para que SLURM elija)
+#SBATCH --nodelist=toko01        # <-- nodo concreto; ajústalo (o quítalo para que SLURM elija)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64       # el nodo entero
@@ -37,11 +37,15 @@ PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 # procesos sin ganar velocidad. NO poner P = nº de cores a ciegas.
 #
 # Un OOM en cascada (Killed en el .err -> runs sin molecules.csv) venía de memoria
-# duplicada por proceso (df MOSES completo residente + caché sin cota en utils_mo.py);
-# ya resuelto. Con eso arreglado, P=32 corre holgado en el nodo de 64c/100GB. Calibra
-# empíricamente: vigila `grep -c Killed logs/mo_<jobid>.err` (=0) y `free -g` los
-# primeros ~15 min; si sobra RAM, sube a 48 la próxima corrida. Override: PARALLEL=48 sbatch ...
-PARALLEL=${PARALLEL:-32}
+# duplicada por proceso (df MOSES completo residente + caché sin cota en utils_mo.py).
+# OJO (toko01): el nodo tiene ~240GB físicos (no 100GB) y SLURM NO capa memoria aquí
+# (DefMemPerNode=UNLIMITED; RealMemory está mal-configurado a 1M -> NO añadir --mem, le
+# daría 1MB al job). Por tanto los `Killed` son el OOM killer del KERNEL, y el nodo es
+# COMPARTIDO (hay procesos fuera de SLURM: CPULoad alto con CPUAlloc=0), así que la RAM
+# libre fluctúa. P=32 OOMeó; probando P=16. Calibra empíricamente: vigila
+# `grep -c Killed logs/mo_<jobid>.err` (=0) y `free -g` los primeros ~15 min.
+# Override: PARALLEL=24 sbatch ...
+PARALLEL=${PARALLEL:-16}
 
 # Progreso: cada PROGRESS_EVERY s se escribe una línea "hechas/total + ETA" en un
 # .out aparte (logs/progress_<jobid>.out). Es solo un contador de .done: no toca las
@@ -168,6 +172,16 @@ echo "  Total de runs      : $TOTAL"
 echo "  Concurrencia (-P)  : $PARALLEL"
 echo "  Nodo               : $(hostname)   cores: $(nproc)"
 echo "======================================================"
+
+# ─── Pre-serializa MOSES train SMILES (una sola vez, serial) ──────────────────
+# Cada run necesita los SMILES de train de MOSES al arrancar. Parsear el CSV de
+# 1.9M filas en las N runs a la vez producía un pico de RAM simultáneo que disparaba
+# el OOM. Esto lo construye UNA vez (pickle gzip en data/) de forma serial; luego
+# cada run solo lo lee (barato). Idempotente: si ya existe y moses.csv no cambió, no
+# reparsea nada.
+echo "[$(date '+%F %T')] pre-serializando MOSES train SMILES (una vez)..."
+"$PYTHON" -c "import utils_mo; print('  cache lista:', len(utils_mo._load_moses_train_smiles()), 'SMILES')" \
+    || echo "  WARN: falló la pre-serialización; cada run parseará el CSV (más RAM al arranque)"
 
 # ─── Lanza todo en paralelo ───────────────────────────────────────────────────
 # Monitor de progreso en background (ver logs/progress_<jobid>.out).

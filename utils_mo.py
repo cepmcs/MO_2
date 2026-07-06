@@ -29,6 +29,7 @@ RDLogger.DisableLog('rdApp.*')
 # ─── Configuración ───────────────────────────────────────────────────────────
 MODEL_PATH  = os.path.join(ROOT_DIR, "SMILES_LSTM_2_256_300_lr1e4_b64.pth")
 MOSES_CSV   = os.path.join(ROOT_DIR, "data", "moses.csv")
+MOSES_TRAIN_CACHE = os.path.join(ROOT_DIR, "data", "moses_train_smiles.pkl.gz")
 RESULTS_DIR = os.path.join(ROOT_DIR, "results")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
@@ -173,19 +174,59 @@ def decode_z_batch(model, z_np, stoi, itos):
     return results
 
 
-@functools.lru_cache(maxsize=1)
-def _load_moses_train_smiles():
-    """SMILES del split 'train' de MOSES como Series (~1.6M). Único acceso al CSV
-    de 1.9M filas; se cachea para compartirlo entre load_seed_mus y
-    load_train_smiles. El DataFrame completo (~280MB con las 2 columnas) queda
-    local a esta función y se libera al retornar: solo se retiene la columna
-    SMILES del split train. load_train_smiles hace cache_clear() tras construir
-    el set, para no arrastrar esta Series durante toda la optimización.
+def _build_moses_train_smiles():
+    """Parsea el CSV de MOSES (1.9M filas) y devuelve la Series de SMILES del split
+    'train'. ÚNICO punto que toca el CSV: el DataFrame completo (~280MB con las 2
+    columnas) queda local y se libera al retornar. El parseo tiene un pico de RAM
+    alto (~0.6-1GB transitorio), por eso su resultado se serializa (ver
+    _load_moses_train_smiles) y NO se reconstruye por run.
 
     reset_index(drop=True) descarta el índice con huecos del filtrado (ahorro de
     memoria) sin alterar el muestreo posicional de .sample(random_state=...)."""
     df = pd.read_csv(MOSES_CSV, usecols=['SMILES', 'SPLIT'])
     return df[df['SPLIT'] == 'train']['SMILES'].dropna().reset_index(drop=True)
+
+
+@functools.lru_cache(maxsize=1)
+def _load_moses_train_smiles():
+    """SMILES del split 'train' de MOSES como Series (~1.6M), compartida entre
+    load_seed_mus y load_train_smiles y cacheada en memoria (lru_cache) durante el
+    arranque de cada run. load_train_smiles hace cache_clear() al terminar.
+
+    Serialización a disco (data/moses_train_smiles.pkl.gz): reparsear el CSV de 1.9M
+    filas en cada run disparaba un pico de RAM SIMULTÁNEO cuando las N runs arrancaban
+    a la vez (xargs -P). Para evitarlo, la Series se guarda UNA vez (prebuild serial en
+    train.sh) y las demás lecturas la cargan del pickle. El ahorro por proceso es
+    modesto (pico ~304MB -> ~232MB, medido); lo que de verdad quita es tener N parseos
+    del CSV a la vez al arranque (una construcción serial en lugar de N simultáneas).
+
+    IDÉNTICO A ANTES (no cambia resultados): devuelve exactamente la Series de
+    _build_moses_train_smiles() (read_csv -> filtro train -> dropna -> reset_index).
+    pickle ronda-viaja valores, orden y dtype sin pérdida, así que el muestreo
+    POSICIONAL .sample(random_state=run_id) (sensible a orden y longitud) y set(...)
+    dan el mismo resultado. La caché se reconstruye si no existe o si moses.csv es más
+    nuevo (no queda desincronizada si el dataset cambia).
+
+    Escritura atómica (tmp por-PID + os.replace): dos runs concurrentes nunca leen un
+    pickle a medio escribir; si la escritura falla (NFS lleno/carrera) se sigue con la
+    Series ya en memoria, sin abortar la run."""
+    cache = MOSES_TRAIN_CACHE
+    if (os.path.exists(cache)
+            and os.path.getmtime(cache) >= os.path.getmtime(MOSES_CSV)):
+        return pd.read_pickle(cache, compression='gzip')
+
+    train_smi = _build_moses_train_smiles()
+    tmp = f"{cache}.{os.getpid()}.tmp"
+    try:
+        train_smi.to_pickle(tmp, compression='gzip')
+        os.replace(tmp, cache)                      # atómico en el mismo filesystem
+    except OSError:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    return train_smi
 
 
 def load_seed_mus(model, stoi, n_samples, run_id):

@@ -56,6 +56,7 @@ env/
 # moses.csv: dataset local pesado (symlink o copia), específico de cada
 # máquina; no se versiona, cada entorno (local/servidor) debe tener el suyo.
 data/moses.csv
+data/moses_train_smiles.pkl.gz   # caché derivada de moses.csv (SMILES train serializados)
 results/
 
 # Logs
