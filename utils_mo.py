@@ -70,9 +70,7 @@ BASELINE_COMBO = ('sbx', 'pm')   # combo canónico: comparación entre algoritmo
 
 
 def get_results_dir(crossover, mutation):
-    """Cada combinación de operadores escribe en results/<crossover>_<mutation>/.
-    sbx_pm es el combo canónico (comparación entre algoritmos y baseline de la
-    ablación de operadores); no recibe trato especial en disco."""
+    """Cada combinación de operadores escribe en results/<crossover>_<mutation>/."""
     return os.path.join(RESULTS_DIR, f"{crossover}_{mutation}")
 
 
@@ -111,12 +109,7 @@ def _smiles_to_tensor(smi, stoi):
 
 
 def encode_smiles(model, smiles_list, stoi):
-    """Codifica lista de SMILES → vectores latentes μ. Descarta no-tokenizables.
-
-    Todos los SMILES tokenizables se apilan en un solo lote (ya vienen padeados a
-    MAX_LEN por _smiles_to_tensor) y se pasan por el encoder de una vez, en vez de uno
-    por uno. Cada secuencia es independiente en el LSTM → μ idénticos a la versión
-    secuencial, pero amortizando el overhead por-forward."""
+    """Codifica lista de SMILES → vectores latentes μ (en lote). Descarta no-tokenizables."""
     tensors = [t for smi in smiles_list
                if (t := _smiles_to_tensor(smi, stoi)) is not None]
     if not tensors:
@@ -130,11 +123,7 @@ def encode_smiles(model, smiles_list, stoi):
 
 def decode_z_batch(model, z_np, stoi, itos):
     """Decodifica un lote de vectores latentes z → lista de SMILES canónicos
-    (argmax greedy, batcheado). Cada entrada es None si el SMILES es inválido.
-
-    Equivale a aplicar la decodificación greedy individual a cada fila de z,
-    pero ejecuta los pasos del LSTM sobre todo el lote a la vez (batch=n en
-    lugar de n decodes con batch=1), lo que amortiza el overhead por paso."""
+    (argmax greedy, batcheado). Cada entrada es None si el SMILES es inválido."""
     z = torch.as_tensor(np.asarray(z_np, dtype=np.float32), device=DEVICE)
     if z.dim() == 1:
         z = z.unsqueeze(0)
@@ -179,25 +168,16 @@ def decode_z_batch(model, z_np, stoi, itos):
 
 
 def _build_moses_train_smiles():
-    """Parsea el CSV de MOSES y devuelve la Series de SMILES del split 'train'. Único
-    punto que toca el CSV (pico de RAM alto); su resultado se serializa una vez (ver
-    _load_moses_train_smiles) en vez de reconstruirse por run.
-    reset_index(drop=True) no altera el muestreo posicional de .sample(random_state)."""
+    """Parsea el CSV de MOSES y devuelve la Series de SMILES del split 'train'."""
     df = pd.read_csv(MOSES_CSV, usecols=['SMILES', 'SPLIT'])
     return df[df['SPLIT'] == 'train']['SMILES'].dropna().reset_index(drop=True)
 
 
 @functools.lru_cache(maxsize=1)
 def _load_moses_train_smiles():
-    """SMILES de train de MOSES (~1.6M) como Series, compartida por load_seed_mus y
-    load_train_smiles.
-
-    Se serializa a MOSES_TRAIN_CACHE (pickle gzip) la primera vez y las demás lecturas
-    la cargan de ahí, para que las N runs en paralelo no reparseen el CSV a la vez al
-    arrancar (el prebuild serial de train.sh la construye antes del xargs). Devuelve
-    exactamente la Series de _build_moses_train_smiles() -> mismos resultados. Se
-    reconstruye si no existe o si moses.csv es más nuevo. Escritura atómica (tmp
-    por-PID + os.replace) para lecturas concurrentes seguras."""
+    """SMILES de train de MOSES (~1.6M) como Series, cacheada en MOSES_TRAIN_CACHE
+    (pickle gzip). Se reconstruye si el cache no existe o si moses.csv es más nuevo.
+    Escritura atómica (tmp por-PID + os.replace) para lecturas concurrentes."""
     cache = MOSES_TRAIN_CACHE
     if (os.path.exists(cache)
             and os.path.getmtime(cache) >= os.path.getmtime(MOSES_CSV)):
@@ -250,13 +230,8 @@ def lipinski_score(mol):
 def calc_properties(smi):
     """Calcula propiedades de un SMILES. Retorna dict o None si inválido.
 
-    Cacheado por string SMILES (LRU acotado): la población converge y muchos latentes
-    distintos decodifican al mismo SMILES, así que se reutiliza el cálculo RDKit. La
-    función es determinista -> una evicción solo recomputa un valor idéntico. Los
-    callers solo leen el dict, así que compartir la instancia cacheada es seguro.
-
-    MW/LogP/HBD/HBA se calculan una sola vez y se reutilizan para el score de Lipinski
-    y para los campos del dict (antes se computaban dos veces por molécula)."""
+    Cacheado por SMILES (LRU acotado): la población converge y muchos latentes
+    decodifican al mismo SMILES, reusando el cálculo RDKit."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
@@ -280,10 +255,7 @@ def calc_properties(smi):
 
 class MolecularLatentProblem(Problem):
     """Optimización tri-objetivo en espacio latente VAE.
-    F = [-QED, SA, -Lipinski] → pymoo minimiza los 3.
-
-    Problema vectorizado: pymoo entrega la población como matriz [n, latent_dim]
-    y se decodifica todo el lote en una sola pasada batcheada del LSTM."""
+    F = [-QED, SA, -Lipinski] → pymoo minimiza los 3."""
 
     def __init__(self, model, stoi, itos, latent_dim):
         self.model, self.stoi, self.itos = model, stoi, itos
@@ -345,8 +317,8 @@ class LatentSampling(Sampling):
 # ─── Callback: tracking por generación ───────────────────────────────────────
 
 def load_train_smiles():
-    """Set de SMILES de train de MOSES (para novelty). Libera la Series cacheada
-    (cache_clear) tras construir el set, para no arrastrarla durante toda la run."""
+    """Set de SMILES de train de MOSES (para novelty). Tras construir el set libera
+    la Series cacheada (cache_clear)."""
     train_smi = _load_moses_train_smiles()
     smiles_set = set(train_smi)
     _load_moses_train_smiles.cache_clear()
@@ -372,9 +344,8 @@ class GenerationTracker(Callback):
             e['gen'] = gen
 
         F = algorithm.pop.get("F")
-        # El HV se mide sobre objetivos normalizados a [0,1]^3 (ver HV_REF).
-        # NormalizedMolecularLatentProblem ya entrega F normalizado; el problema
-        # crudo entrega [-QED, SA, -Lip] y hay que normalizarlo aquí.
+        # HV sobre objetivos normalizados a [0,1]^3. El problema Normalized ya
+        # entrega F normalizado; el crudo ([-QED, SA, -Lip]) se normaliza aquí.
         if not hasattr(self.problem, '_F_MIN'):
             F = (F - F_MIN) / F_RANGE
         try:
@@ -469,18 +440,15 @@ def build_pareto(eval_log):
 # ─── I/O ─────────────────────────────────────────────────────────────────────
 
 def save_metrics(path, row):
-    """Escribe la fila de métricas de UNA run en su propio CSV (overwrite, no append):
-    sin escritura concurrente al correr en paralelo, y un reintento pisa su fila.
+    """Escribe la fila de métricas de UNA run en su propio CSV (overwrite).
     generate_summary los consolida en alg_dir/metrics.csv al final."""
     pd.DataFrame([row]).to_csv(path, index=False)
 
 
 def save_molecules(pareto, run_dir):
     """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
-
-    Escribe aunque el frente esté vacío (solo header): el .done del train.sh depende de
-    que exista este archivo, así que sin él la run se relanzaría para siempre. El rename
-    atómico evita marcar como hecha una run con un CSV truncado (proceso muerto a mitad)."""
+    Escribe aunque el frente esté vacío: train.sh usa la existencia de este archivo
+    como señal de run completa."""
     cols = ['smiles', 'qed', 'sa', 'lipinski', 'mw', 'logp', 'hbd', 'hba']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
@@ -506,8 +474,7 @@ def generate_summary(alg_name, pop_size, results_dir=None):
     base = results_dir if results_dir is not None else RESULTS_DIR
     alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
 
-    # Consolida los metrics.csv por-run en uno por config (para el repo de
-    # graficación), regenerado de cero: refleja exacto las runs presentes.
+    # Consolida los metrics.csv por-run en uno por config (para graficación).
     run_files = sorted(glob.glob(os.path.join(alg_dir, "run_*", "metrics.csv")))
     if not run_files:
         print(f"ERROR: no hay run_*/metrics.csv en {alg_dir}")
@@ -558,9 +525,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'time_sec': round(elapsed, 1),
     }
 
-    # molecules.csv se escribe AL FINAL: el .done del train.sh depende de su existencia,
-    # así que si el proceso muere durante el post-procesado la run se reintenta entera
-    # en vez de quedar marcada como hecha con archivos truncados.
+    # molecules.csv se escribe AL FINAL: train.sh lo usa como señal de run completa.
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_tracking(tracker, run_dir)
     save_molecules(pareto, run_dir)

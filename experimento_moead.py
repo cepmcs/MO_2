@@ -76,11 +76,8 @@ def main():
     crossover, mutation = get_operators(args.crossover, args.mutation)
     problem  = NormalizedMolecularLatentProblem(model, stoi, itos, latent_dim)
     tracker  = GenerationTracker(problem, train_smiles)
-    # ParallelMOEAD: variante generacional/síncrona de MOEA/D. Genera todos los
-    # offspring desde la misma población y los evalúa en lote (vs. el MOEA/D
-    # steady-state que evalúa de a uno), lo que permite el decode batcheado con
-    # calidad de frente equivalente (HV +1%, mismas mejores moléculas; ver
-    # comparación con 3 seeds × 300 gen).
+    # ParallelMOEAD: variante síncrona que evalúa todo el offspring en lote,
+    # lo que permite el decode batcheado.
     algorithm = ParallelMOEAD(
         ref_dirs=ref_dirs,
         n_neighbors=20,
@@ -107,9 +104,8 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # torch revienta en el teardown del intérprete (segfault en c10::Dispatcher),
-    # ya con los resultados en disco: os._exit(0) salta los destructores de C++ y
-    # evita el crash. Solo se llega aquí si main() terminó bien.
+    # os._exit(0) evita un segfault de torch en el teardown del intérprete
+    # (los resultados ya se guardaron en disco).
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)

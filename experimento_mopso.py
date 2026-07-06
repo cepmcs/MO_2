@@ -82,9 +82,8 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # torch revienta en el teardown del intérprete (segfault en c10::Dispatcher),
-    # ya con los resultados en disco: os._exit(0) salta los destructores de C++ y
-    # evita el crash. Solo se llega aquí si main() terminó bien.
+    # os._exit(0) evita un segfault de torch en el teardown del intérprete
+    # (los resultados ya se guardaron en disco).
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)
