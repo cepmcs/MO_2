@@ -7,7 +7,7 @@ Uso:
     python experimento_mopso.py --pop_size 300 --generate_summary
 """
 
-import os, sys, time, argparse
+import os, time, argparse
 import numpy as np
 import torch
 from pymoo.algorithms.moo.mopso_cd import MOPSO_CD
@@ -82,8 +82,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # os._exit(0) evita un segfault de torch en el teardown del intérprete
-    # (los resultados ya se guardaron en disco).
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(0)

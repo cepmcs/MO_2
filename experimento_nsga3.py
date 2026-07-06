@@ -18,7 +18,7 @@ Uso:
     python experimento_nsga3.py --pop_size 300 --crossover pcx --mutation gauss --generate_summary
 """
 
-import os, sys, time, argparse
+import os, time, argparse
 import numpy as np
 import torch
 from pymoo.algorithms.moo.nsga3 import NSGA3
@@ -102,8 +102,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # os._exit(0) evita un segfault de torch en el teardown del intérprete
-    # (los resultados ya se guardaron en disco).
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(0)

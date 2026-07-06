@@ -27,15 +27,10 @@ export CUDA_VISIBLE_DEVICES=""       # forzar CPU
 PYTHON=/home/cperez/miniconda3/envs/pymoo_env/bin/python
 
 # ─── Concurrencia ─────────────────────────────────────────────────────────────
-# Nº de runs en paralelo (1 hilo/proceso -> P = concurrencia real). El trabajo
-# satura por ancho de banda de memoria antes que por nº de cores: hay un "codo"
-# pasado el cual sumar procesos no acelera. Calibra P empíricamente en el nodo real
-# (no P = nº de cores a ciegas). Override: PARALLEL=24 sbatch ...
+# Runs en paralelo (1 hilo/proceso). Override: PARALLEL=24 sbatch ...
 PARALLEL=${PARALLEL:-16}
 
-# Progreso: cada PROGRESS_EVERY s se escribe una línea "hechas/total + ETA" en un
-# .out aparte (logs/progress_<jobid>.out). Es solo un contador de .done: no toca las
-# runs ni las frena. Override para smoke-tests: PROGRESS_EVERY=10 sbatch ...
+# Cada PROGRESS_EVERY s escribe "hechas/total + ETA" en logs/progress_<jobid>.out.
 PROGRESS_EVERY=${PROGRESS_EVERY:-60}
 PROGRESS_OUT="logs/progress_${SLURM_JOB_ID:-local}.out"
 
@@ -80,8 +75,8 @@ run_one() {
             --crossover "$CX" --mutation "$MUT"
     fi
 
-    # .done atado a la existencia real del output, NO al exit code: estos nodos
-    # pueden segfaultear en el teardown DESPUÉS de guardar los resultados.
+    # .done atado a que exista el output, NO al exit code: si el proceso muere tras
+    # guardar (timeout, OOM, crash), la run igual cuenta como completa.
     if [ -f "$RUN_OUT" ]; then
         touch "$DONE_FILE"
     else
@@ -106,9 +101,8 @@ human_time() {   # segundos → "Xd Yh Zm"
     fi
 }
 
-# Corre en background durante el xargs. ETA = restantes × (tiempo/hecha) y throughput
-# (runs/min) medidos SOLO sobre lo completado en ESTA corrida (ignora los .done de
-# corridas previas). El rate se calcula en entero *100 para 2 decimales sin float/awk.
+# ETA y rate medidos solo sobre lo completado en ESTA corrida. El rate se calcula
+# en entero *100 para 2 decimales sin float/awk.
 progress_monitor() {
     local total="$1" start_done="$2" interval="$3"
     local t0 now done_now completed remaining elapsed eta rate rate_x100
@@ -160,11 +154,8 @@ echo "  Nodo               : $(hostname)   cores: $(nproc)"
 echo "======================================================"
 
 # ─── Pre-serializa MOSES train SMILES (una sola vez, serial) ──────────────────
-# Cada run necesita los SMILES de train de MOSES al arrancar. Parsear el CSV de
-# 1.9M filas en las N runs a la vez producía un pico de RAM simultáneo que disparaba
-# el OOM. Esto lo construye UNA vez (pickle gzip en data/) de forma serial; luego
-# cada run solo lo lee (barato). Idempotente: si ya existe y moses.csv no cambió, no
-# reparsea nada.
+# Construye el cache serialmente para que las N runs no parseen el CSV a la vez al
+# arrancar (pico de RAM simultáneo → OOM). Idempotente.
 echo "[$(date '+%F %T')] pre-serializando MOSES train SMILES (una vez)..."
 "$PYTHON" -c "import utils_mo; print('  cache lista:', len(utils_mo._load_moses_train_smiles()), 'SMILES')" \
     || echo "  WARN: falló la pre-serialización; cada run parseará el CSV (más RAM al arranque)"
@@ -180,9 +171,8 @@ MON_PID=$!
 # -L 1: una línea (5 campos) por invocación.  El '_' es $0 placeholder de bash -c.
 build_tasks | xargs -P "$PARALLEL" -L 1 bash -c 'run_one "$@"' _
 
-# Apaga el monitor y escribe el resumen final (a stdout y al progress_*.out). Un
-# .done = run completa, así que pendientes = TOTAL - hechas = runs que fallaron esta
-# corrida (sin molecules.csv) y se reintentan relanzando el job.
+# Apaga el monitor y escribe el resumen final. Pendientes = runs que fallaron esta
+# corrida (sin molecules.csv); se reintentan relanzando el job.
 kill "$MON_PID" 2>/dev/null; wait "$MON_PID" 2>/dev/null
 FINAL_DONE=$(count_done)
 NEW_DONE=$(( FINAL_DONE - START_DONE ))
