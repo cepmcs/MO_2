@@ -9,7 +9,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16       # el nodo entero (16 cores)
 #SBATCH --exclusive              # reserva el nodo completo: nadie más corre en paralelo
-#SBATCH --time=3-00:00:00        # máximo de la partición (3 días)
+#SBATCH --time=12:00:00        # máximo de la partición (3 días)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Wrapper SLURM: solo pide GPU + entorno y delega TODO en run_experiments.py.
