@@ -31,7 +31,6 @@ PYTHON=${PYTHON:-/home/cperez/miniconda3/envs/pymoo_env/bin/python}
 # ─── Parámetros (todos overrideables por variable de entorno al hacer sbatch) ──
 DEVICE=${DEVICE:-cuda}                              # cuda | auto | cpu
 PARALLEL=${PARALLEL:-8}                             # cuántas runs corren AL MISMO TIEMPO
-POP=${POP:-300}
 N_RUNS=${N_RUNS:-20}                                # smoke test: N_RUNS=1 sbatch train.sh
 
 mkdir -p logs
@@ -45,14 +44,13 @@ if [ "$DEVICE" = "cuda" ]; then
 fi
 
 echo "======================================================"
-echo "  Experimentos MO — QED(↑) SA(↓) Lipinski(↑)"
+echo "  Sensibilidad de hiperparámetros MO — QED(↑) SA(↓) Lipinski(↑)"
 echo "  Nodo         : $(hostname)   cores: $(nproc)   device: $DEVICE"
-echo "  Concurrencia : $PARALLEL runs   pop: $POP   n_runs: $N_RUNS"
+echo "  Concurrencia : $PARALLEL runs   n_runs: $N_RUNS"
 echo "======================================================"
 
-# ─── Todo lo demás (grid, paralelismo, reanudación, ETA, resúmenes) vive aquí ──
+# ─── Todo lo demás (grid, paralelismo, reanudación, ETA, consolidación) vive aquí ──
 exec "$PYTHON" run_experiments.py \
     --device "$DEVICE" \
     --parallel "$PARALLEL" \
-    --pop "$POP" \
     --n-runs "$N_RUNS"

@@ -49,28 +49,50 @@ SMILES_REGEX = re.compile(
 
 
 # ─── Operadores genéticos ────────────────────────────────────────────────────
+# Sensibilidad de hiperparámetros: SOLO se barren las PROBABILIDADES (cruce y
+# mutación). Todo lo demás queda en el default de pymoo:
+#   SBX eta=15 · PCX eta=zeta=0.1 · PM eta=20 · Gauss sigma=0.1
+# La mutación se barre por-gen (prob_var); prob=1.0 (siempre se intenta mutar),
+# así el nº de genes mutados lo controla solo prob_var y PM/Gauss son comparables.
 
 CROSSOVERS = {
-    'sbx': lambda: SBX(prob=0.9, eta=20),
-    'pcx': lambda: PCX(eta=0.1, zeta=0.1),
+    'sbx': lambda cx_prob: SBX(prob=cx_prob),
+    'pcx': lambda cx_prob: PCX(prob=cx_prob),
 }
 MUTATIONS = {
-    'pm':    lambda: PM(eta=20),
-    'gauss': lambda: GaussianMutation(sigma=0.1),
+    'pm':    lambda mut_prob: PM(prob=1.0, prob_var=mut_prob),
+    'gauss': lambda mut_prob: GaussianMutation(prob=1.0, prob_var=mut_prob, sigma=0.1),
 }
 
 
-def get_operators(crossover, mutation):
-    """Instancia los operadores de pymoo a partir de sus nombres."""
-    return CROSSOVERS[crossover](), MUTATIONS[mutation]()
+def get_operators(crossover, mutation, cx_prob, mut_prob):
+    """Instancia (crossover, mutation) de pymoo con las probabilidades barridas.
+    cx_prob = prob de cruce (por apareamiento); mut_prob = prob de mutación por-gen."""
+    return CROSSOVERS[crossover](cx_prob), MUTATIONS[mutation](mut_prob)
 
 
-BASELINE_COMBO = ('sbx', 'pm')   # combo canónico: comparación entre algoritmos + baseline de la ablación
+def _slug(x):
+    """Número → string compacto y estable para nombres de carpeta (0.9→'0.9', 1.0→'1')."""
+    return f"{x:g}" if isinstance(x, float) else str(x)
 
 
-def get_results_dir(crossover, mutation):
-    """Cada combinación de operadores escribe en results/<crossover>_<mutation>/."""
-    return os.path.join(RESULTS_DIR, f"{crossover}_{mutation}")
+def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
+               pop_size, n_gen, run_id, results_dir=None):
+    """Directorio de una run GA: results/<ALG>/<cruce_mut>/<config>/run_k.
+    Se agrupa por combo de operadores; el slug de config codifica las probabilidades
+    y el reparto pob×gen → cada celda del grid tiene su carpeta y no se pisan.
+    Única fuente de verdad del path (la usa el script y el orquestador)."""
+    base = results_dir if results_dir is not None else RESULTS_DIR
+    combo = f"{crossover}_{mutation}"
+    cfg   = f"cx{_slug(cx_prob)}_mut{_slug(mut_prob)}_pop{pop_size}_gen{n_gen}"
+    return os.path.join(base, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
+
+
+def mopso_run_dir(pop_size, n_gen, w, c1, c2, run_id, results_dir=None):
+    """Directorio de una run MOPSO (sus hiperparámetros: pob, gen, w, c1, c2)."""
+    base = results_dir if results_dir is not None else RESULTS_DIR
+    cfg = f"pop{pop_size}_gen{n_gen}_w{_slug(w)}_c1{_slug(c1)}_c2{_slug(c2)}"
+    return os.path.join(base, "MOPSO", cfg, f"run_{run_id + 1:02d}")
 
 
 def get_ref_dirs(n_points, seed=1):
@@ -518,42 +540,30 @@ def save_tracking(tracker, run_dir):
         index=False, compression='gzip')
 
 
-def generate_summary(alg_name, pop_size, results_dir=None):
-    """Genera y muestra resumen estadístico (media ± std) de todas las runs."""
+def consolidate_all(results_dir=None):
+    """Junta TODOS los run_*/metrics.csv del grid en <results>/all_metrics.csv.
+
+    Cada fila = una run, con sus hiperparámetros (operadores, probabilidades, pob,
+    gen / w, c1, c2) como columnas. Es el único artefacto que necesita el análisis
+    de sensibilidad: un solo CSV largo, listo para agrupar por perilla."""
     base = results_dir if results_dir is not None else RESULTS_DIR
-    alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
-
-    # Consolida los metrics.csv por-run en uno por config (para graficación).
-    run_files = sorted(glob.glob(os.path.join(alg_dir, "run_*", "metrics.csv")))
-    if not run_files:
-        print(f"ERROR: no hay run_*/metrics.csv en {alg_dir}")
-        return
-    df = pd.concat([pd.read_csv(f) for f in run_files], ignore_index=True)
-    if 'run' in df.columns:
-        df = df.sort_values('run').reset_index(drop=True)
-    df.to_csv(os.path.join(alg_dir, "metrics.csv"), index=False)
-
-    n = len(df)
-    print(f"\n{'='*55}")
-    print(f"  {alg_name} pop={pop_size} ({n} runs)")
-    print(f"{'='*55}")
-    for col, fmt in [('hypervolume', '.4f'), ('spacing', '.4f'),
-                     ('best_qed', '.4f'), ('best_sa', '.2f'),
-                     ('best_lipinski', '.2f')]:
-        if col in df.columns:
-            print(f"  {col:15s} {df[col].mean():{fmt}} ± {df[col].std():{fmt}}")
-    if 'validity' in df.columns:
-        print(f"  {'validity':15s} {df['validity'].mean():.2%} ± {df['validity'].std():.2%}")
-    if 'novelty' in df.columns:
-        print(f"  {'novelty':15s} {df['novelty'].mean():.2%} ± {df['novelty'].std():.2%}")
-    if 'n_pareto' in df.columns:
-        print(f"  {'n_pareto':15s} {df['n_pareto'].mean():.1f} ± {df['n_pareto'].std():.1f}")
+    files = sorted(glob.glob(os.path.join(base, "**", "run_*", "metrics.csv"),
+                             recursive=True))
+    if not files:
+        print(f"ERROR: no hay run_*/metrics.csv bajo {base}")
+        return None
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    out = os.path.join(base, "all_metrics.csv")
+    df.to_csv(out, index=False)
+    print(f"Consolidado: {len(df)} runs de {len(files)} archivos → {out}")
+    return df
 
 
 # ─── Post-procesamiento ─────────────────────────────────────────────────────
 
-def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, results_dir=None):
-    """Calcula métricas, guarda resultados y genera gráficas para una run."""
+def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, hp=None):
+    """Calcula métricas, guarda resultados y CSVs de una run.
+    hp: dict con los hiperparámetros barridos (se agregan como columnas a metrics.csv)."""
     pareto, validity = build_pareto(problem.eval_log)
     hv      = compute_hv(pareto)
     spacing = compute_spacing(pareto)
@@ -565,6 +575,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
 
     metrics = {
         'algorithm': alg_name, 'pop_size': pop_size, 'n_gen': n_gen,
+        **(hp or {}),                       # hiperparámetros barridos como columnas
         'run': run_id + 1, 'n_pareto': len(pareto),
         'hypervolume': round(hv, 6), 'spacing': spacing,
         'validity': validity, 'novelty': novelty,
