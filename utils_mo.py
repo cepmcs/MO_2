@@ -49,32 +49,77 @@ SMILES_REGEX = re.compile(
 
 
 # ─── Operadores genéticos ────────────────────────────────────────────────────
+# Sensibilidad de hiperparámetros: SOLO se barren las PROBABILIDADES (cruce y
+# mutación). Todo lo demás queda en el default de pymoo:
+#   SBX eta=15 · PCX eta=zeta=0.1 · PM eta=20 · Gauss sigma=0.1
+# La mutación se barre por-gen (prob_var); prob=1.0 (siempre se intenta mutar),
+# así el nº de genes mutados lo controla solo prob_var y PM/Gauss son comparables.
 
 CROSSOVERS = {
-    'sbx': lambda: SBX(prob=0.9, eta=20),
-    'pcx': lambda: PCX(eta=0.1, zeta=0.1),
+    'sbx': lambda cx_prob: SBX(prob=cx_prob),
+    'pcx': lambda cx_prob: PCX(prob=cx_prob),
 }
 MUTATIONS = {
-    'pm':    lambda: PM(eta=20),
-    'gauss': lambda: GaussianMutation(sigma=0.1),
+    'pm':    lambda mut_prob: PM(prob=1.0, prob_var=mut_prob),
+    'gauss': lambda mut_prob: GaussianMutation(prob=1.0, prob_var=mut_prob, sigma=0.1),
 }
 
 
-def get_operators(crossover, mutation):
-    """Instancia los operadores de pymoo a partir de sus nombres."""
-    return CROSSOVERS[crossover](), MUTATIONS[mutation]()
+def get_operators(crossover, mutation, cx_prob, mut_prob):
+    """Instancia (crossover, mutation) de pymoo con las probabilidades barridas.
+    cx_prob = prob de cruce (por apareamiento); mut_prob = prob de mutación por-gen."""
+    return CROSSOVERS[crossover](cx_prob), MUTATIONS[mutation](mut_prob)
 
 
-BASELINE_COMBO = ('sbx', 'pm')   # combo canónico: comparación entre algoritmos + baseline de la ablación
+def _slug(x):
+    """Número → string compacto y estable para nombres de carpeta (0.9→'0.9', 1.0→'1')."""
+    return f"{x:g}" if isinstance(x, float) else str(x)
 
 
-def get_results_dir(crossover, mutation):
-    """Cada combinación de operadores escribe en results/<crossover>_<mutation>/."""
-    return os.path.join(RESULTS_DIR, f"{crossover}_{mutation}")
+def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
+               pop_size, n_gen, run_id, results_dir=None):
+    """Directorio de una run GA: results/<ALG>/<cruce_mut>/<config>/run_k.
+    Se agrupa por combo de operadores; el slug de config codifica las probabilidades
+    y el reparto pob×gen → cada celda del grid tiene su carpeta y no se pisan.
+    Única fuente de verdad del path (la usa el script y el orquestador)."""
+    base = results_dir if results_dir is not None else RESULTS_DIR
+    combo = f"{crossover}_{mutation}"
+    cfg   = f"cx{_slug(cx_prob)}_mut{_slug(mut_prob)}_pop{pop_size}_gen{n_gen}"
+    return os.path.join(base, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
+
+
+def mopso_run_dir(pop_size, n_gen, w, c1, c2, run_id, results_dir=None):
+    """Directorio de una run MOPSO (sus hiperparámetros: pob, gen, w, c1, c2)."""
+    base = results_dir if results_dir is not None else RESULTS_DIR
+    cfg = f"pop{pop_size}_gen{n_gen}_w{_slug(w)}_c1{_slug(c1)}_c2{_slug(c2)}"
+    return os.path.join(base, "MOPSO", cfg, f"run_{run_id + 1:02d}")
+
+
+def get_ref_dirs(n_points, seed=1):
+    """Direcciones de referencia (Riesz s-energy, 3 objetivos) para NSGA-III / MOEA-D.
+    Deterministas (seed fijo) pero caras (~6 s). Se cachean en disco y se reutilizan
+    entre todas las runs, en vez de recalcularlas idénticas en cada proceso."""
+    cache = os.path.join(ROOT_DIR, "data", f"ref_dirs_energy_3obj_p{n_points}_s{seed}.npy")
+    if os.path.exists(cache):
+        return np.load(cache)
+    from pymoo.util.ref_dirs import get_reference_directions
+    rd  = get_reference_directions("energy", 3, n_points, seed=seed)
+    tmp = f"{cache}.{os.getpid()}.tmp"       # atómico: no deja un cache a medias
+    with open(tmp, "wb") as f:
+        np.save(f, rd)
+    os.replace(tmp, cache)
+    return rd
 
 
 
 # ─── VAE: cargar, encodear, decodificar ──────────────────────────────────────
+
+def set_device(name):
+    """Fuerza el dispositivo de cómputo ('cpu' / 'cuda'). Llamar antes de load_model().
+    El default (a nivel módulo) ya autoselecciona GPU si hay CUDA disponible."""
+    global DEVICE
+    DEVICE = torch.device(name)
+
 
 def load_model():
     """Carga modelo VAE desde checkpoint y retorna (model, stoi, itos, latent_dim)."""
@@ -176,7 +221,7 @@ def _build_moses_train_smiles():
 def _load_moses_train_smiles():
     """SMILES de train de MOSES (~1.6M) como Series, cacheada en MOSES_TRAIN_CACHE
     (pickle gzip). Se reconstruye si el cache no existe o si moses.csv es más nuevo.
-    Escritura atómica (tmp por-PID + os.replace) para lecturas concurrentes."""
+    Escritura atómica (tmp + os.replace) para no dejar un cache a medias si se interrumpe."""
     cache = MOSES_TRAIN_CACHE
     if (os.path.exists(cache)
             and os.path.getmtime(cache) >= os.path.getmtime(MOSES_CSV)):
@@ -375,10 +420,9 @@ def _non_dominated_front(F):
 
     Sustituye a NonDominatedSorting de pymoo, que construye una matriz de
     dominación O(n²) en RAM: con las ~100k moléculas únicas que acumula una run
-    exploradora (p. ej. PCX) eso son ~14 GB → OOM (SIGKILL local o job matado por
-    el límite --mem en SLURM, en ambos casos sin escribir molecules.csv). Este
-    filtro estilo Kung usa memoria O(tamaño del frente): ordena lexicográficamente
-    (todo dominador de un punto aparece antes) y mantiene solo los no-dominados."""
+    exploradora (p. ej. PCX) eso son ~14 GB → OOM. Este filtro estilo Kung usa
+    memoria O(tamaño del frente): ordena lexicográficamente (todo dominador de un
+    punto aparece antes) y mantiene solo los puntos no-dominados vistos."""
     n = len(F)
     if n == 0:
         return np.empty(0, dtype=int)
@@ -474,8 +518,8 @@ def save_metrics(path, row):
 
 def save_molecules(pareto, run_dir):
     """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
-    Escribe aunque el frente esté vacío: train.sh usa la existencia de este archivo
-    como señal de run completa."""
+    Escribe aunque el frente esté vacío: el orquestador (run_experiments.py) usa la
+    existencia de este archivo como señal de run completa."""
     cols = ['smiles', 'qed', 'sa', 'lipinski', 'mw', 'logp', 'hbd', 'hba']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
@@ -496,42 +540,30 @@ def save_tracking(tracker, run_dir):
         index=False, compression='gzip')
 
 
-def generate_summary(alg_name, pop_size, results_dir=None):
-    """Genera y muestra resumen estadístico (media ± std) de todas las runs."""
+def consolidate_all(results_dir=None):
+    """Junta TODOS los run_*/metrics.csv del grid en <results>/all_metrics.csv.
+
+    Cada fila = una run, con sus hiperparámetros (operadores, probabilidades, pob,
+    gen / w, c1, c2) como columnas. Es el único artefacto que necesita el análisis
+    de sensibilidad: un solo CSV largo, listo para agrupar por perilla."""
     base = results_dir if results_dir is not None else RESULTS_DIR
-    alg_dir = os.path.join(base, alg_name, f"pop{pop_size}")
-
-    # Consolida los metrics.csv por-run en uno por config (para graficación).
-    run_files = sorted(glob.glob(os.path.join(alg_dir, "run_*", "metrics.csv")))
-    if not run_files:
-        print(f"ERROR: no hay run_*/metrics.csv en {alg_dir}")
-        return
-    df = pd.concat([pd.read_csv(f) for f in run_files], ignore_index=True)
-    if 'run' in df.columns:
-        df = df.sort_values('run').reset_index(drop=True)
-    df.to_csv(os.path.join(alg_dir, "metrics.csv"), index=False)
-
-    n = len(df)
-    print(f"\n{'='*55}")
-    print(f"  {alg_name} pop={pop_size} ({n} runs)")
-    print(f"{'='*55}")
-    for col, fmt in [('hypervolume', '.4f'), ('spacing', '.4f'),
-                     ('best_qed', '.4f'), ('best_sa', '.2f'),
-                     ('best_lipinski', '.2f')]:
-        if col in df.columns:
-            print(f"  {col:15s} {df[col].mean():{fmt}} ± {df[col].std():{fmt}}")
-    if 'validity' in df.columns:
-        print(f"  {'validity':15s} {df['validity'].mean():.2%} ± {df['validity'].std():.2%}")
-    if 'novelty' in df.columns:
-        print(f"  {'novelty':15s} {df['novelty'].mean():.2%} ± {df['novelty'].std():.2%}")
-    if 'n_pareto' in df.columns:
-        print(f"  {'n_pareto':15s} {df['n_pareto'].mean():.1f} ± {df['n_pareto'].std():.1f}")
+    files = sorted(glob.glob(os.path.join(base, "**", "run_*", "metrics.csv"),
+                             recursive=True))
+    if not files:
+        print(f"ERROR: no hay run_*/metrics.csv bajo {base}")
+        return None
+    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    out = os.path.join(base, "all_metrics.csv")
+    df.to_csv(out, index=False)
+    print(f"Consolidado: {len(df)} runs de {len(files)} archivos → {out}")
+    return df
 
 
 # ─── Post-procesamiento ─────────────────────────────────────────────────────
 
-def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, results_dir=None):
-    """Calcula métricas, guarda resultados y genera gráficas para una run."""
+def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, hp=None):
+    """Calcula métricas, guarda resultados y CSVs de una run.
+    hp: dict con los hiperparámetros barridos (se agregan como columnas a metrics.csv)."""
     pareto, validity = build_pareto(problem.eval_log)
     hv      = compute_hv(pareto)
     spacing = compute_spacing(pareto)
@@ -543,6 +575,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
 
     metrics = {
         'algorithm': alg_name, 'pop_size': pop_size, 'n_gen': n_gen,
+        **(hp or {}),                       # hiperparámetros barridos como columnas
         'run': run_id + 1, 'n_pareto': len(pareto),
         'hypervolume': round(hv, 6), 'spacing': spacing,
         'validity': validity, 'novelty': novelty,
@@ -552,7 +585,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'time_sec': round(elapsed, 1),
     }
 
-    # molecules.csv se escribe AL FINAL: train.sh lo usa como señal de run completa.
+    # molecules.csv se escribe AL FINAL: run_experiments.py lo usa como señal de run completa.
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_tracking(tracker, run_dir)
     save_molecules(pareto, run_dir)
