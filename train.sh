@@ -4,12 +4,11 @@
 #SBATCH --error=logs/mo_%j.err
 #SBATCH --partition=gpu
 #SBATCH --nodelist=gpu1          # nodo GPU (quítalo para que SLURM elija en la partición)
-#SBATCH --gres=gpu:1             # 1 GPU: todas las runs comparten la misma tarjeta
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16       # el nodo entero (16 cores)
 #SBATCH --exclusive              # reserva el nodo completo: nadie más corre en paralelo
-#SBATCH --time=12:00:00        # máximo de la partición (3 días)
+#SBATCH --time=12:00:00          # límite de la partición GPU (12 h); relanzar para continuar
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Wrapper SLURM: solo pide GPU + entorno y delega TODO en run_experiments.py.
@@ -23,7 +22,8 @@ source /etc/profile
 
 # ─── Entorno ──────────────────────────────────────────────────────────────────
 export PYTHONDONTWRITEBYTECODE=1     # /home NFS casi lleno: no escribir .pyc
-# Ojo: NO fijar CUDA_VISIBLE_DEVICES aquí; SLURM lo setea con --gres=gpu:1.
+# Sin GRES: el nodo gpu1 se reserva entero (--exclusive) y torch ve la GPU directo.
+# No fijar CUDA_VISIBLE_DEVICES aquí (dejaría a torch sin GPU).
 
 # python del env directo (NO `conda activate`). Override: PYTHON=/otra/ruta sbatch train.sh
 PYTHON=${PYTHON:-/home/cperez/miniconda3/envs/pymoo_env/bin/python}
