@@ -61,6 +61,7 @@ data/moses_train_smiles.pkl.gz
 # caché de direcciones de referencia (NSGA-III/MOEA-D), determinista y regenerable
 data/ref_dirs_*.npy
 results/
+results_baselines/
 
 # Logs
 *.log
