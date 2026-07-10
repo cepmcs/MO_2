@@ -44,7 +44,7 @@ if [ "$DEVICE" = "cuda" ]; then
 fi
 
 echo "======================================================"
-echo "  Sensibilidad de hiperparámetros MO — QED(↑) SA(↓) Lipinski(↑)"
+echo "  Sensibilidad de hiperparámetros MO — SA(↓) d(ALOGP)(↑) d(HBD)(↑)"
 echo "  Nodo         : $(hostname)   cores: $(nproc)   device: $DEVICE"
 echo "  Concurrencia : $PARALLEL runs   n_runs: $N_RUNS"
 echo "======================================================"

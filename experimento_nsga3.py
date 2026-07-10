@@ -1,6 +1,6 @@
 """
 Experimento NSGA-III — Optimización multi-objetivo del espacio latente VAE.
-Objetivos: QED (↑), SA (↓), Lipinski (↑)
+Objetivos: SA (↓), d(ALOGP) (↑), d(HBD) (↑)
 
 NSGA-III usa vectores de referencia; se generan exactamente pop_size
 direcciones bien repartidas con el método Riesz s-energy.
@@ -107,8 +107,8 @@ def main():
         problem, tracker, elapsed, run_dir, hp=hp)
 
     print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Valid={validity:.0%}  "
-          f"n={len(pareto)}  QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
-          f"Lip={metrics['best_lipinski']}  t={metrics['time_sec']}s", flush=True)
+          f"n={len(pareto)}  SA={metrics['best_sa']}  ALOGPd={metrics['best_alogp_d']}  "
+          f"HBDd={metrics['best_hbd_d']}  t={metrics['time_sec']}s", flush=True)
 
 
 if __name__ == "__main__":
