@@ -9,8 +9,8 @@ import torch
 import numpy as np
 import pandas as pd
 
-from rdkit import Chem, RDLogger
-from rdkit.Chem import QED as QED_module
+from rdkit import Chem, DataStructs, RDLogger
+from rdkit.Chem import QED as QED_module, rdFingerprintGenerator
 from pymoo.core.problem import Problem
 from pymoo.core.sampling import Sampling
 from pymoo.core.callback import Callback
@@ -467,6 +467,30 @@ def compute_spacing(pareto):
     return round(float(np.std(dmin) / mu), 6) if mu > 0 else 0.0
 
 
+# Generador de fingerprints Morgan (ECFP4: radio 2, 2048 bits) para diversidad.
+_MORGAN_GEN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+
+
+def compute_diversity(pareto):
+    """Diversidad interna (IntDiv): 1 − similitud de Tanimoto MEDIA por pares sobre
+    fingerprints de Morgan (ECFP4). Mide diversidad ESTRUCTURAL del frente:
+    alta (→1) = moléculas químicamente distintas entre sí; baja (→0) = mismo esqueleto
+    repetido. Complementa a spacing (que mide dispersión en el espacio de objetivos).
+    Métrica estándar tipo MOSES."""
+    if len(pareto) < 2:
+        return 0.0
+    fps = [_MORGAN_GEN.GetFingerprint(mol)
+           for mol in (Chem.MolFromSmiles(m['smiles']) for m in pareto)
+           if mol is not None]
+    if len(fps) < 2:
+        return 0.0
+    # Similitud media sobre todos los pares no ordenados (i<j): fps[i] vs los previos.
+    sims = []
+    for i in range(1, len(fps)):
+        sims.extend(DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i]))
+    return round(1.0 - float(np.mean(sims)), 6)
+
+
 def build_pareto(eval_log):
     """Construye frente de Pareto desde el log completo. Retorna (pareto, validity)."""
     n_valid = 0
@@ -550,8 +574,9 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
     """Calcula métricas, guarda resultados y CSVs de una run.
     hp: dict con los hiperparámetros barridos (se agregan como columnas a metrics.csv)."""
     pareto, validity = build_pareto(problem.eval_log)
-    hv      = compute_hv(pareto)
-    spacing = compute_spacing(pareto)
+    hv        = compute_hv(pareto)
+    spacing   = compute_spacing(pareto)
+    diversity = compute_diversity(pareto)
 
     # Novelty: fracción de moléculas válidas no presentes en el training set
     valid_smiles = [e['smiles'] for e in problem.eval_log if e['valid']]
@@ -562,7 +587,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'algorithm': alg_name, 'pop_size': pop_size, 'n_gen': n_gen,
         **(hp or {}),                       # hiperparámetros barridos como columnas
         'run': run_id + 1, 'n_pareto': len(pareto),
-        'hypervolume': round(hv, 6), 'spacing': spacing,
+        'hypervolume': round(hv, 6), 'spacing': spacing, 'diversity': diversity,
         'validity': validity, 'novelty': novelty,
         'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
         'best_alogp_d': round(max((r['alogp_d'] for r in pareto), default=float('nan')), 4),

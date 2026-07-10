@@ -98,7 +98,7 @@ def main():
         ALG_NAME, args.pop_size, args.n_gen, args.run_id,
         problem, tracker, elapsed, run_dir, hp=hp)
 
-    print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Valid={validity:.0%}  "
+    print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Div={metrics['diversity']:.4f}  Valid={validity:.0%}  "
           f"n={len(pareto)}  SA={metrics['best_sa']}  ALOGPd={metrics['best_alogp_d']}  "
           f"HBDd={metrics['best_hbd_d']}  t={metrics['time_sec']}s", flush=True)
 
