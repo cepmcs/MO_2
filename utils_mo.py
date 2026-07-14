@@ -1,7 +1,8 @@
 """
 Utilidades para optimización multi-objetivo de moléculas en espacio latente VAE.
-Objetivos: SA (↓), d(ALOGP) (↑), d(HBD) (↑)  →  pymoo minimiza [-d(ALOGP), SA, -d(HBD)].
-d(·) = deseabilidad interna de QED (rdkit.Chem.QED.ads) sobre ALOGP/HBD, en [0,1].
+Objetivos: QED (↑), SA (↓), Fsp3 (↑)  →  pymoo minimiza [-QED, SA, -Fsp3].
+QED ∈ [0,1] (druglikeness agregada, rdkit.Chem.QED.qed); Fsp3 ∈ [0,1] (fracción de
+carbonos sp3, CalcFractionCSP3); SA ∈ [1,10] (accesibilidad sintética).
 """
 
 import re, os, sys, glob, functools
@@ -10,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from rdkit import Chem, DataStructs, RDLogger
-from rdkit.Chem import QED as QED_module, rdFingerprintGenerator
+from rdkit.Chem import QED as QED_module, rdFingerprintGenerator, rdMolDescriptors
 from pymoo.core.problem import Problem
 from pymoo.core.sampling import Sampling
 from pymoo.core.callback import Callback
@@ -34,8 +35,8 @@ RESULTS_DIR = os.path.join(ROOT_DIR, "results")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
-# Bounds teóricos por objetivo [-d(ALOGP), SA, -d(HBD)] para normalizar el HV a [0,1]^3:
-#   -d(ALOGP) ∈ [-1, 0],  SA ∈ [1, 10],  -d(HBD) ∈ [-1, 0]
+# Bounds teóricos por objetivo [-QED, SA, -Fsp3] para normalizar el HV a [0,1]^3:
+#   -QED ∈ [-1, 0],  SA ∈ [1, 10],  -Fsp3 ∈ [-1, 0]
 F_MIN   = np.array([-1.0, 1.0, -1.0])   # mejor caso por objetivo
 F_RANGE = np.array([ 1.0, 9.0, 1.0])    # peor - mejor
 # Ref point HV en el espacio normalizado: 10% más allá del peor (1.0) en cada eje.
@@ -257,26 +258,25 @@ def load_seed_mus(model, stoi, n_samples, run_id):
 def calc_properties(smi):
     """Calcula propiedades de un SMILES. Retorna dict o None si inválido.
 
-    Objetivos: SA (↓), d(ALOGP) (↑), d(HBD) (↑). d(·) son las funciones de
-    deseabilidad que QED usa internamente (rdkit.Chem.QED.ads sobre los inputs
-    crudos ALOGP/HBD de QED.properties), acotadas a [0,1] (1 = más deseable).
+    Objetivos: QED (↑), SA (↓), Fsp3 (↑). QED es la druglikeness agregada de RDKit
+    (∈[0,1]); Fsp3 es la fracción de carbonos sp3 (∈[0,1], CalcFractionCSP3, devuelve
+    0 si la molécula no tiene carbonos); SA es la accesibilidad sintética (∈[1,10]).
 
     Cacheado por SMILES (LRU acotado): la población converge y muchos latentes
     decodifican al mismo SMILES, reusando el cálculo RDKit."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
-    qp = QED_module.properties(mol)   # ALOGP, HBD, MW, HBA... (inputs crudos de QED)
+    qp = QED_module.properties(mol)   # ALOGP, HBD, MW, HBA... (crudos, solo para reporte)
     return {
         'smiles': smi,
-        'sa': sascorer.calculateScore(mol),
-        'alogp_d': QED_module.ads(qp.ALOGP, QED_module.adsParameters['ALOGP']),
-        'hbd_d':   QED_module.ads(qp.HBD,   QED_module.adsParameters['HBD']),
+        'qed':   QED_module.qed(mol, qedProperties=qp),   # objetivo (↑), ∈[0,1]
+        'sa':    sascorer.calculateScore(mol),            # objetivo (↓), ∈[1,10]
+        'fsp3':  rdMolDescriptors.CalcFractionCSP3(mol),  # objetivo (↑), ∈[0,1]
         'alogp': qp.ALOGP,   # ALOGP crudo (Crippen MolLogP) — reporte
         'hbd':   qp.HBD,     # HBD crudo (CalcNumHBD) — reporte
         'mw':    qp.MW,
         'hba':   qp.HBA,
-        'qed':   QED_module.qed(mol, qedProperties=qp),   # QED agregado (referencia, no objetivo)
     }
 
 
@@ -284,7 +284,7 @@ def calc_properties(smi):
 
 class MolecularLatentProblem(Problem):
     """Optimización tri-objetivo en espacio latente VAE.
-    F = [-d(ALOGP), SA, -d(HBD)] → pymoo minimiza los 3."""
+    F = [-QED, SA, -Fsp3] → pymoo minimiza los 3."""
 
     def __init__(self, model, stoi, itos, latent_dim):
         self.model, self.stoi, self.itos = model, stoi, itos
@@ -299,14 +299,14 @@ class MolecularLatentProblem(Problem):
             if props is None:
                 F[i] = INVALID_F
                 self.eval_log.append({
-                    'smiles': None, 'alogp_d': None, 'sa': None,
-                    'hbd_d': None, 'valid': False,
+                    'smiles': None, 'qed': None, 'sa': None,
+                    'fsp3': None, 'valid': False,
                 })
             else:
-                F[i] = (-props['alogp_d'], props['sa'], -props['hbd_d'])
+                F[i] = (-props['qed'], props['sa'], -props['fsp3'])
                 self.eval_log.append({
-                    'smiles': props['smiles'], 'alogp_d': props['alogp_d'],
-                    'sa': props['sa'], 'hbd_d': props['hbd_d'],
+                    'smiles': props['smiles'], 'qed': props['qed'],
+                    'sa': props['sa'], 'fsp3': props['fsp3'],
                     'valid': True,
                 })
         out["F"] = F
@@ -316,7 +316,7 @@ class NormalizedMolecularLatentProblem(MolecularLatentProblem):
     """MolecularLatentProblem con normalización estática de objetivos.
 
     Normaliza F a [0,1]^3 usando bounds teóricos fijos:
-      -d(ALOGP) ∈ [-1, 0],  SA ∈ [1, 10],  -d(HBD) ∈ [-1, 0]
+      -QED ∈ [-1, 0],  SA ∈ [1, 10],  -Fsp3 ∈ [-1, 0]
 
     eval_log mantiene valores crudos → post-procesamiento comparable.
     Diseñado para MOEA/D y MOPSO donde la escala cruda de SA
@@ -374,7 +374,7 @@ class GenerationTracker(Callback):
 
         F = algorithm.pop.get("F")
         # HV sobre objetivos normalizados a [0,1]^3. El problema Normalized ya
-        # entrega F normalizado; el crudo ([-QED, SA, -Lip]) se normaliza aquí.
+        # entrega F normalizado; el crudo ([-QED, SA, -Fsp3]) se normaliza aquí.
         if not hasattr(self.problem, '_F_MIN'):
             F = (F - F_MIN) / F_RANGE
         try:
@@ -432,7 +432,7 @@ def non_dominated(results):
     """Filtra soluciones no-dominadas (memoria O(frente); ver _non_dominated_front)."""
     if not results:
         return []
-    F = np.array([[-r['alogp_d'], r['sa'], -r['hbd_d']] for r in results], dtype=float)
+    F = np.array([[-r['qed'], r['sa'], -r['fsp3']] for r in results], dtype=float)
     return [results[i] for i in _non_dominated_front(F)]
 
 
@@ -440,7 +440,7 @@ def compute_hv(pareto):
     """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^3."""
     if not pareto:
         return 0.0
-    F = np.array([[-r['alogp_d'], r['sa'], -r['hbd_d']] for r in pareto])
+    F = np.array([[-r['qed'], r['sa'], -r['fsp3']] for r in pareto])
     F = (F - F_MIN) / F_RANGE
     try:
         return float(HV(ref_point=HV_REF)(F))
@@ -452,8 +452,8 @@ def compute_spacing(pareto):
     """Spacing de Schott normalizado (CV de distancias al vecino más cercano)."""
     if len(pareto) < 2:
         return 0.0
-    F = np.array([[-r['alogp_d'], r['sa'], -r['hbd_d']] for r in pareto])
-    # Normalizar ejes para compensar escalas distintas (SA~[1,10] vs d(ALOGP)/d(HBD)~[0,1])
+    F = np.array([[-r['qed'], r['sa'], -r['fsp3']] for r in pareto])
+    # Normalizar ejes para compensar escalas distintas (SA~[1,10] vs QED/Fsp3~[0,1])
     ranges = F.max(axis=0) - F.min(axis=0)
     ranges[ranges == 0] = 1.0
     F_norm = F / ranges
@@ -502,8 +502,8 @@ def build_pareto(eval_log):
         smi = e['smiles']
         if smi not in seen:
             seen[smi] = {
-                'smiles': smi, 'alogp_d': e['alogp_d'],
-                'sa': e['sa'], 'hbd_d': e['hbd_d'],
+                'smiles': smi, 'qed': e['qed'],
+                'sa': e['sa'], 'fsp3': e['fsp3'],
             }
     validity = round(n_valid / len(eval_log), 4) if eval_log else 0.0
     pareto = non_dominated(list(seen.values()))
@@ -529,7 +529,7 @@ def save_molecules(pareto, run_dir):
     """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
     Escribe aunque el frente esté vacío: el orquestador (run_experiments.py) usa la
     existencia de este archivo como señal de run completa."""
-    cols = ['smiles', 'sa', 'alogp_d', 'hbd_d', 'qed', 'alogp', 'hbd', 'mw', 'hba']
+    cols = ['smiles', 'qed', 'sa', 'fsp3', 'alogp', 'hbd', 'mw', 'hba']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
     if not pareto:
@@ -589,10 +589,9 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'run': run_id + 1, 'n_pareto': len(pareto),
         'hypervolume': round(hv, 6), 'spacing': spacing, 'diversity': diversity,
         'validity': validity, 'novelty': novelty,
-        'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
-        'best_alogp_d': round(max((r['alogp_d'] for r in pareto), default=float('nan')), 4),
-        'best_hbd_d': round(max((r['hbd_d'] for r in pareto), default=float('nan')), 4),
         'best_qed': round(max((r['qed'] for r in pareto), default=float('nan')), 4),
+        'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
+        'best_fsp3': round(max((r['fsp3'] for r in pareto), default=float('nan')), 4),
         'time_sec': round(elapsed, 1),
     }
 

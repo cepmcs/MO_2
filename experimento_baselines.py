@@ -2,7 +2,7 @@
 Baselines "no tan modernos" — random sampling, LHS y GA de suma ponderada.
 Sirven de piso de comparación frente a los MOEAs (NSGA2/NSGA3/MOEAD/AGEMOEA/
 MOPSO): ninguno de los tres hace búsqueda multi-objetivo real de Pareto.
-Objetivos: SA (↓), d(ALOGP) (↑), d(HBD) (↑)  (mismos que el resto del proyecto)
+Objetivos: QED (↑), SA (↓), Fsp3 (↑)  (mismos que el resto del proyecto)
 
 Guardan en results_baselines/ (NO en results/), para no mezclarse con el grid
 de sensibilidad de hiperparámetros de los MOEAs.
@@ -11,7 +11,7 @@ Uso:
     python experimento_baselines.py --method random     --pop_size 300 --n_gen 500 --run_id 0
     python experimento_baselines.py --method lhs         --pop_size 300 --n_gen 500 --run_id 0
     python experimento_baselines.py --method weighted_ga --pop_size 300 --n_gen 500 --run_id 0
-    python experimento_baselines.py --method weighted_ga --weights 0.5,0.3,0.2 --pop_size 300 --run_id 0
+    python experimento_baselines.py --method weighted_ga --weights 0.5,0.3,0.2 --pop_size 300 --run_id 0  (pesos: qed,sa,fsp3)
     python experimento_baselines.py --method random --generate_summary
 """
 
@@ -72,7 +72,7 @@ class BaselineTracker:
 
         valid = [e for e in new if e['valid']]
         if valid:
-            F = np.array([[-e['alogp_d'], e['sa'], -e['hbd_d']] for e in valid])
+            F = np.array([[-e['qed'], e['sa'], -e['fsp3']] for e in valid])
             Fn = (F - F_MIN) / F_RANGE
             try:
                 hv = float(HV(ref_point=HV_REF)(Fn))
@@ -107,7 +107,7 @@ class TrackerCallback(Callback):
 
 class WeightedSumLatentProblem(Problem):
     """Mismo espacio/objetivos que MolecularLatentProblem, pero out['F'] es UN
-    escalar (suma ponderada de [-d(ALOGP), SA, -d(HBD)] normalizados a [0,1]) para que
+    escalar (suma ponderada de [-QED, SA, -Fsp3] normalizados a [0,1]) para que
     el GA single-objective de pymoo lo use como fitness. eval_log guarda los 3
     valores crudos igual que en los experimentos multi-objetivo, así se reusa
     postprocess_run (Pareto/HV/spacing) sin cambios."""
@@ -126,12 +126,12 @@ class WeightedSumLatentProblem(Problem):
             props = calc_properties(smi)
             if props is None:
                 F3[i] = INVALID_F
-                self.eval_log.append({'smiles': None, 'alogp_d': None, 'sa': None,
-                                      'hbd_d': None, 'valid': False})
+                self.eval_log.append({'smiles': None, 'qed': None, 'sa': None,
+                                      'fsp3': None, 'valid': False})
             else:
-                F3[i] = (-props['alogp_d'], props['sa'], -props['hbd_d'])
-                self.eval_log.append({'smiles': props['smiles'], 'alogp_d': props['alogp_d'],
-                                      'sa': props['sa'], 'hbd_d': props['hbd_d'],
+                F3[i] = (-props['qed'], props['sa'], -props['fsp3'])
+                self.eval_log.append({'smiles': props['smiles'], 'qed': props['qed'],
+                                      'sa': props['sa'], 'fsp3': props['fsp3'],
                                       'valid': True})
         F3_norm = (F3 - F_MIN) / F_RANGE
         out["F"] = (F3_norm * self.weights).sum(axis=1, keepdims=True)
@@ -188,7 +188,7 @@ def main():
     parser.add_argument('--n_gen', type=int, default=500)
     parser.add_argument('--run_id', type=int, default=None)
     parser.add_argument('--weights', type=str, default=None,
-                        help="Solo weighted_ga: 'w_alogp,w_sa,w_hbd' (default: iguales).")
+                        help="Solo weighted_ga: 'w_qed,w_sa,w_fsp3' (default: iguales).")
     parser.add_argument('--generate_summary', action='store_true')
     parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto',
                         help="Dispositivo para el VAE (default: auto → GPU si hay CUDA).")
@@ -238,8 +238,8 @@ def main():
                                             args.run_id, tracker)
         hp = {'crossover': 'sbx', 'mutation': 'pm', 'cx_prob': cx_prob,
               'mut_prob': round(mut_prob, 6),
-              'w_alogp': round(weights[0], 4), 'w_sa': round(weights[1], 4),
-              'w_hbd': round(weights[2], 4)}
+              'w_qed': round(weights[0], 4), 'w_sa': round(weights[1], 4),
+              'w_fsp3': round(weights[2], 4)}
     elapsed = time.time() - t0
 
     alg_name = args.method.upper()
@@ -248,8 +248,8 @@ def main():
         problem, tracker, elapsed, run_dir, hp=hp)
 
     print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Div={metrics['diversity']:.4f}  Valid={validity:.0%}  "
-          f"n={len(pareto)}  SA={metrics['best_sa']}  ALOGPd={metrics['best_alogp_d']}  "
-          f"HBDd={metrics['best_hbd_d']}  t={metrics['time_sec']}s", flush=True)
+          f"n={len(pareto)}  QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
+          f"Fsp3={metrics['best_fsp3']}  t={metrics['time_sec']}s", flush=True)
 
 
 if __name__ == "__main__":

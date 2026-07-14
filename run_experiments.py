@@ -206,7 +206,7 @@ def main():
     n_mopso = len(POP_GEN) * len(W_VALS) * len(C1_VALS) * len(C2_VALS)
 
     print("=" * 54)
-    print("  Sensibilidad de hiperparámetros — SA(↓) d(ALOGP)(↑) d(HBD)(↑)")
+    print("  Sensibilidad de hiperparámetros — QED(↑) SA(↓) Fsp3(↑)")
     print(f"  Máquina        : {os.uname().nodename}  ({os.cpu_count()} núcleos)")
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")
