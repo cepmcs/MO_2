@@ -64,6 +64,7 @@ results/
 results_*/
 results_light/
 results_baselines/
+plots_hp/
 
 # Logs
 *.log
