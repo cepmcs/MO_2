@@ -65,6 +65,11 @@ results_*/
 results_light/
 results_baselines/
 plots_hp/
+plots_operadores/
+winners/
+finalistas/
+plots/
+plots_hp/
 
 # Logs
 *.log

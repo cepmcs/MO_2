@@ -65,6 +65,9 @@ COLORS = {
 }
 DEFAULT_COLORS = ['#000000', '#FF0000', '#008000', '#1F77B4', '#7B1FA2', '#8C564B']
 
+# Orden en que se presentan los algoritmos en la comparación final.
+ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'MOPSO']
+
 # Todas las series usan el mismo marcador (punto): se distinguen por color,
 # no por forma.
 PARETO_MARKER = 'o'
@@ -95,6 +98,17 @@ class Series:
 def _has_runs(pop_dir):
     """True si pop_dir contiene al menos un run con convergence.csv."""
     return bool(glob.glob(os.path.join(pop_dir, "run_*", "convergence.csv")))
+
+
+def _alg_from_output_dir(output_dir):
+    """Nombre del algoritmo en un reporte de operadores: el componente que sigue
+    a 'operadores' en la ruta de salida.  None si no es un reporte de ese modo."""
+    parts = output_dir.replace('\\', '/').rstrip('/').split('/')
+    if 'operadores' in parts:
+        i = parts.index('operadores')
+        if i + 1 < len(parts):
+            return parts[i + 1]
+    return None
 
 
 # ─── Carga de datos ──────────────────────────────────────────────────────────
@@ -152,11 +166,20 @@ def load_convergence_data(pop_dir):
 
 
 def load_metrics(pop_dir):
-    """Carga metrics.csv de una serie."""
+    """Carga las métricas por run de una serie.  Acepta tanto un metrics.csv
+    agregado a nivel de serie como los metrics.csv individuales de cada run."""
     path = os.path.join(pop_dir, "metrics.csv")
     if os.path.exists(path):
         return pd.read_csv(path)
-    return pd.DataFrame()
+
+    all_dfs = []
+    for run_dir in sorted(glob.glob(os.path.join(pop_dir, "run_*"))):
+        csv_path = os.path.join(run_dir, "metrics.csv")
+        if os.path.exists(csv_path):
+            all_dfs.append(pd.read_csv(csv_path))
+    if not all_dfs:
+        return pd.DataFrame()
+    return pd.concat(all_dfs, ignore_index=True)
 
 
 def load_pareto_molecules(pop_dir):
@@ -559,8 +582,8 @@ def plot_pareto_comparison(series, pop_size, output_dir):
     ax.legend(framealpha=0.9, edgecolor='#cccccc')
 
     title = 'Frentes de Pareto Globales'
-    if 'operadores' in output_dir.replace('\\', '/').split('/'):
-        alg = os.path.basename(os.path.dirname(output_dir))
+    alg = _alg_from_output_dir(output_dir)
+    if alg:
         title += f' - {alg}'
 
     fig.suptitle(title,
@@ -887,8 +910,8 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir):
         cbar.set_label('Nº de ejecuciones en que aparece', fontsize=11)
 
     title = 'Frentes de Pareto QED vs SA por algoritmo'
-    if 'operadores' in output_dir.replace('\\', '/').split('/'):
-        alg = os.path.basename(os.path.dirname(output_dir))
+    alg = _alg_from_output_dir(output_dir)
+    if alg:
         title = f'Frentes de Pareto QED vs SA por operador - {alg}'
 
     fig.suptitle(title,
@@ -1123,10 +1146,61 @@ def build_operator_series(alg, pop_size, combos):
     return series
 
 
+def build_finalist_series(algorithms, finalistas_dir):
+    """Modo algoritmos sobre finalistas/<ALG>/run_XX/: la configuración elegida
+    de cada algoritmo tras las etapas 1 y 2."""
+    series = []
+    for alg in algorithms:
+        d = os.path.join(finalistas_dir, alg)
+        if _has_runs(d):
+            series.append(Series(alg, d, color_key=alg))
+    return series
+
+
+def build_operator_series_winners(alg, winners_dir):
+    """Modo operadores sobre winners/<ALG>/<combo>/<config>/: las configuraciones
+    que ganaron su bloque en la etapa 1.  Cada combo ganó con hiperparámetros
+    distintos, así que el nivel de configuración se resuelve con glob."""
+    series = []
+    for combo in sorted(os.listdir(os.path.join(winners_dir, alg))):
+        combo_dir = os.path.join(winners_dir, alg, combo)
+        if not os.path.isdir(combo_dir):
+            continue
+        cfgs = [d for d in sorted(glob.glob(os.path.join(combo_dir, '*')))
+                if _has_runs(d)]
+        if cfgs:
+            series.append(Series(combo, cfgs[0], color_key=combo))
+    return series
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
-def run_algorithm_comparison(algorithms, pop_size, combo=None):
-    """Comparación entre algoritmos para un combo de operadores."""
+def run_algorithm_comparison(algorithms, pop_size, combo=None, finalistas=None):
+    """Comparación entre algoritmos.
+
+    Con finalistas se lee la configuración elegida de cada algoritmo desde
+    finalistas/<ALG>/; sin él, el grid original bajo results/<combo>/<ALG>/pop<N>/."""
+    if finalistas:
+        if not os.path.isdir(finalistas):
+            print(f"No existe {finalistas}")
+            return
+        algorithms = algorithms or [a for a in ALGORITHM_ORDER
+                                    if _has_runs(os.path.join(finalistas, a))]
+        series = build_finalist_series(algorithms, finalistas)
+        if len(series) < 2:
+            print(f"Se necesitan ≥2 algoritmos con datos en {finalistas}")
+            return
+        print(f"\n{'='*60}")
+        print(f"  Comparación final entre algoritmos")
+        print(f"  Origen: {finalistas}")
+        print(f"  Algoritmos: {', '.join(s.label for s in series)}")
+        print(f"{'='*60}")
+        output_dir = os.path.join(PLOTS_DIR, "comparacion_final")
+        _generate_report(series, "final", output_dir,
+                         "Comparación Final — Todos los Algoritmos")
+        print(f"\n{'='*60}\n  ✅ Generación completa: {output_dir}\n{'='*60}\n")
+        return
+
     if combo is None:
         combos = discover_operator_combos()
         if not combos:
@@ -1173,38 +1247,50 @@ def run_algorithm_comparison(algorithms, pop_size, combo=None):
     print(f"{'='*60}\n")
 
 
-def run_operator_comparison(algorithms, pop_size):
-    """Comparación de variantes de operadores, un reporte por algoritmo."""
-    combos = discover_operator_combos()
-    if len(combos) < 2:
-        print(f"Se necesitan ≥2 combos de operadores para comparar.")
-        print(f"Combos encontrados: {combos if combos else '(ninguno)'}")
-        return
+def run_operator_comparison(algorithms, pop_size, winners_dir=None):
+    """Comparación de variantes de operadores, un reporte por algoritmo.
 
-    if algorithms is None:
-        algorithms = discover_algorithms(pop_size)
-        if not algorithms:
-            print(f"No se encontraron algoritmos con resultados "
-                  f"para pop_size={pop_size}")
+    Con winners_dir se leen las configuraciones ganadoras de la etapa 1
+    (winners/<ALG>/<combo>/<config>/), cada una con sus propios hiperparámetros;
+    sin él, el grid original bajo results/<combo>/<ALG>/pop<N>/."""
+    if winners_dir:
+        if not os.path.isdir(winners_dir):
+            print(f"No existe {winners_dir}")
             return
+        algorithms = algorithms or sorted(
+            d for d in os.listdir(winners_dir)
+            if os.path.isdir(os.path.join(winners_dir, d)))
+        tag = "winners"
+    else:
+        combos = discover_operator_combos()
+        if len(combos) < 2:
+            print(f"Se necesitan ≥2 combos de operadores para comparar.")
+            print(f"Combos encontrados: {combos if combos else '(ninguno)'}")
+            return
+        if algorithms is None:
+            algorithms = discover_algorithms(pop_size)
+            if not algorithms:
+                print(f"No se encontraron algoritmos con resultados "
+                      f"para pop_size={pop_size}")
+                return
+        tag = f"pop{pop_size}"
 
     print(f"\n{'='*60}")
     print(f"  Comparación de operadores (por algoritmo)")
-    print(f"  Combos detectados: {', '.join(combos)}")
+    print(f"  Origen: {winners_dir or RESULTS_DIR}")
     print(f"  Algoritmos candidatos: {', '.join(algorithms)}")
-    print(f"  pop_size: {pop_size}")
     print(f"{'='*60}")
 
     generated = []
     for alg in algorithms:
-        series = build_operator_series(alg, pop_size, combos)
+        series = (build_operator_series_winners(alg, winners_dir) if winners_dir
+                  else build_operator_series(alg, pop_size, combos))
         if len(series) < 2:
             print(f"\n  ⚠ {alg}: solo {len(series)} combo(s) con datos; "
                   f"se omite (se requieren ≥2 para comparar).")
             continue
-        output_dir = os.path.join(PLOTS_DIR, "operadores",
-                                  alg, f"pop{pop_size}")
-        _generate_report(series, pop_size, output_dir,
+        output_dir = os.path.join(PLOTS_DIR, "operadores", alg, tag)
+        _generate_report(series, tag, output_dir,
                          f"Comparación de Operadores — {alg}")
         generated.append((alg, output_dir))
 
@@ -1230,12 +1316,19 @@ def main():
                              "Auto-detecta si solo hay uno.")
     parser.add_argument('--operadores', action='store_true',
                         help="Compara variantes de operadores por algoritmo")
+    parser.add_argument('--winners', nargs='?', const='winners', default=None,
+                        help="Con --operadores: lee las configuraciones ganadoras "
+                             "de la etapa 1 desde winners/<ALG>/<combo>/<config>/")
+    parser.add_argument('--finalistas', nargs='?', const='finalistas', default=None,
+                        help="Comparación final: lee la configuración elegida de "
+                             "cada algoritmo desde finalistas/<ALG>/")
     args = parser.parse_args()
 
     if args.operadores:
-        run_operator_comparison(args.algorithms, args.pop_size)
+        run_operator_comparison(args.algorithms, args.pop_size, args.winners)
     else:
-        run_algorithm_comparison(args.algorithms, args.pop_size, args.combo)
+        run_algorithm_comparison(args.algorithms, args.pop_size, args.combo,
+                                 args.finalistas)
 
 
 if __name__ == "__main__":

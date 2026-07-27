@@ -12,8 +12,9 @@ población inicial se muestrea con random_state=run_id).
 
 Salida (plots_hp/)
   <ALG>/main_effects_<ALG>.png  efecto de cada hiperparámetro, una curva por combo
-  <ALG>/effects_<ALG>.tex       Kruskal-Wallis y ε² por hiperparámetro
-  effect_sizes_overview.png     ε² de cada hiperparámetro en cada algoritmo
+  <ALG>/effects_<ALG>.tex       Friedman por bloques y W de Kendall por hiperparámetro
+                               (los operadores no se testean: se comparan en la
+                                etapa siguiente, ya con su configuración afinada)
   selected_configs.csv/.tex     las 17 configuraciones
 
 Uso:
@@ -24,7 +25,6 @@ Uso:
 
 import os
 import argparse
-import itertools
 import math
 
 import numpy as np
@@ -162,17 +162,35 @@ def config_label(cfg, factors):
     return ' '.join(parts)
 
 
-def kruskal_by_factor(g, factor, metric):
-    """Kruskal-Wallis del efecto marginal de un hiperparámetro + tamaño de
-    efecto ε² = (H − k + 1)/(n − k).  0.01/0.06/0.14 = pequeño/medio/grande."""
-    groups = [x[metric].dropna().values for _, x in g.groupby(factor, observed=True)]
-    groups = [x for x in groups if len(x)]
-    k, n = len(groups), sum(len(x) for x in groups)
-    if k < 2:
+def friedman_by_factor(g, factor, metric):
+    """Efecto marginal de un hiperparámetro con la semilla como bloque.
+
+    Friedman sobre la matriz (semillas × niveles), donde cada celda es la mediana
+    marginal del nivel en esa semilla.  Tamaño de efecto: W de Kendall,
+    W = χ²/(m(k−1)), la concordancia del orden entre las m semillas
+    (0 = ninguna, 1 = las m ordenan igual).  Con 2 niveles Friedman degenera y se
+    usa Wilcoxon de rangos con signo.  Devuelve (delta, W, p), donde delta es la
+    diferencia entre el mejor y el peor nivel (mediana entre semillas)."""
+    B = g.pivot_table(index='run', columns=factor, values=metric,
+                      aggfunc='median').dropna()
+    m, k = B.shape
+    if m < 3 or k < 2:
         return np.nan, np.nan, np.nan
-    H, p = stats.kruskal(*groups)
-    eps2 = (H - k + 1) / (n - k) if n > k else np.nan
-    return float(H), float(p), float(max(eps2, 0.0))
+
+    level_medians = B.median(axis=0)
+    delta = float(level_medians.max() - level_medians.min())
+
+    R = np.apply_along_axis(stats.rankdata, 1, B.values)
+    chi2 = 12 / (m * k * (k + 1)) * np.sum(R.sum(axis=0) ** 2) - 3 * m * (k + 1)
+    W = float(max(chi2 / (m * (k - 1)), 0.0))
+
+    cols = [B[c].values for c in B.columns]
+    try:
+        p = (stats.wilcoxon(cols[0], cols[1]).pvalue if k == 2
+             else stats.friedmanchisquare(*cols).pvalue)
+    except ValueError:
+        return delta, W, np.nan
+    return delta, W, float(p)
 
 
 # ─── Gráficas ────────────────────────────────────────────────────────────────
@@ -220,11 +238,15 @@ def plot_main_effects(g, alg, factors, metric, out_dir, effect_stats,
             ax.scatter(x, meds, s=45, color=color, zorder=4,
                        edgecolors='white', linewidths=1.0)
 
-        H, p, eps2 = effect_stats.get(f, (np.nan, np.nan, np.nan))
-        ptxt = '< 0.001' if p < 1e-3 else f'= {p:.3f}'
-        ax.set_title(f'{FACTOR_LABELS.get(f, f)}\n'
-                     f'$\\varepsilon^2$ marginal = {eps2:.3f},  $p$ {ptxt}',
-                     fontsize=11)
+        e = effect_stats.get(f, (np.nan, np.nan, np.nan))
+        if isinstance(e, dict):
+            # Un W por combo; van en la tabla, no caben cuatro en el título.
+            ax.set_title(FACTOR_LABELS.get(f, f), fontsize=11)
+        else:
+            _, W, p = e
+            ptxt = '< 0.001' if p < 1e-3 else f'= {p:.3f}'
+            ax.set_title(f'{FACTOR_LABELS.get(f, f)}\n'
+                         f'$W$ = {W:.3f},  $p$ {ptxt}', fontsize=11)
         ax.set_xticks(x)
         ax.set_xticklabels([str(lv) for lv in levels], fontsize=10)
         ax.set_ylabel(f'{label} ({"↑" if higher else "↓"})')
@@ -244,43 +266,6 @@ def plot_main_effects(g, alg, factors, metric, out_dir, effect_stats,
                  fontsize=14, fontweight='bold', y=1.01)
     plt.tight_layout(rect=[0, 0.03, 1, 1])
     fname = f'main_effects_{alg}.png'
-    plt.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
-    plt.close(fig)
-    print(f"  ✓ {fname}")
-
-
-def plot_effect_sizes_overview(per_alg, metric, out_dir):
-    """ε² de cada hiperparámetro en cada algoritmo."""
-    algs = [a for a in ALG_ORDER if a in per_alg]
-    if not algs:
-        return
-    all_factors = list(dict.fromkeys(
-        itertools.chain.from_iterable(per_alg[a]['factors'] for a in algs)))
-
-    fig, ax = plt.subplots(figsize=(1.35 * len(all_factors) + 5, 5.4))
-    width = 0.8 / len(algs)
-    x = np.arange(len(all_factors))
-    for i, a in enumerate(algs):
-        vals = [per_alg[a]['effects'].get(f, (np.nan, np.nan, np.nan))[2]
-                for f in all_factors]
-        ax.bar(x + i * width - 0.4 + width / 2, vals, width * 0.9,
-               color=COLORS.get(a, '#333333'), alpha=0.8, label=a)
-
-    for y, tag in [(0.01, 'pequeño'), (0.06, 'medio'), (0.14, 'grande')]:
-        ax.axhline(y, color='#888888', linestyle=':', linewidth=1, zorder=1)
-        ax.text(len(all_factors) - 0.45, y, f' {tag}', va='bottom', ha='right',
-                fontsize=8.5, color='#666666')
-
-    ax.set_xticks(x)
-    ax.set_xticklabels([FACTOR_LABELS.get(f, f) for f in all_factors],
-                       rotation=18, ha='right', fontsize=10)
-    ax.set_ylabel('$\\varepsilon^2$ (Kruskal-Wallis)')
-    ax.set_title(f'Importancia de cada hiperparámetro sobre '
-                 f'{METRICS[metric][0]}\n(fracción de varianza de rangos explicada)',
-                 fontsize=12)
-    ax.legend(framealpha=0.9, edgecolor='#cccccc', fontsize=10)
-    plt.tight_layout()
-    fname = 'effect_sizes_overview.png'
     plt.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -356,28 +341,77 @@ def _latex_escape(s):
     return ''.join(repl.get(c, c) for c in str(s))
 
 
+def _latex_label(f):
+    """FACTOR_LABELS ya trae matemática ($w$, $c_1$); solo hay que traducir el '×'."""
+    return FACTOR_LABELS.get(f, f).replace('×', r'$\times$')
+
+
 def _fmt_p(p):
     if pd.isna(p):
         return '---'
     return r'$<$0.001' if p < 1e-3 else f'{p:.3f}'
 
 
+def _fmt_delta(e):
+    """Celda de la grilla: cuánto mueve la métrica entre el mejor y el peor
+    nivel, con asterisco si el efecto es significativo."""
+    delta, _, p = e
+    if pd.isna(delta):
+        return '---'
+    return f'{delta:.4f}' + ('*' if not pd.isna(p) and p < 0.05 else '')
+
+
 def write_effects_table(effects, alg, factors, out_dir, metric):
-    """Tabla LaTeX de sensibilidad a cada hiperparámetro."""
+    """Tabla LaTeX de sensibilidad a cada hiperparámetro.
+
+    Reporta Δ, el recorrido de la métrica entre el mejor y el peor nivel, en sus
+    propias unidades: es la magnitud del efecto y se lee contra el eje de
+    main_effects sin necesidad de una escala auxiliar.
+
+    Con combos de operadores la tabla es una grilla hiperparámetros × combos,
+    porque agrupar los combos produce un orden espurio: pcx y sbx viven en
+    regímenes de hipervolumen distintos y la mediana agrupada salta entre ellos."""
     label, _ = METRICS[metric]
+    por_combo = any(isinstance(v, dict) for v in effects.values())
+    combos = ([c for c in COMBO_ORDER
+               if any(c in v for v in effects.values())] if por_combo else [])
+
+    caption = (f'Sensibilidad de {_latex_escape(label)} a cada hiperparámetro '
+               f'de {_latex_escape(alg)}.  $\\Delta$: diferencia entre el mejor '
+               f'y el peor nivel, en unidades de {_latex_escape(label).lower()}.  '
+               f'* indica $p < 0.05$ en el test de Friedman con las 20 semillas '
+               f'como bloques.')
+    if por_combo:
+        caption += ('  Cada columna es una combinación de operadores, evaluada '
+                    'por separado: agrupar los combos produce un orden espurio, '
+                    'porque los operadores de cruce operan en regímenes de '
+                    'hipervolumen distintos.')
+
     lines = [
         r'\begin{table}[htbp]', r'\centering',
-        f'\\caption{{Sensibilidad de {_latex_escape(label)} a cada hiperparámetro '
-        f'de {_latex_escape(alg)} (Kruskal-Wallis sobre el efecto marginal; '
-        f'$\\varepsilon^2$: 0.01 pequeño, 0.06 medio, 0.14 grande).}}',
+        f'\\caption{{{caption}}}',
         f'\\label{{tab:hp_effects_{alg.lower()}}}',
-        r'\begin{tabular}{lccc}', r'\toprule',
-        r'Hiperparámetro & $H$ & $p$ & $\varepsilon^2$ \\', r'\midrule',
     ]
-    for f in sorted(factors, key=lambda x: -effects.get(x, (0, 1, 0))[2]):
-        H, p, eps2 = effects.get(f, (np.nan, np.nan, np.nan))
-        lines.append(f'{_latex_escape(FACTOR_LABELS.get(f, f))} & {H:.1f} & '
-                     f'{_fmt_p(p)} & {eps2:.4f} \\\\')
+
+    if por_combo:
+        lines += [
+            r'\begin{tabular}{l' + 'c' * len(combos) + '}', r'\toprule',
+            'Hiperparámetro & ' + ' & '.join(_latex_escape(c) for c in combos)
+            + r' \\', r'\midrule',
+        ]
+        for f in factors:
+            cells = [_fmt_delta(effects[f].get(c, (np.nan,) * 3)) for c in combos]
+            lines.append(f'{_latex_label(f)} & ' + ' & '.join(cells) + r' \\')
+    else:
+        lines += [
+            r'\begin{tabular}{lcc}', r'\toprule',
+            r'Hiperparámetro & $\Delta$ & $p$ \\', r'\midrule',
+        ]
+        for f in sorted(factors, key=lambda x: -np.nan_to_num(
+                effects.get(x, (0, 0, 1))[0])):
+            delta, _, p = effects.get(f, (np.nan, np.nan, np.nan))
+            lines.append(f'{_latex_label(f)} & {delta:.4f} & {_fmt_p(p)} \\\\')
+
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
 
     with open(os.path.join(out_dir, f'effects_{alg}.tex'), 'w') as fh:
@@ -483,16 +517,36 @@ def analyze_algorithm(g, alg, metric, out_dir):
         print("  ⚠ sin configuraciones completas; se omite")
         return None
 
-    effects = {f: kruskal_by_factor(g, f, metric) for f in factors}
-    top_f = max(effects, key=lambda f: effects[f][2])
-    print(f"  Hiperparámetro dominante: {FACTOR_LABELS.get(top_f, top_f)} "
-          f"(ε² = {effects[top_f][2]:.3f})")
+    # Los operadores no se testean acá: se barren dentro de cada bloque y su
+    # comparación va en la etapa siguiente, entre las configuraciones ya
+    # seleccionadas de cada combo.  El resto se mide dentro de cada combo, no
+    # agrupando: pcx y sbx están en regímenes de hipervolumen distintos y al
+    # agruparlos la mediana salta entre ellos, generando un orden espurio.
+    if por_combo:
+        gg = g.copy()
+        gg['_combo'] = gg['crossover'].astype(str) + '/' + gg['mutation'].astype(str)
+        effects = {f: {c: friedman_by_factor(sub, f, metric)
+                       for c, sub in gg.groupby('_combo', observed=True)}
+                   for f in sub_factors}
+    else:
+        effects = {f: friedman_by_factor(g, f, metric) for f in sub_factors}
+
+    def _max_W(e):
+        """Con combos, un factor tiene un W por combo; se resume por el mayor."""
+        if isinstance(e, dict):
+            vals = [w for _, w, _ in e.values() if not pd.isna(w)]
+            return max(vals) if vals else np.nan
+        return e[1]
+
+    top_f = max(effects, key=lambda f: np.nan_to_num(_max_W(effects[f])))
+    print(f"  Hiperparámetro dominante: {FACTOR_LABELS.get(top_f, top_f)}  "
+          f"(W = {_max_W(effects[top_f]):.3f})")
 
     plot_main_effects(g, alg, sub_factors, metric, out_dir, effects,
                       por_combo=por_combo)
     plot_metric_vs_validity(g, alg, metric, out_dir, chosen, sub_factors,
                             por_combo)
-    write_effects_table(effects, alg, factors, out_dir, metric)
+    write_effects_table(effects, alg, sub_factors, out_dir, metric)
 
     return {'blocks': chosen, 'factors': factors, 'sub_factors': sub_factors,
             'effects': effects, 'por_combo': por_combo}
@@ -542,7 +596,6 @@ def main():
 
     if per_alg:
         print(f"\n{'─'*66}\n  Resumen global\n{'─'*66}")
-        plot_effect_sizes_overview(per_alg, args.metric, args.out)
         write_selection_summary(per_alg, args.metric, args.out)
 
     print(f"\n{'='*66}")
