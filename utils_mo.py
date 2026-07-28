@@ -96,7 +96,7 @@ def mopso_run_dir(pop_size, n_gen, w, c1, c2, run_id, results_dir=None):
 
 
 def get_ref_dirs(n_points, seed=1):
-    """Direcciones de referencia (Riesz s-energy, 3 objetivos) para NSGA-III / MOEA-D.
+    """Direcciones de referencia para NSGA-III / MOEA-D.
     Deterministas (seed fijo) pero caras (~6 s). Se cachean en disco y se reutilizan
     entre todas las runs, en vez de recalcularlas idénticas en cada proceso."""
     cache = os.path.join(ROOT_DIR, "data", f"ref_dirs_energy_3obj_p{n_points}_s{seed}.npy")
