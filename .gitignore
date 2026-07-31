@@ -62,6 +62,12 @@ data/moses_train_smiles.pkl.gz
 data/ref_dirs_*.npy
 results/
 results_baselines/
+results_light/
+plots/
+plots_hp/
+plots_operadores/
+finalistas/
+winners/
 
 # Logs
 *.log
