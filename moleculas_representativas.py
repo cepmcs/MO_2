@@ -37,9 +37,7 @@ DEFAULT_OUT = os.path.join(ROOT_DIR, "plots", "comparacion_final",
 DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
            'AGEMOEA': 'AGE-MOEA', 'MOPSO': 'MOPSO'}
 
-CRITERIA = [('qed',     'Mayor QED'),
-            ('sa',      'Menor SA'),
-            ('balance', 'Mejor balance')]
+N_MOLECULAS = 5      # por algoritmo
 
 
 def load_front(alg, finalistas):
@@ -50,16 +48,11 @@ def load_front(alg, finalistas):
     return pc._compute_non_dominated(df.drop_duplicates(subset='smiles'))
 
 
-def pick(front, criterion, ideal, scale):
-    """Molécula representativa según el criterio."""
-    if criterion == 'qed':
-        return front.loc[front['qed'].idxmax()]
-    if criterion == 'sa':
-        return front.loc[front['sa'].idxmin()]
-    # balance: distancia euclídea mínima al ideal, en el espacio normalizado
-    q = (front['qed'].values - ideal[0]) / scale[0]      # 0 = mejor QED
-    s = (front['sa'].values - ideal[1]) / scale[1]       # 0 = mejor SA
-    return front.iloc[int(np.argmin(np.hypot(q, s)))]
+def pick(front, n=N_MOLECULAS):
+    """Las n moléculas de mayor QED, desempatando por menor SA."""
+    f = front.assign(_qed=front['qed'].round(3))
+    return (f.sort_values(['_qed', 'sa'], ascending=[False, True])
+            .head(n).drop(columns='_qed').reset_index(drop=True))
 
 
 def render(smiles, size=(420, 320)):
@@ -92,39 +85,37 @@ def main():
         print(f"No se encontraron frentes en {args.finalistas}")
         return
 
-    # Normalización común: extremos de la unión de los cinco frentes.
-    allf = pd.concat(fronts.values(), ignore_index=True)
-    ideal = (allf['qed'].max(), allf['sa'].min())
-    scale = (max(allf['qed'].max() - allf['qed'].min(), 1e-9),
-             max(allf['sa'].max() - allf['sa'].min(), 1e-9))
+    seleccion = {a: pick(f) for a, f in fronts.items()}
 
-    nrows, ncols = len(fronts), len(CRITERIA)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.0 * nrows),
+    nrows, ncols = len(fronts), N_MOLECULAS
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.0 * ncols, 2.7 * nrows),
                              squeeze=False)
     fig.patch.set_facecolor('white')
 
-    for i, (alg, front) in enumerate(fronts.items()):
-        for j, (crit, crit_label) in enumerate(CRITERIA):
+    for i, (alg, sel) in enumerate(seleccion.items()):
+        for j in range(ncols):
             ax = axes[i][j]
             ax.set_xticks([]); ax.set_yticks([])
             for sp in ax.spines.values():
                 sp.set_edgecolor('#cccccc')
+            if j >= len(sel):
+                ax.set_visible(False)
+                continue
 
-            m = pick(front, crit, ideal, scale)
+            m = sel.iloc[j]
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
             ax.set_xlabel(f"QED {m['qed']:.3f}   ·   SA {m['sa']:.2f}",
-                          fontsize=10, labelpad=4)
-            if i == 0:
-                ax.set_title(crit_label, fontsize=13, fontweight='bold', pad=10)
+                          fontsize=9.5, labelpad=3)
             if j == 0:
                 ax.set_ylabel(DISPLAY.get(alg, alg), fontsize=13,
                               fontweight='bold', labelpad=10)
 
-    fig.suptitle('Moléculas representativas del frente de Pareto de cada algoritmo',
-                 fontsize=15, fontweight='bold', y=0.995)
-    plt.tight_layout(rect=[0, 0, 1, 0.98])
+    fig.suptitle(f'Las {N_MOLECULAS} moléculas de mayor QED del frente de cada '
+                 f'algoritmo',
+                 fontsize=14, fontweight='bold', y=0.995)
+    plt.tight_layout(rect=[0, 0, 1, 0.985])
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     plt.savefig(args.out, dpi=200, bbox_inches='tight', facecolor='white')
     plt.close(fig)
@@ -132,10 +123,9 @@ def main():
 
     # Detalle de las moléculas elegidas
     rows = []
-    for alg, front in fronts.items():
-        for crit, crit_label in CRITERIA:
-            m = pick(front, crit, ideal, scale)
-            rows.append({'algoritmo': DISPLAY.get(alg, alg), 'criterio': crit_label,
+    for alg, sel in seleccion.items():
+        for j, m in sel.iterrows():
+            rows.append({'algoritmo': DISPLAY.get(alg, alg), 'puesto': j + 1,
                          'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
                          'lipinski': m['lipinski'], 'smiles': m['smiles']})
     out = pd.DataFrame(rows)
