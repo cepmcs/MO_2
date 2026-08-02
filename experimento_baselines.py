@@ -1,5 +1,6 @@
 """
-Baselines "no tan modernos" — random sampling, LHS y GA de suma ponderada.
+Baselines "no tan modernos" — cribado de MOSES, muestreo aleatorio, escalador
+y GA de suma ponderada.
 Sirven de piso de comparación frente a los MOEAs (NSGA2/NSGA3/MOEAD/AGEMOEA/
 MOPSO): ninguno de los tres hace búsqueda multi-objetivo real de Pareto.
 Objetivos: QED (↑), SA (↓), Lipinski (↑)  (mismos que el resto del proyecto)
@@ -9,7 +10,6 @@ de sensibilidad de hiperparámetros de los MOEAs.
 
 Uso:
     python experimento_baselines.py --method random     --pop_size 300 --n_gen 500 --run_id 0
-    python experimento_baselines.py --method lhs         --pop_size 300 --n_gen 500 --run_id 0
     python experimento_baselines.py --method weighted_ga --pop_size 300 --n_gen 500 --run_id 0
     python experimento_baselines.py --method weighted_ga --weights 0.5,0.3,0.2 --pop_size 300 --run_id 0
     python experimento_baselines.py --method random --generate_summary
@@ -18,7 +18,6 @@ Uso:
 import os, time, argparse
 import numpy as np
 import torch
-from scipy.stats import qmc, norm
 from pymoo.core.problem import Problem
 from pymoo.core.callback import Callback
 from pymoo.indicators.hv import HV
@@ -55,7 +54,7 @@ def baseline_run_dir(method, pop_size, n_gen, run_id, tag=None):
 class BaselineTracker:
     """Convergencia por lote de evaluaciones ('gen'), calculada sobre los objetivos
     crudos del propio lote. A diferencia de GenerationTracker (utils_mo), no asume
-    que exista algorithm.pop: random/LHS no son poblacionales, y weighted_ga solo
+    que exista algorithm.pop: el muestreo aleatorio no es poblacional, y weighted_ga solo
     trae un objetivo escalar — así que el HV se recalcula aquí desde eval_log."""
 
     def __init__(self, problem, train_smiles):
@@ -137,7 +136,7 @@ class WeightedSumLatentProblem(Problem):
         out["F"] = (F3_norm * self.weights).sum(axis=1, keepdims=True)
 
 
-# ─── Random sampling / LHS: barrido manual, sin optimizador ──────────────────
+# ─── Muestreo aleatorio: barrido manual, sin optimizador ─────────────────────
 
 def run_random(problem, tracker, pop_size, n_gen, run_id):
     """Muestreo del prior del VAE, N(0, I): la distribución sobre la que se
@@ -148,25 +147,6 @@ def run_random(problem, tracker, pop_size, n_gen, run_id):
     rng = np.random.default_rng(run_id)
     for gen in range(1, n_gen + 1):
         X = rng.normal(0.0, 1.0, size=(pop_size, problem.n_var))
-        problem._evaluate(X, {})
-        tracker.update(gen)
-
-
-def run_lhs(problem, tracker, pop_size, n_gen, run_id):
-    """Un único diseño LHS para TODO el presupuesto (pop_size*n_gen), partido en
-    lotes de pop_size solo para el decode batcheado y el tracking por 'gen'.
-    Generarlo en lotes separados perdería la estratificación global, que es la
-    ventaja de LHS sobre random puro.
-
-    El diseño se genera en [0,1]^d y se transforma por la inversa de la normal,
-    de modo que estratifica sobre el mismo prior N(0, I) que usa run_random."""
-    n_total = pop_size * n_gen
-    sampler = qmc.LatinHypercube(d=problem.n_var, seed=run_id)
-    U = sampler.random(n=n_total)
-    U = np.clip(U, 1e-9, 1 - 1e-9)          # evita ±inf en los extremos
-    X_all = norm.ppf(U)
-    for gen in range(1, n_gen + 1):
-        X = X_all[(gen - 1) * pop_size: gen * pop_size]
         problem._evaluate(X, {})
         tracker.update(gen)
 
@@ -243,7 +223,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Baselines simples — piso de comparación frente a los MOEAs.")
     parser.add_argument('--method', required=True,
-                        choices=['screening', 'random', 'lhs',
+                        choices=['screening', 'random',
                                  'hill_climber', 'weighted_ga'])
     parser.add_argument('--pop_size', type=int, default=None)
     parser.add_argument('--n_gen', type=int, default=500)
@@ -307,10 +287,6 @@ def main():
         problem = MolecularLatentProblem(model, stoi, itos, latent_dim)
         tracker = BaselineTracker(problem, train_smiles)
         run_random(problem, tracker, args.pop_size, args.n_gen, args.run_id)
-    elif args.method == 'lhs':
-        problem = MolecularLatentProblem(model, stoi, itos, latent_dim)
-        tracker = BaselineTracker(problem, train_smiles)
-        run_lhs(problem, tracker, args.pop_size, args.n_gen, args.run_id)
     else:  # weighted_ga
         mus = load_seed_mus(model, stoi, args.pop_size, args.run_id)
         problem = WeightedSumLatentProblem(model, stoi, itos, latent_dim, weights)

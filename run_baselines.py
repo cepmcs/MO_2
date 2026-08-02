@@ -1,5 +1,6 @@
 """
-Orquestador de las baselines: random, LHS y GA de suma ponderada.
+Orquestador de las baselines: cribado de MOSES, muestreo aleatorio, escalador
+y GA de suma ponderada — los cuatro que compara la etapa 4 del análisis.
 
 Mismo presupuesto que los MOEAs (100.000 evaluaciones = 400 × 250) y las mismas
 20 semillas, de modo que la comparación posterior sea pareada por semilla.
@@ -8,7 +9,7 @@ Reanudable: una corrida cuenta como completa si existe su molecules.csv.
 
 Uso:
     python run_baselines.py
-    python run_baselines.py --methods random lhs
+    python run_baselines.py --methods random screening
     python run_baselines.py --n-runs 5 --parallel 2
 """
 
@@ -25,7 +26,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable
 
 POP_SIZE, N_GEN = 400, 250          # 100.000 evaluaciones, igual que los MOEAs
-METHODS = ['random', 'lhs', 'weighted_ga']
+# Los mismos cuatro que analiza analisis.py (BASELINE_KEYS).
+METHODS = ['screening', 'random', 'hill_climber', 'weighted_ga']
 
 
 def tag_of(method):
@@ -98,7 +100,7 @@ def main():
     done0 = len(tasks) - len(pending)
 
     print("=" * 58)
-    print("  BASELINES — random / LHS / GA de suma ponderada")
+    print("  BASELINES — cribado / aleatorio / escalador / GA ponderado")
     print(f"  Presupuesto  : {POP_SIZE} × {N_GEN} = {POP_SIZE*N_GEN:,} evaluaciones")
     print(f"  Métodos      : {', '.join(args.methods)}")
     print(f"  Dispositivo  : {device}   ({args.parallel} en paralelo)")

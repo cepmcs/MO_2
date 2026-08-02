@@ -76,7 +76,7 @@ OUT_BASELINES  = os.path.join(PLOTS_DIR, "baselines")
 # Nombres para el documento (los directorios usan la forma corta).
 DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
            'AGEMOEA': 'AGE-MOEA', 'MOPSO': 'MOPSO',
-           'RANDOM': 'Aleatorio', 'LHS': 'LHS', 'WEIGHTED_GA': 'GA ponderado',
+           'RANDOM': 'Aleatorio', 'WEIGHTED_GA': 'GA ponderado',
            'SCREENING': 'Cribado MOSES', 'HILL_CLIMBER': 'Escalador'}
 
 
@@ -948,7 +948,7 @@ def etapa3(args):
 #   presupuesto de 100.000 evaluaciones y las mismas 20 semillas.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Orden de peor a mejor esperado; LHS quedó fuera por ser indistinguible de RANDOM.
+# Orden de peor a mejor esperado.
 BASELINE_KEYS = ['WEIGHTED_GA', 'HILL_CLIMBER', 'RANDOM', 'SCREENING']
 
 
