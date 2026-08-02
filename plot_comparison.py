@@ -1316,12 +1316,16 @@ def main():
                              "Auto-detecta si solo hay uno.")
     parser.add_argument('--operadores', action='store_true',
                         help="Compara variantes de operadores por algoritmo")
-    parser.add_argument('--winners', nargs='?', const='winners', default=None,
+    parser.add_argument('--winners', nargs='?',
+                        const=os.path.join(ROOT_DIR, 'resultados', 'winners'),
+                        default=None,
                         help="Con --operadores: lee las configuraciones ganadoras "
-                             "de la etapa 1 desde winners/<ALG>/<combo>/<config>/")
-    parser.add_argument('--finalistas', nargs='?', const='finalistas', default=None,
+                             "de la etapa 1 desde resultados/winners/<ALG>/<combo>/<config>/")
+    parser.add_argument('--finalistas', nargs='?',
+                        const=os.path.join(ROOT_DIR, 'resultados', 'finalistas'),
+                        default=None,
                         help="Comparación final: lee la configuración elegida de "
-                             "cada algoritmo desde finalistas/<ALG>/")
+                             "cada algoritmo desde resultados/finalistas/<ALG>/")
     args = parser.parse_args()
 
     if args.operadores:

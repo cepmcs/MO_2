@@ -3,11 +3,11 @@ Análisis de los experimentos: las cuatro etapas de la comparación, más la fig
 de moléculas representativas.  Cada etapa lee lo que produjo la anterior y deja
 sus tablas y figuras bajo plots/.
 
-  etapa1     results_light/all_metrics.csv       →  plots/hiperparametros/
-  etapa2     winners/                            →  plots/operadores/
-  etapa3     finalistas/                         →  plots/comparacion_final/
-  etapa4     finalistas/ + results_baselines/    →  plots/baselines/
-  moleculas  finalistas/                         →  plots/comparacion_final/
+  etapa1     resultados/grid/all_metrics.csv          →  plots/hiperparametros/
+  etapa2     resultados/winners/                      →  plots/operadores/
+  etapa3     resultados/finalistas/                   →  plots/comparacion_final/
+  etapa4     resultados/finalistas/ + .../baselines/  →  plots/baselines/
+  moleculas  resultados/finalistas/                   →  plots/comparacion_final/
 
 Las 20 semillas están pareadas en todas las etapas (mismo run_id → misma
 población inicial), así que los tests toman la semilla como bloque: Friedman
@@ -49,11 +49,20 @@ import plot_comparison as pc
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Entradas de cada etapa.
-METRICS_CSV    = os.path.join(ROOT_DIR, "results_light", "all_metrics.csv")
-WINNERS_DIR    = os.path.join(ROOT_DIR, "winners")
-FINALISTAS_DIR = os.path.join(ROOT_DIR, "finalistas")
-BASELINES_DIR  = os.path.join(ROOT_DIR, "results_baselines")
+# Entradas de cada etapa, todas bajo resultados/.  Los experimentos escriben en
+# el cluster a results/ y results_baselines/ (ver utils_mo.RESULTS_DIR y
+# experimento_baselines.BASELINE_RESULTS_DIR); lo que baja al PC vive acá:
+#
+#   grid/        copia ligera de results/ del cluster (sin convergence.csv ni
+#                all_molecules.csv.gz), con el all_metrics.csv del grid completo
+#   winners/     las 17 configuraciones que ganaron su bloque en la etapa 1
+#   finalistas/  symlinks relativos a la ganadora de cada algoritmo en winners/
+#   baselines/   copia de results_baselines/ del cluster
+RESULTADOS_DIR = os.path.join(ROOT_DIR, "resultados")
+METRICS_CSV    = os.path.join(RESULTADOS_DIR, "grid", "all_metrics.csv")
+WINNERS_DIR    = os.path.join(RESULTADOS_DIR, "winners")
+FINALISTAS_DIR = os.path.join(RESULTADOS_DIR, "finalistas")
+BASELINES_DIR  = os.path.join(RESULTADOS_DIR, "baselines")
 
 # Salidas, todas bajo plots/.  El componente 'operadores' de la etapa 2 es
 # significativo: plot_comparison deduce de él el nombre del algoritmo para
@@ -197,7 +206,7 @@ def _write_tex(lines, path, msg=None):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Etapa 1 — selección de hiperparámetros
 #
-#   Lee results_light/all_metrics.csv (513 configs × 20 semillas) y elige, para
+#   Lee resultados/grid/all_metrics.csv (513 configs × 20 semillas) y elige, para
 #   cada algoritmo genético, la mejor configuración dentro de cada combinación
 #   de operadores (4 combos × 27 configs).  MOPSO se selecciona de una vez sobre
 #   sus 81.  Total: 17 configuraciones.
@@ -690,7 +699,11 @@ def analyze_algorithm(g, alg, metric, out_dir):
 
 def etapa1(args):
     if not os.path.exists(args.csv):
-        print(f"No existe {args.csv}. Corré: python run_experiments.py --summary-only")
+        print(f"No existe {args.csv}.\n"
+              f"  En el cluster:  python run_experiments.py --summary-only\n"
+              f"  Sobre una copia ya bajada:  python -c "
+              f"\"from utils_mo import consolidate_all; "
+              f"consolidate_all('{os.path.dirname(args.csv)}')\"")
         return
 
     df = load_grid(args.csv)
@@ -979,7 +992,7 @@ def _series_baselines(finalistas, baselines):
         if pc._has_runs(d):
             series.append(pc.Series(alg, d, color_key=alg))
     for m in BASELINE_KEYS:
-        # results_baselines/<METHOD>/[tag/]pop{P}_gen{G}/
+        # <baselines>/<METHOD>/[tag/]pop{P}_gen{G}/
         for d in sorted(glob.glob(os.path.join(baselines, m, '*', '*')) +
                         glob.glob(os.path.join(baselines, m, '*'))):
             if pc._has_runs(d):
