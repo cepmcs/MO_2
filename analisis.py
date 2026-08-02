@@ -369,8 +369,7 @@ def _level_order(factor, levels):
         return sorted(levels)
 
 
-def plot_main_effects(g, alg, factors, metric, out_dir, effect_stats,
-                      por_combo=True):
+def plot_main_effects(g, alg, factors, metric, out_dir, por_combo=True):
     """Un panel por hiperparámetro; en los GA, una curva por combinación de
     operadores.  En MOPSO, una sola curva."""
     label, higher = HP_METRICS[metric]
@@ -402,15 +401,8 @@ def plot_main_effects(g, alg, factors, metric, out_dir, effect_stats,
             ax.scatter(x, meds, s=45, color=color, zorder=4,
                        edgecolors='white', linewidths=1.0)
 
-        e = effect_stats.get(f, (np.nan, np.nan, np.nan))
-        if isinstance(e, dict):
-            # Un W por combo; van en la tabla, no caben cuatro en el título.
-            ax.set_title(FACTOR_LABELS.get(f, f), fontsize=11)
-        else:
-            _, W, p = e
-            ptxt = '< 0.001' if p < 1e-3 else f'= {p:.3f}'
-            ax.set_title(f'{FACTOR_LABELS.get(f, f)}\n'
-                         f'$W$ = {W:.3f},  $p$ {ptxt}', fontsize=11)
+        # Δ y p no van acá: se reportan en effects_<ALG>.tex.
+        ax.set_title(FACTOR_LABELS.get(f, f), fontsize=11)
         ax.set_xticks(x)
         ax.set_xticklabels([str(lv) for lv in levels], fontsize=10)
         ax.set_ylabel(f'{label} ({"↑" if higher else "↓"})')
@@ -502,13 +494,22 @@ def _latex_label(f):
     return FACTOR_LABELS.get(f, f).replace('×', r'$\times$')
 
 
-def _fmt_delta(e):
+def _holm_nan(pvals):
+    """Holm sobre los p que existen; las celdas sin datos vuelven como NaN."""
+    p = np.asarray(pvals, dtype=float)
+    out = np.full(p.shape, np.nan)
+    ok = ~np.isnan(p)
+    if ok.any():
+        out[ok] = holm(p[ok])
+    return out
+
+
+def _fmt_delta(delta, p_holm):
     """Celda de la grilla: cuánto mueve la métrica entre el mejor y el peor
-    nivel, con asterisco si el efecto es significativo."""
-    delta, _, p = e
+    nivel, con asterisco si el efecto sobrevive la corrección de Holm."""
     if pd.isna(delta):
         return '---'
-    return f'{delta:.4f}' + ('*' if not pd.isna(p) and p < 0.05 else '')
+    return f'{delta:.4f}' + ('*' if not pd.isna(p_holm) and p_holm < 0.05 else '')
 
 
 def write_effects_table(effects, alg, factors, out_dir, metric):
@@ -526,11 +527,30 @@ def write_effects_table(effects, alg, factors, out_dir, metric):
     combos = ([c for c in HP_COMBOS
                if any(c in v for v in effects.values())] if por_combo else [])
 
+    # Una tabla son 12 tests (3 factores × 4 combos) o 4 en MOPSO; sin corregir,
+    # un p de 0.04 es lo que se espera por azar.  Se aplica Holm a la tabla
+    # completa, el mismo estándar que el post-hoc de las etapas 2-4.
+    if por_combo:
+        keys = [(f, c) for f in factors for c in combos]
+        raw = [effects[f].get(c, (np.nan,) * 3)[2] for f, c in keys]
+    else:
+        keys = [(f, None) for f in factors]
+        raw = [effects.get(f, (np.nan,) * 3)[2] for f, _ in keys]
+    p_holm = dict(zip(keys, _holm_nan(raw)))
+    n_tests = int(np.sum(~np.isnan(np.asarray(raw, dtype=float))))
+
+    # La grilla por combos marca la significancia con asterisco; la tabla sin
+    # combos tiene columna de p propia, así que el caption no debe hablar de un
+    # asterisco que no aparece.
+    sig = (f'* indica $p < 0.05$ en el test de Friedman con las 20 semillas '
+           f'como bloques, tras corregir por Holm las {n_tests} comparaciones '
+           f'de la tabla.' if por_combo else
+           f'$p$: test de Friedman con las 20 semillas como bloques, corregido '
+           f'por Holm sobre las {n_tests} comparaciones de la tabla.')
     caption = (f'Sensibilidad de {_latex_escape(label)} a cada hiperparámetro '
                f'de {_latex_escape(alg)}.  $\\Delta$: diferencia entre el mejor '
                f'y el peor nivel, en unidades de {_latex_escape(label).lower()}.  '
-               f'* indica $p < 0.05$ en el test de Friedman con las 20 semillas '
-               f'como bloques.')
+               f'{sig}')
     if por_combo:
         caption += ('  Cada columna es una combinación de operadores, evaluada '
                     'por separado: agrupar los combos produce un orden espurio, '
@@ -550,17 +570,19 @@ def write_effects_table(effects, alg, factors, out_dir, metric):
             + r' \\', r'\midrule',
         ]
         for f in factors:
-            cells = [_fmt_delta(effects[f].get(c, (np.nan,) * 3)) for c in combos]
+            cells = [_fmt_delta(effects[f].get(c, (np.nan,) * 3)[0], p_holm[(f, c)])
+                     for c in combos]
             lines.append(f'{_latex_label(f)} & ' + ' & '.join(cells) + r' \\')
     else:
         lines += [
             r'\begin{tabular}{lcc}', r'\toprule',
-            r'Hiperparámetro & $\Delta$ & $p$ \\', r'\midrule',
+            r'Hiperparámetro & $\Delta$ & $p$ (Holm) \\', r'\midrule',
         ]
         for f in sorted(factors, key=lambda x: -np.nan_to_num(
                 effects.get(x, (0, 0, 1))[0])):
-            delta, _, p = effects.get(f, (np.nan, np.nan, np.nan))
-            lines.append(f'{_latex_label(f)} & {delta:.4f} & {_fmt_p(p)} \\\\')
+            delta = effects.get(f, (np.nan,) * 3)[0]
+            lines.append(f'{_latex_label(f)} & {delta:.4f} & '
+                         f'{_fmt_p(p_holm[(f, None)])} \\\\')
 
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, f'effects_{alg}.tex'))
@@ -687,8 +709,7 @@ def analyze_algorithm(g, alg, metric, out_dir):
     print(f"  Hiperparámetro dominante: {FACTOR_LABELS.get(top_f, top_f)}  "
           f"(W = {_max_W(effects[top_f]):.3f})")
 
-    plot_main_effects(g, alg, sub_factors, metric, out_dir, effects,
-                      por_combo=por_combo)
+    plot_main_effects(g, alg, sub_factors, metric, out_dir, por_combo=por_combo)
     plot_metric_vs_validity(g, alg, metric, out_dir, chosen, sub_factors,
                             por_combo)
     write_effects_table(effects, alg, sub_factors, out_dir, metric)
