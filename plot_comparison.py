@@ -699,7 +699,8 @@ def _latex_escape(s):
     de nombres de operadores como pcx_gauss → pcx\\_gauss)."""
     repl = {'\\': r'\textbackslash{}', '&': r'\&', '%': r'\%', '$': r'\$',
             '#': r'\#', '_': r'\_', '{': r'\{', '}': r'\}', '~': r'\textasciitilde{}',
-            '^': r'\textasciicircum{}'}
+            '^': r'\textasciicircum{}',
+            '×': r'$\times$'}   # etiquetas de presupuesto: 400×250
     return ''.join(repl.get(c, c) for c in str(s))
 
 
@@ -1191,7 +1192,7 @@ def run_algorithm_comparison(algorithms, pop_size, combo=None, finalistas=None):
             print(f"Se necesitan ≥2 algoritmos con datos en {finalistas}")
             return
         print(f"\n{'='*60}")
-        print(f"  Comparación final entre algoritmos")
+        print("  Comparación final entre algoritmos")
         print(f"  Origen: {finalistas}")
         print(f"  Algoritmos: {', '.join(s.label for s in series)}")
         print(f"{'='*60}")
@@ -1211,7 +1212,7 @@ def run_algorithm_comparison(algorithms, pop_size, combo=None, finalistas=None):
             print(f"  Auto-detectado combo: {combo}")
         else:
             print(f"Múltiples combos encontrados: {', '.join(combos)}")
-            print(f"Especificá uno con --combo <nombre>")
+            print("Especificá uno con --combo <nombre>")
             return
 
     if algorithms is None:
@@ -1231,7 +1232,7 @@ def run_algorithm_comparison(algorithms, pop_size, combo=None, finalistas=None):
             return
 
     print(f"\n{'='*60}")
-    print(f"  Comparación entre algoritmos")
+    print("  Comparación entre algoritmos")
     print(f"  Combo: {combo}")
     print(f"  Algoritmos: {', '.join(algorithms)}")
     print(f"  pop_size: {pop_size}")
@@ -1264,7 +1265,7 @@ def run_operator_comparison(algorithms, pop_size, winners_dir=None):
     else:
         combos = discover_operator_combos()
         if len(combos) < 2:
-            print(f"Se necesitan ≥2 combos de operadores para comparar.")
+            print("Se necesitan ≥2 combos de operadores para comparar.")
             print(f"Combos encontrados: {combos if combos else '(ninguno)'}")
             return
         if algorithms is None:
@@ -1276,7 +1277,7 @@ def run_operator_comparison(algorithms, pop_size, winners_dir=None):
         tag = f"pop{pop_size}"
 
     print(f"\n{'='*60}")
-    print(f"  Comparación de operadores (por algoritmo)")
+    print("  Comparación de operadores (por algoritmo)")
     print(f"  Origen: {winners_dir or RESULTS_DIR}")
     print(f"  Algoritmos candidatos: {', '.join(algorithms)}")
     print(f"{'='*60}")
@@ -1296,12 +1297,12 @@ def run_operator_comparison(algorithms, pop_size, winners_dir=None):
 
     print(f"\n{'='*60}")
     if generated:
-        print(f"  ✅ Reportes de operadores generados:")
+        print("  ✅ Reportes de operadores generados:")
         for alg, out in generated:
             print(f"     {alg}: {out}")
     else:
-        print(f"  ⚠ No se generó ningún reporte (cada algoritmo necesita "
-              f"≥2 combos de operadores con datos).")
+        print("  ⚠ No se generó ningún reporte (cada algoritmo necesita "
+              "≥2 combos de operadores con datos).")
     print(f"{'='*60}\n")
 
 

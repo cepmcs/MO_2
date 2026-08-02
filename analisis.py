@@ -84,14 +84,7 @@ DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
 #   Utilidades compartidas
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _latex_escape(s):
-    """Escapa caracteres especiales de LaTeX en texto (p. ej. el guion bajo de
-    nombres de operadores como pcx_gauss → pcx\\_gauss)."""
-    repl = {'\\': r'\textbackslash{}', '&': r'\&', '%': r'\%', '$': r'\$',
-            '#': r'\#', '_': r'\_', '{': r'\{', '}': r'\}',
-            '~': r'\textasciitilde{}', '^': r'\textasciicircum{}',
-            '×': r'$\times$'}
-    return ''.join(repl.get(c, c) for c in str(s))
+_latex_escape = pc._latex_escape
 
 
 def _fmt_p(p):
@@ -123,8 +116,9 @@ def holm(pvals):
 def compare_indicator(get_values, labels, col):
     """Friedman sobre los métodos con la semilla como bloque + post-hoc.
 
-    Devuelve dict con el p de Friedman, el tamaño de efecto W de Kendall, y la
-    lista de comparaciones por pares con su p corregido por Holm."""
+    Devuelve dict con el p de Friedman, la mediana de cada método y la lista de
+    comparaciones por pares con su p corregido por Holm; None si falta algún
+    método o hay menos de 3 semillas."""
     cols = {}
     for lab in labels:
         v = get_values(lab, col)
@@ -136,11 +130,8 @@ def compare_indicator(get_values, labels, col):
     if n < 3:
         return None
     M = np.column_stack([cols[lab][:n] for lab in labels])   # semillas × métodos
+    k = M.shape[1]
 
-    m, k = M.shape
-    R = np.apply_along_axis(stats.rankdata, 1, M)
-    chi2 = 12 / (m * k * (k + 1)) * np.sum(R.sum(axis=0) ** 2) - 3 * m * (k + 1)
-    W = float(max(chi2 / (m * (k - 1)), 0.0))
     try:
         p_omni = float(stats.friedmanchisquare(*[M[:, j] for j in range(k)]).pvalue)
     except ValueError:
@@ -156,25 +147,10 @@ def compare_indicator(get_values, labels, col):
         raw.append(p)
     adj = holm(raw) if raw else []
 
-    return {'p_omnibus': p_omni, 'W': W, 'n_blocks': m,
+    return {'p_omnibus': p_omni,
             'medians': {lab: float(np.median(cols[lab][:n])) for lab in labels},
             'pairs': [{'a': a, 'b': b, 'p_raw': pr, 'p_holm': pa}
                       for (a, b), pr, pa in zip(pairs, raw, adj)]}
-
-
-def rank_combos(get_values, labels, col, higher_better):
-    """Rango medio de cada método, rankeando dentro de cada semilla."""
-    cols = []
-    for lab in labels:
-        v = get_values(lab, col)
-        if v is None:
-            return None
-        cols.append(np.asarray(v, dtype=float))
-    n = min(len(v) for v in cols)
-    M = np.column_stack([v[:n] for v in cols])
-    A = -M if higher_better else M
-    R = np.apply_along_axis(stats.rankdata, 1, A)
-    return dict(zip(labels, R.mean(axis=0)))
 
 
 def homogeneous_groups(res, labels, medians, higher_better):
@@ -206,23 +182,13 @@ def _write_tex(lines, path, msg=None):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Etapa 1 — selección de hiperparámetros
 #
-#   Lee resultados/grid/all_metrics.csv (513 configs × 20 semillas) y elige, para
-#   cada algoritmo genético, la mejor configuración dentro de cada combinación
-#   de operadores (4 combos × 27 configs).  MOPSO se selecciona de una vez sobre
-#   sus 81.  Total: 17 configuraciones.
+#   De las 513 configuraciones del grid elige 17: la mejor de cada combinación
+#   de operadores en los 4 GA, más la mejor global de MOPSO.  Gana la de menor
+#   rango medio de hipervolumen, rankeando dentro de cada una de las 20 semillas
+#   (que están pareadas: la población inicial se muestrea con random_state=run_id).
 #
-#   Criterio: gana la de menor rango medio de hipervolumen, rankeando las
-#   configuraciones dentro de cada una de las 20 semillas (que están pareadas:
-#   la población inicial se muestrea con random_state=run_id).
-#
-#   Salida (plots/hiperparametros/)
-#     <ALG>/main_effects_<ALG>.png  efecto de cada hiperparámetro, una curva por
-#                                   combo
-#     <ALG>/effects_<ALG>.tex       Friedman por bloques y W de Kendall por
-#                                   hiperparámetro (los operadores no se
-#                                   testean: se comparan en la etapa siguiente,
-#                                   ya con su configuración afinada)
-#     selected_configs.csv/.tex     las 17 configuraciones
+#   Los operadores no se testean acá: se barren dentro de cada bloque y su
+#   comparación es la etapa 2, ya con la configuración de cada combo afinada.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # MOPSO no tiene operadores; se colorea por inercia, que es su factor dominante.
@@ -732,11 +698,11 @@ def etapa1(args):
                                if a in set(df['algorithm'])]
 
     print(f"\n{'='*66}")
-    print(f"  ETAPA 1a — SELECCIÓN DE HIPERPARÁMETROS")
+    print("  ETAPA 1a — SELECCIÓN DE HIPERPARÁMETROS")
     print(f"  Datos: {args.csv}  ({len(df)} ejecuciones)")
     print(f"  Métrica: {HP_METRICS[args.metric][0]} "
           f"({'↑' if HP_METRICS[args.metric][1] else '↓'})")
-    print(f"  Criterio: menor rango medio, rankeando dentro de cada semilla")
+    print("  Criterio: menor rango medio, rankeando dentro de cada semilla")
     print(f"  Algoritmos: {', '.join(algs)}")
     print(f"{'='*66}")
 
@@ -765,18 +731,8 @@ def etapa1(args):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Etapa 2 — comparación de combinaciones de operadores, por algoritmo
 #
-#   Lee winners/<ALG>/<cruce>_<mutacion>/<config>/run_XX/ (las configuraciones
-#   que ganaron su bloque en la etapa 1) y compara los 4 combos entre sí.
-#
-#   Salida por algoritmo (plots/operadores/<ALG>/)
-#     comparison_multiobj_*.tex     indicadores multiobjetivo (HV, spacing,
-#                                   IGD+, ε+)
-#     comparison_chemical_*.tex     indicadores químicos (QED, SA, validez,
-#                                   unicidad…)
-#     pareto_comparison_*.png       frentes de Pareto superpuestos
-#     pareto_qed_sa_grid_*.png      frentes QED-SA en paneles
-#     tests_<ALG>.tex               Friedman + Wilcoxon post-hoc con Holm
-#     resumen_tests.csv             el combo elegido de cada algoritmo
+#   Lee winners/<ALG>/<cruce>_<mutacion>/<config>/run_XX/ (lo que ganó su bloque
+#   en la etapa 1) y compara los 4 combos entre sí, un reporte por algoritmo.
 # ═══════════════════════════════════════════════════════════════════════════
 
 GA_ALGS = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA']
@@ -887,7 +843,7 @@ def etapa2(args):
     os.makedirs(args.out, exist_ok=True)
 
     print(f"\n{'='*64}")
-    print(f"  ETAPA 2 — COMPARACIÓN DE OPERADORES")
+    print("  ETAPA 2 — COMPARACIÓN DE OPERADORES")
     print(f"  Datos: {args.winners}")
     print(f"  Decisión por: {args.metric}")
     print(f"{'='*64}")
@@ -911,11 +867,7 @@ def etapa2(args):
 #   Etapa 3 — comparación estadística final entre algoritmos
 #
 #   Lee finalistas/<ALG>/run_XX/ (la configuración elegida de cada algoritmo
-#   tras las etapas 1 y 2) y contrasta los cinco entre sí.
-#
-#   Salida (plots/comparacion_final/)
-#     grupos_homogeneos.tex   una fila por indicador
-#     tests_pares.csv         las 10 comparaciones, con p de Holm
+#   tras las etapas 1 y 2) y contrasta los cinco entre sí sobre ALG_METRIC.
 # ═══════════════════════════════════════════════════════════════════════════
 
 ALG_METRIC = 'hypervolume'
@@ -958,7 +910,7 @@ def etapa3(args):
     os.makedirs(args.out, exist_ok=True)
 
     print(f"\n{'='*70}")
-    print(f"  ETAPA 3 — COMPARACIÓN ENTRE ALGORITMOS")
+    print("  ETAPA 3 — COMPARACIÓN ENTRE ALGORITMOS")
     print(f"  {', '.join(DISPLAY.get(l, l) for l in labels)}")
     print(f"{'='*70}\n")
 
@@ -994,11 +946,6 @@ def etapa3(args):
 #   Compara las cuatro baselines (cribado de MOSES, aleatorio, escalador, GA de
 #   suma ponderada) con los cinco MOEAs ya seleccionados, sobre el mismo
 #   presupuesto de 100.000 evaluaciones y las mismas 20 semillas.
-#
-#   Salida (plots/baselines/)
-#     grupos_homogeneos.tex   los grupos y las comparaciones contra cada baseline
-#     comparacion.tex         mediana ± desvío de cada método
-#     tests_pares.csv         todas las comparaciones con su p de Holm
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Orden de peor a mejor esperado; LHS quedó fuera por ser indistinguible de RANDOM.
@@ -1088,7 +1035,7 @@ def etapa4(args):
     os.makedirs(args.out, exist_ok=True)
 
     print(f"\n{'='*70}")
-    print(f"  ETAPA 4 — BASELINES vs ALGORITMOS MULTIOBJETIVO")
+    print("  ETAPA 4 — BASELINES vs ALGORITMOS MULTIOBJETIVO")
     print(f"  {', '.join(DISPLAY.get(l, l) for l in labels)}")
     print(f"{'='*70}\n")
 
