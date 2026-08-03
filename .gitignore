@@ -60,14 +60,15 @@ data/moses.csv
 data/moses_train_smiles.pkl.gz
 # caché de direcciones de referencia (NSGA-III/MOEA-D), determinista y regenerable
 data/ref_dirs_*.npy
+# salida cruda de los experimentos (se genera en el cluster)
 results/
-results_baselines/
-results_light/
+results_*/
+# lo que se baja del cluster al PC para analizar: grid, winners, finalistas,
+# baselines (ver la cabecera de analisis.py)
+resultados/
+# tablas y figuras que produce analisis.py
 plots/
-plots_hp/
-plots_operadores/
-finalistas/
-winners/
+# campañas viejas congeladas (p. ej. archivo/lipinski/)
 archivo/
 
 # Logs
