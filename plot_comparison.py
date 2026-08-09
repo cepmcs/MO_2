@@ -513,11 +513,87 @@ def _pie_marker(ax, x, y, colors, size):
                    linewidths=0.3, zorder=5)
 
 
-def plot_pareto_comparison(series, pop_size, output_dir):
-    """Superpone frentes de Pareto combinados (todas las runs) de cada serie.
-    Junta las moléculas de las 20 runs, elimina duplicados, y recalcula
-    el frente no-dominado global por serie.
-    Usa diferentes formas de marcadores por serie y auto-escala ejes."""
+# Los tres planos del espacio de objetivos, en el orden en que se encadenan
+# mejor: los dos primeros comparten el eje QED y los dos últimos el eje Fsp3,
+# así cada panel comparte un eje con el que tiene al lado.
+PARETO_PLANES = [('qed', 'sa'), ('qed', 'fsp3'), ('sa', 'fsp3')]
+
+
+def _pad_lim(values, frac=0.08):
+    """Rango de una serie de valores con un margen, para que los puntos del
+    borde no queden pegados al marco."""
+    lo, hi = min(values), max(values)
+    pad = (hi - lo) * frac if hi > lo else 0.05
+    return lo - pad, hi + pad
+
+
+def _plane_limits(combined_paretos, xcol, ycol):
+    """Límites de un plano sobre TODAS las series.  Cuando la figura se parte en
+    filas, cada una tiene que dibujarse con estos límites: si cada fila se
+    auto-escalara a lo suyo, dos frentes de extensión distinta ocuparían el
+    mismo marco y la comparación entre filas sería un espejismo."""
+    xs, ys = [], []
+    for df in combined_paretos.values():
+        if xcol in df.columns and ycol in df.columns:
+            xs.extend(df[xcol].values)
+            ys.extend(df[ycol].values)
+    if not xs:
+        return None
+    return _pad_lim(xs), _pad_lim(ys)
+
+
+def _plot_pareto_plane(ax, series_order, combined_paretos, counts, xcol, ycol,
+                       lims=None, con_titulo=True):
+    """Dibuja un plano del frente: las series superpuestas más un marcador
+    'pastel' donde una misma molécula fue hallada por dos o más series.
+    Con lims dibuja en esos límites; sin ellos, auto-escala a sus datos.
+    Devuelve los handles de leyenda, en el orden de las series."""
+    handles = []
+    all_x, all_y = [], []
+    coord_colors = {}   # (xr, yr) → colores (uno por molécula) que caen ahí
+    for idx, s in series_order:
+        df = combined_paretos[s.label]
+        if xcol not in df.columns or ycol not in df.columns:
+            continue
+        color = get_color(s.color_key, idx)
+        sc = ax.scatter(df[xcol], df[ycol], c=color, marker=PARETO_MARKER,
+                        s=45, alpha=1.0,
+                        edgecolors='white', linewidths=0.4,
+                        label=f'{s.label} ({counts[s.label]})', zorder=3)
+        handles.append(sc)
+        all_x.extend(df[xcol].values)
+        all_y.extend(df[ycol].values)
+        for xv, yv in zip(df[xcol].round(4), df[ycol].round(4)):
+            coord_colors.setdefault((xv, yv), []).append(color)
+
+    # Donde coinciden moléculas de 2+ series (colores distintos), superponer
+    # un marcador "pastel" con los colores presentes.
+    for (xv, yv), cols in coord_colors.items():
+        uniq = list(dict.fromkeys(cols))
+        if len(uniq) >= 2:
+            _pie_marker(ax, xv, yv, uniq, size=58)
+
+    xlabel = OBJECTIVE_LABELS.get(xcol, xcol)
+    ylabel = OBJECTIVE_LABELS.get(ycol, ycol)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if con_titulo:
+        ax.set_title(f'{xlabel} vs {ylabel}')
+
+    if lims is not None:
+        ax.set_xlim(*lims[0])
+        ax.set_ylim(*lims[1])
+    elif all_x and all_y:
+        ax.set_xlim(*_pad_lim(all_x))
+        ax.set_ylim(*_pad_lim(all_y))
+
+    return handles
+
+
+def _combined_pareto_fronts(series):
+    """Frente de Pareto global de cada serie: junta las moléculas de todas sus
+    runs, elimina SMILES duplicados y recalcula la no-dominancia sobre el total.
+    Devuelve (combined_paretos, series_order, counts)."""
     combined_paretos = {}     # label → DataFrame
     series_order = []         # preserva orden e info de color
     for idx, s in enumerate(series):
@@ -532,54 +608,253 @@ def plot_pareto_comparison(series, pop_size, output_dir):
             combined_paretos[s.label] = pareto
             series_order.append((idx, s))
 
+    counts = {label: len(df) for label, df in combined_paretos.items()}
+    return combined_paretos, series_order, counts
+
+
+# ─── Contribución al frente no dominado conjunto ─────────────────────────────
+#
+#   El hipervolumen mide la extensión del frente, no la calidad de lo que hay
+#   dentro: un frente puede ganar volumen estirándose hacia un extremo aunque el
+#   grueso de sus soluciones esté dominado.  Para separar las dos cosas se junta
+#   lo que produjeron todos los combos, se recalcula la no-dominancia global y
+#   se mira quién aportó los supervivientes.  Es dominancia de Pareto pura sobre
+#   los tres objetivos: no hay umbrales ni ponderaciones de por medio.
+
+# Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
+CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'ambas': '#7F7F7F'}
+
+
+def _familia(label):
+    """Familia de cruce de un combo: 'pcx_gauss' → 'PCX'."""
+    return label.split('_')[0].upper()
+
+
+def atribuir_frente(series, pf_df):
+    """Marca qué series produjeron cada molécula del frente conjunto.
+
+    build_reference_front deduplica por SMILES quedándose con la primera
+    aparición, así que la fila que sobrevive arrastra el orden en que se
+    concatenaron las series y no sirve para atribuir.  Hay que volver a mirar
+    cada serie: una misma molécula puede haber sido hallada por varias, y
+    contarla como exclusiva de una sería inventar una diferencia.
+
+    Agrega una columna booleana 'en_<label>' por serie, otra por familia de
+    cruce, y 'origen' ∈ {PCX, SBX, ambas} cuando hay exactamente dos familias.
+    """
+    out = pf_df.copy()
+    for s in series:
+        df = load_pareto_molecules(s.pop_dir)
+        smiles = set(df['smiles']) if not df.empty else set()
+        out[f'en_{s.label}'] = out['smiles'].isin(smiles)
+
+    familias = list(dict.fromkeys(_familia(s.label) for s in series))
+    for f in familias:
+        cols = [f'en_{s.label}' for s in series if _familia(s.label) == f]
+        out[f'en_{f}'] = out[cols].any(axis=1)
+
+    if len(familias) == 2:
+        a, b = familias
+        out['origen'] = np.where(out[f'en_{a}'] & out[f'en_{b}'], 'ambas',
+                                 np.where(out[f'en_{a}'], a, b))
+    return out
+
+
+def _perfil(df):
+    """Descriptores del subconjunto que aporta un operador al frente conjunto:
+    dónde cae y qué calidad tiene lo que aporta."""
+    if df.empty:
+        return {'n': 0, 'fsp3': np.nan, 'fsp3_alto': np.nan,
+                'qed': np.nan, 'qed_bajo': np.nan, 'sa': np.nan}
+    return {'n': len(df),
+            'fsp3': float(df.fsp3.mean()),
+            'fsp3_alto': float((df.fsp3 > 0.9).mean()),
+            'qed': float(df.qed.mean()),
+            'qed_bajo': float((df.qed < 0.60).mean()),
+            'sa': float(df.sa.mean())}
+
+
+def contribucion_agregada(series, pf_df):
+    """Cuánto aporta cada combo y cada familia de cruce al frente conjunto,
+    sobre la unión de las 20 semillas.
+
+    'aporta' cuenta toda molécula hallada por ese operador (compartidas
+    incluidas, así que las columnas no suman el total) y 'exclusiva' solo las
+    que no encontró ningún otro."""
+    at = atribuir_frente(series, pf_df)
+    total = len(at)
+    filas = []
+
+    def fila(nombre, mask, excl_mask):
+        return {'nombre': nombre, 'total': total,
+                'aporta': int(mask.sum()),
+                'frac': float(mask.mean()) if total else np.nan,
+                'exclusiva': int(excl_mask.sum()),
+                **_perfil(at[mask])}
+
+    n_series = [f'en_{s.label}' for s in series]
+    for s in series:
+        col = f'en_{s.label}'
+        otras = at[[c for c in n_series if c != col]].any(axis=1)
+        filas.append(fila(s.label, at[col], at[col] & ~otras))
+
+    familias = list(dict.fromkeys(_familia(s.label) for s in series))
+    if len(familias) > 1:
+        for f in familias:
+            col = f'en_{f}'
+            otras = at[[f'en_{o}' for o in familias if o != f]].any(axis=1)
+            filas.append(fila(f, at[col], at[col] & ~otras))
+    return filas, at
+
+
+def contribucion_por_semilla(series):
+    """Lo mismo pero dentro de cada semilla: los frentes de la misma semilla
+    compiten entre sí y se recalcula la no-dominancia ahí.
+
+    Da un valor por semilla y por familia, o sea pares que admiten un test de
+    rangos con signo.  El agregado mide otra cosa —todo contra todo, 20 veces
+    más candidatos— así que los dos porcentajes no tienen por qué coincidir.
+
+    Devuelve dict familia → array con el % de aportes exclusivos por semilla, y
+    el % de moléculas compartidas.
+    """
+    familias = list(dict.fromkeys(_familia(s.label) for s in series))
+    por_serie = {}
+    for s in series:
+        df = load_pareto_molecules(s.pop_dir)
+        if not df.empty:
+            por_serie[s.label] = df
+
+    runs = sorted(set().union(*(set(d['run']) for d in por_serie.values())))
+    acum = {f: [] for f in familias}
+    compartidas = []
+    for run in runs:
+        trozos = []
+        for label, df in por_serie.items():
+            t = df[df['run'] == run].copy()
+            if t.empty:
+                continue
+            t['familia'] = _familia(label)
+            trozos.append(t)
+        if not trozos:
+            continue
+        junto = pd.concat(trozos, ignore_index=True)
+        # Una molécula puede venir de varias familias: se resuelve por SMILES
+        # antes de la no-dominancia para no contarla dos veces.
+        marca = junto.groupby('smiles')['familia'].agg(
+            lambda v: 'ambas' if len(set(v)) > 1 else next(iter(set(v))))
+        unico = junto.drop_duplicates('smiles').set_index('smiles')
+        unico['origen'] = marca
+        frente = _compute_non_dominated(unico.reset_index())
+        if frente.empty:
+            continue
+        n = len(frente)
+        for f in familias:
+            acum[f].append(100 * (frente['origen'] == f).sum() / n)
+        compartidas.append(100 * (frente['origen'] == 'ambas').sum() / n)
+
+    return ({f: np.array(v) for f, v in acum.items()},
+            np.array(compartidas), runs)
+
+
+def plot_frente_conjunto(series, pop_size, output_dir, pf_df):
+    """El frente no dominado conjunto en los tres planos, cada molécula pintada
+    según la familia de cruce que la aportó.
+
+    Todos los puntos van en un único scatter con un array de colores: si se
+    dibujara una familia después de la otra, la segunda taparía a la primera en
+    la zona densa y la figura mostraría una diferencia de orden de dibujo en vez
+    de una diferencia real."""
+    at = atribuir_frente(series, pf_df)
+    if 'origen' not in at.columns:
+        return
+    orden = [f for f in ('PCX', 'SBX', 'ambas') if (at['origen'] == f).any()]
+    cuentas = {f: int((at['origen'] == f).sum()) for f in orden}
+    colores = at['origen'].map(CRUCE_COLORS).values
+
+    n = len(PARETO_PLANES)
+    fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8))
+    for ax, (xcol, ycol) in zip(np.atleast_1d(axes), PARETO_PLANES):
+        ax.scatter(at[xcol], at[ycol], c=colores, marker=PARETO_MARKER,
+                   s=45, edgecolors='white', linewidths=0.4, zorder=3)
+        ax.set_xlabel(OBJECTIVE_LABELS.get(xcol, xcol))
+        ax.set_ylabel(OBJECTIVE_LABELS.get(ycol, ycol))
+        ax.set_title(f'{OBJECTIVE_LABELS.get(xcol, xcol)} vs '
+                     f'{OBJECTIVE_LABELS.get(ycol, ycol)}')
+        ax.set_xlim(*_pad_lim(at[xcol].values))
+        ax.set_ylim(*_pad_lim(at[ycol].values))
+
+    # 'solo X' y no 'X' a secas: estas cuentas son exclusivas, mientras que la
+    # columna «Aporta» de la tabla incluye las compartidas.
+    etiqueta = {'PCX': 'solo PCX', 'SBX': 'solo SBX', 'ambas': 'ambas'}
+    handles = [mpatches.Patch(facecolor=CRUCE_COLORS[f], edgecolor='white',
+                              label=f'{etiqueta[f]} ({cuentas[f]})')
+               for f in orden]
+    fig.legend(handles=handles, loc='lower center', ncol=len(handles),
+               framealpha=0.9, edgecolor='#cccccc', fontsize=11,
+               bbox_to_anchor=(0.5, 0.01))
+
+    alg = _alg_from_output_dir(output_dir)
+    titulo = 'Frente no dominado conjunto por familia de cruce'
+    fig.suptitle(titulo + (f' - {alg}' if alg else ''),
+                 fontsize=14, fontweight='bold', y=1.0)
+    plt.tight_layout(rect=[0, 0.09, 1, 0.97])
+    fname = f"frente_conjunto_pop{pop_size}.png"
+    plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  ✓ {fname}")
+
+
+def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
+    """Superpone frentes de Pareto combinados (todas las runs) de cada serie,
+    un panel por cada plano de objetivos.
+
+    Con groups —lista de (nombre de fila, [labels])— la figura se parte en una
+    fila por grupo en vez de apilar todas las series en el mismo panel.  Las
+    filas se dibujan con límites comunes para que se puedan comparar entre sí.
+    """
+    combined_paretos, series_order, counts = _combined_pareto_fronts(series)
     if not combined_paretos:
         print("  ⚠ Sin datos de Pareto para comparación")
         return
 
-    # Contar moléculas por serie para el título
-    counts = {label: len(df) for label, df in combined_paretos.items()}
+    if groups:
+        filas = [(nombre, [(idx, s) for idx, s in series_order
+                           if s.label in labels])
+                 for nombre, labels in groups]
+        filas = [(nombre, so) for nombre, so in filas if so]
+    else:
+        filas = [(None, series_order)]
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    xcol, ycol = 'qed', 'sa'
-    xlabel, ylabel = 'QED (↑)', 'SA (↓)'
+    # Con una sola fila cada panel se auto-escala a sus datos, como siempre;
+    # con varias, todas comparten los límites de su plano.
+    lims = ({p: _plane_limits(combined_paretos, *p) for p in PARETO_PLANES}
+            if len(filas) > 1 else {})
 
-    all_x, all_y = [], []
-    coord_colors = {}   # (xr, yr) → colores (uno por molécula) que caen ahí
-    for idx, s in series_order:
-        df = combined_paretos[s.label]
-        if xcol not in df.columns or ycol not in df.columns:
-            continue
-        color = get_color(s.color_key, idx)
-        ax.scatter(df[xcol], df[ycol], c=color, marker=PARETO_MARKER,
-                   s=45, alpha=1.0,
-                   edgecolors='white', linewidths=0.4,
-                   label=f'{s.label} ({counts[s.label]})', zorder=3)
-        all_x.extend(df[xcol].values)
-        all_y.extend(df[ycol].values)
-        for xv, yv in zip(df[xcol].round(4), df[ycol].round(4)):
-            coord_colors.setdefault((xv, yv), []).append(color)
+    n = len(PARETO_PLANES)
+    fig, axes = plt.subplots(len(filas), n, squeeze=False,
+                             figsize=(6.4 * n, 5.8 * len(filas)))
+    handles = []
+    for r, (nombre, fila) in enumerate(filas):
+        for c, plano in enumerate(PARETO_PLANES):
+            h = _plot_pareto_plane(axes[r][c], fila, combined_paretos, counts,
+                                   *plano, lims=lims.get(plano),
+                                   con_titulo=(r == 0))
+            if c == 0:
+                handles.extend(h)
+        if nombre:
+            axes[r][0].annotate(nombre, xy=(0, 0.5), xytext=(-62, 0),
+                                xycoords='axes fraction',
+                                textcoords='offset points',
+                                ha='center', va='center', rotation=90,
+                                fontsize=15, fontweight='bold')
 
-    # Donde coinciden moléculas de 2+ series (colores distintos), superponer
-    # un marcador "pastel" con los colores presentes.
-    for (xv, yv), cols in coord_colors.items():
-        uniq = list(dict.fromkeys(cols))
-        if len(uniq) >= 2:
-            _pie_marker(ax, xv, yv, uniq, size=58)
-
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_title(f'{xlabel} vs {ylabel}')
-
-    # Auto-escalar ejes al rango de datos con padding para ver bien el frente
-    if all_x and all_y:
-        x_min, x_max = min(all_x), max(all_x)
-        y_min, y_max = min(all_y), max(all_y)
-        x_pad = (x_max - x_min) * 0.08 if x_max > x_min else 0.05
-        y_pad = (y_max - y_min) * 0.08 if y_max > y_min else 0.05
-        ax.set_xlim(x_min - x_pad, x_max + x_pad)
-        ax.set_ylim(y_min - y_pad, y_max + y_pad)
-
-    ax.legend(framealpha=0.9, edgecolor='#cccccc')
+    # Una sola leyenda al pie: las series y sus tamaños son los mismos en todos
+    # los paneles, lo que cambia es el par de objetivos (y la fila, si se parte).
+    if handles:
+        fig.legend(handles=handles, loc='lower center', ncol=len(handles),
+                   framealpha=0.9, edgecolor='#cccccc', fontsize=11,
+                   bbox_to_anchor=(0.5, 0.01))
 
     title = 'Frentes de Pareto Globales'
     alg = _alg_from_output_dir(output_dir)
@@ -587,14 +862,15 @@ def plot_pareto_comparison(series, pop_size, output_dir):
         title += f' - {alg}'
 
     fig.suptitle(title,
-                 fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
+                 fontsize=14, fontweight='bold', y=1.0)
+    # El aire para leyenda y título es una altura fija, no una fracción: al
+    # partir en filas la figura crece y el porcentaje reservaría de más.
+    margen = 0.09 / len(filas)
+    plt.tight_layout(rect=[0, margen, 1, 1 - margen / 3])
     fname = f"pareto_comparison_pop{pop_size}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
-
-
 
 
 def generate_statistical_table(series, pop_size, output_dir,

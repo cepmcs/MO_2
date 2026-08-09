@@ -612,6 +612,105 @@ def write_tests_table(res, alg, out_dir, label):
     _write_tex(lines, os.path.join(out_dir, f'tests_{alg}.tex'))
 
 
+def write_contribucion_table(series, pf_df, alg, out_dir):
+    """Tabla LaTeX de la contribución al frente no dominado conjunto.
+
+    Complementa al test sobre el hipervolumen, que mide la extensión del frente
+    y no la calidad de lo que contiene.  Acá se junta lo producido por los
+    cuatro combos, se recalcula la no-dominancia global y se mira quién aportó
+    los supervivientes y qué son: es dominancia de Pareto sobre los tres
+    objetivos, sin umbrales.
+
+    Devuelve la fila de resumen por familia de cruce para el CSV de la etapa.
+    """
+    filas, _ = pc.contribucion_agregada(series, pf_df)
+    por_fam, compartidas, runs = pc.contribucion_por_semilla(series)
+    familias = list(por_fam)
+
+    # Test pareado por semilla entre las dos familias de cruce.
+    p_sem, ganador = None, None
+    if len(familias) == 2:
+        a, b = familias
+        if len(por_fam[a]) >= 3:
+            try:
+                p_sem = float(stats.wilcoxon(por_fam[a], por_fam[b]).pvalue)
+            except ValueError:
+                p_sem = 1.0
+            ganador = a if por_fam[a].mean() > por_fam[b].mean() else b
+
+    total = filas[0]['total'] if filas else 0
+    detalle = ''
+    if p_sem is not None:
+        otra = [o for o in familias if o != ganador][0]
+        detalle = (f'  Repitiendo el cálculo dentro de cada semilla, '
+                   f'{_latex_escape(ganador)} aporta '
+                   f'{por_fam[ganador].mean():.1f}\\% $\\pm$ '
+                   f'{por_fam[ganador].std(ddof=1):.1f} frente a '
+                   f'{por_fam[otra].mean():.1f}\\% $\\pm$ '
+                   f'{por_fam[otra].std(ddof=1):.1f}, en '
+                   f'{sum(por_fam[ganador] > por_fam[otra])} de las '
+                   f'{len(runs)} semillas (Wilcoxon de rangos con signo, '
+                   f'$p$ = {_fmt_p(p_sem)}).')
+
+    lines = [
+        r'\begin{table}[htbp]', r'\centering',
+        f'\\caption{{Contribución al frente no dominado conjunto en '
+        f'{_latex_escape(alg)}.  Se unen las soluciones de los cuatro combos '
+        f'sobre las 20 semillas, se deduplica por SMILES y se recalcula la '
+        f'no-dominancia global ({total} soluciones).  «Aporta» cuenta toda '
+        f'molécula del frente hallada por ese operador, por lo que las '
+        f'compartidas suman en cada fila que las encontró; «exclusivas» solo '
+        f'las que no halló ningún otro.' + detalle + '}',
+        f'\\label{{tab:ops_contribucion_{alg.lower()}}}',
+        r'\begin{tabular}{lccc}', r'\toprule',
+        r'Operador & Aporta & Exclusivas & \% \\',
+        r'\midrule',
+    ]
+    for i, f in enumerate(filas):
+        # Las filas de familia van separadas: agregan sobre las anteriores.
+        if i == len(series):
+            lines.append(r'\midrule')
+        lines.append(
+            f"{_latex_escape(f['nombre'])} & {f['aporta']} & "
+            f"{f['exclusiva']} & {100*f['frac']:.1f} \\\\")
+    lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
+    _write_tex(lines, os.path.join(out_dir, f'contribucion_{alg}.tex'))
+
+    pd.DataFrame(filas).to_csv(
+        os.path.join(out_dir, f'contribucion_{alg}.csv'), index=False)
+
+    for f in filas[len(series):]:
+        print(f"  aporte {f['nombre']:>5s}: {f['aporta']:4d}/{total} "
+              f"({100*f['frac']:4.1f}%)  excl. {f['exclusiva']:4d}  "
+              f"QED<0.60 {100*f['qed_bajo']:4.1f}%  "
+              f"Fsp3>0.9 {100*f['fsp3_alto']:4.1f}%")
+    if p_sem is not None:
+        a, b = familias
+        print(f"  por semilla: {a} {por_fam[a].mean():.1f}% ± {por_fam[a].std(ddof=1):.1f}"
+              f"   {b} {por_fam[b].mean():.1f}% ± {por_fam[b].std(ddof=1):.1f}"
+              f"   compartidas {compartidas.mean():.1f}%   p = {p_sem:.3g}")
+
+    out = {}
+    if p_sem is not None:
+        out = {'aporte_familia': ganador,
+               'aporte_pct': round(float(por_fam[ganador].mean()), 2),
+               'aporte_p': p_sem}
+    return out
+
+
+def _filas_por_cruce(series):
+    """Agrupa los combos por operador de cruce, en el orden de COMBO_DIRS.
+
+    Los cuatro frentes en un mismo panel se tapan entre sí en la zona densa, y
+    la diferencia que importa es entre familias de cruce (dentro de cada una,
+    las dos mutaciones no se separan en el test).  Una fila por familia deja dos
+    series por panel y la comparación pasa a ser fila contra fila."""
+    filas = {}
+    for s in series:
+        filas.setdefault(s.label.split('_')[0].upper(), []).append(s.label)
+    return list(filas.items()) if len(filas) > 1 else None
+
+
 def analyze_operators(alg, winners_dir, out_root, decision_col):
     series = _series_operadores(alg, winners_dir)
     if len(series) < 2:
@@ -634,10 +733,17 @@ def analyze_operators(alg, winners_dir, out_root, decision_col):
 
     get_values = pc._build_series_value_getter(series, indicator_data)
 
-    # Las 4 salidas de la sección 3.2: 2 tablas + 2 figuras de frentes.
+    # Las salidas de la sección 3.2: tablas de indicadores, frentes por combo y
+    # la atribución del frente conjunto (tabla + figura).
     pc.generate_latex_comparison_tables(series, alg, out_dir, get_values)
-    pc.plot_pareto_comparison(series, alg, out_dir)
+    pc.plot_pareto_comparison(series, alg, out_dir,
+                              groups=_filas_por_cruce(series))
     pc.plot_pareto_qed_sa_grid(series, alg, out_dir)
+
+    aporte = {}
+    if pf_df is not None:
+        aporte = write_contribucion_table(series, pf_df, alg, out_dir)
+        pc.plot_frente_conjunto(series, alg, out_dir, pf_df)
 
     # Test: solo sobre el indicador de decisión.  Los demás indicadores se
     # reportan de forma descriptiva en las tablas de comparación.
@@ -660,7 +766,8 @@ def analyze_operators(alg, winners_dir, out_root, decision_col):
     return {'algorithm': alg, 'p_friedman': res['p_omnibus'],
             'n_pares_sig': n_sig, 'n_pares': len(res['pairs']),
             'grupos': txt,
-            'mejor_grupo': ', '.join(groups[0])}
+            'mejor_grupo': ', '.join(groups[0]),
+            **aporte}
 
 
 def etapa2(args):
