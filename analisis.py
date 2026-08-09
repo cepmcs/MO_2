@@ -612,90 +612,109 @@ def write_tests_table(res, alg, out_dir, label):
     _write_tex(lines, os.path.join(out_dir, f'tests_{alg}.tex'))
 
 
-def write_contribucion_table(series, pf_df, alg, out_dir):
+def _test_aporte(por_grupo, runs):
+    """Contraste sobre el % aportado por semilla.  Con dos grupos alcanza el
+    Wilcoxon pareado; con más hace falta el mismo Friedman + Holm que el resto
+    de la comparación, resumido en grupos homogéneos.
+
+    Devuelve (texto para el caption, dict de resumen) o (None, {})."""
+    grupos = list(por_grupo)
+    if len(grupos) < 2 or len(runs) < 3:
+        return None, {}
+
+    if len(grupos) == 2:
+        a, b = grupos
+        try:
+            p = float(stats.wilcoxon(por_grupo[a], por_grupo[b]).pvalue)
+        except ValueError:
+            p = 1.0
+        g = a if por_grupo[a].mean() > por_grupo[b].mean() else b
+        otro = b if g == a else a
+        txt = (f'  Repitiendo el cálculo dentro de cada semilla, '
+               f'{_latex_escape(g)} aporta {por_grupo[g].mean():.1f}\\% $\\pm$ '
+               f'{por_grupo[g].std(ddof=1):.1f} frente a '
+               f'{por_grupo[otro].mean():.1f}\\% $\\pm$ '
+               f'{por_grupo[otro].std(ddof=1):.1f}, en '
+               f'{sum(por_grupo[g] > por_grupo[otro])} de las {len(runs)} '
+               f'semillas (Wilcoxon de rangos con signo, $p$ = {_fmt_p(p)}).')
+        return txt, {'aporte_grupo': g,
+                     'aporte_pct': round(float(por_grupo[g].mean()), 2),
+                     'aporte_p': p}
+
+    res = compare_indicator(lambda l, c: por_grupo[l], grupos, None)
+    if res is None:
+        return None, {}
+    gr = homogeneous_groups(res, grupos, res['medians'], True)
+    txt = (f'  Repitiendo el cálculo dentro de cada semilla, el aporte se '
+           f'contrasta con Friedman sobre las {len(runs)} semillas como '
+           f'bloques ($p$ = {_fmt_p(res["p_omnibus"])}) y comparaciones por '
+           f'pares con Wilcoxon corregidas por Holm.  Grupos homogéneos, de '
+           f'mayor a menor aporte: {fmt_groups(gr)}.')
+    return txt, {'aporte_grupo': ', '.join(gr[0]),
+                 'aporte_pct': round(float(np.mean(por_grupo[gr[0][0]])), 2),
+                 'aporte_p': res['p_omnibus']}
+
+
+def write_contribucion_table(series, pf_df, nombre, out_dir,
+                             grupo_de=None, etiqueta='Operador'):
     """Tabla LaTeX de la contribución al frente no dominado conjunto.
 
     Complementa al test sobre el hipervolumen, que mide la extensión del frente
-    y no la calidad de lo que contiene.  Acá se junta lo producido por los
-    cuatro combos, se recalcula la no-dominancia global y se mira quién aportó
-    los supervivientes y qué son: es dominancia de Pareto sobre los tres
-    objetivos, sin umbrales.
+    y no la calidad de lo que contiene.  Acá se junta lo producido por todas las
+    series, se recalcula la no-dominancia global y se mira quién aportó los
+    supervivientes: es dominancia de Pareto sobre los tres objetivos, sin
+    umbrales.
 
-    Devuelve la fila de resumen por familia de cruce para el CSV de la etapa.
+    grupo_de decide sobre qué se agrega — por familia de cruce al comparar
+    operadores, por serie al comparar algoritmos.
+
+    Devuelve el resumen del contraste para el CSV de la etapa.
     """
-    filas, _ = pc.contribucion_agregada(series, pf_df)
-    por_fam, compartidas, runs = pc.contribucion_por_semilla(series)
-    familias = list(por_fam)
-
-    # Test pareado por semilla entre las dos familias de cruce.
-    p_sem, ganador = None, None
-    if len(familias) == 2:
-        a, b = familias
-        if len(por_fam[a]) >= 3:
-            try:
-                p_sem = float(stats.wilcoxon(por_fam[a], por_fam[b]).pvalue)
-            except ValueError:
-                p_sem = 1.0
-            ganador = a if por_fam[a].mean() > por_fam[b].mean() else b
+    grupo_de = grupo_de or pc._familia
+    filas, _ = pc.contribucion_agregada(series, pf_df, grupo_de)
+    por_grupo, compartidas, runs = pc.contribucion_por_semilla(series, grupo_de)
+    detalle, resumen = _test_aporte(por_grupo, runs)
 
     total = filas[0]['total'] if filas else 0
-    detalle = ''
-    if p_sem is not None:
-        otra = [o for o in familias if o != ganador][0]
-        detalle = (f'  Repitiendo el cálculo dentro de cada semilla, '
-                   f'{_latex_escape(ganador)} aporta '
-                   f'{por_fam[ganador].mean():.1f}\\% $\\pm$ '
-                   f'{por_fam[ganador].std(ddof=1):.1f} frente a '
-                   f'{por_fam[otra].mean():.1f}\\% $\\pm$ '
-                   f'{por_fam[otra].std(ddof=1):.1f}, en '
-                   f'{sum(por_fam[ganador] > por_fam[otra])} de las '
-                   f'{len(runs)} semillas (Wilcoxon de rangos con signo, '
-                   f'$p$ = {_fmt_p(p_sem)}).')
-
     lines = [
         r'\begin{table}[htbp]', r'\centering',
         f'\\caption{{Contribución al frente no dominado conjunto en '
-        f'{_latex_escape(alg)}.  Se unen las soluciones de los cuatro combos '
-        f'sobre las 20 semillas, se deduplica por SMILES y se recalcula la '
-        f'no-dominancia global ({total} soluciones).  «Aporta» cuenta toda '
-        f'molécula del frente hallada por ese operador, por lo que las '
+        f'{_latex_escape(nombre)}.  Se unen las soluciones de las series '
+        f'comparadas sobre las {len(runs)} semillas, se deduplica por SMILES y '
+        f'se recalcula la no-dominancia global ({total} soluciones).  «Aporta» '
+        f'cuenta toda molécula del frente hallada por esa serie, por lo que las '
         f'compartidas suman en cada fila que las encontró; «exclusivas» solo '
-        f'las que no halló ningún otro.' + detalle + '}',
-        f'\\label{{tab:ops_contribucion_{alg.lower()}}}',
+        f'las que no halló ninguna otra.' + (detalle or '') + '}',
+        f'\\label{{tab:contribucion_{nombre.lower()}}}',
         r'\begin{tabular}{lccc}', r'\toprule',
-        r'Operador & Aporta & Exclusivas & \% \\',
+        f'{etiqueta} & Aporta & Exclusivas & \\% \\\\',
         r'\midrule',
     ]
     for i, f in enumerate(filas):
-        # Las filas de familia van separadas: agregan sobre las anteriores.
-        if i == len(series):
+        # Las filas de grupo, si las hay, van separadas: agregan sobre las
+        # anteriores y no son sumables con ellas.
+        if i == len(series) and len(filas) > len(series):
             lines.append(r'\midrule')
         lines.append(
-            f"{_latex_escape(f['nombre'])} & {f['aporta']} & "
-            f"{f['exclusiva']} & {100*f['frac']:.1f} \\\\")
+            f"{_latex_escape(DISPLAY.get(f['nombre'], f['nombre']))} & "
+            f"{f['aporta']} & {f['exclusiva']} & {100*f['frac']:.1f} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
-    _write_tex(lines, os.path.join(out_dir, f'contribucion_{alg}.tex'))
+    _write_tex(lines, os.path.join(out_dir, f'contribucion_{nombre}.tex'))
 
     pd.DataFrame(filas).to_csv(
-        os.path.join(out_dir, f'contribucion_{alg}.csv'), index=False)
+        os.path.join(out_dir, f'contribucion_{nombre}.csv'), index=False)
 
-    for f in filas[len(series):]:
-        print(f"  aporte {f['nombre']:>5s}: {f['aporta']:4d}/{total} "
+    resumen_filas = filas[len(series):] or filas
+    for f in resumen_filas:
+        print(f"  aporte {f['nombre']:>8s}: {f['aporta']:4d}/{total} "
               f"({100*f['frac']:4.1f}%)  excl. {f['exclusiva']:4d}  "
               f"QED<0.60 {100*f['qed_bajo']:4.1f}%  "
               f"Fsp3>0.9 {100*f['fsp3_alto']:4.1f}%")
-    if p_sem is not None:
-        a, b = familias
-        print(f"  por semilla: {a} {por_fam[a].mean():.1f}% ± {por_fam[a].std(ddof=1):.1f}"
-              f"   {b} {por_fam[b].mean():.1f}% ± {por_fam[b].std(ddof=1):.1f}"
-              f"   compartidas {compartidas.mean():.1f}%   p = {p_sem:.3g}")
-
-    out = {}
-    if p_sem is not None:
-        out = {'aporte_familia': ganador,
-               'aporte_pct': round(float(por_fam[ganador].mean()), 2),
-               'aporte_p': p_sem}
-    return out
+    if por_grupo:
+        detalle_txt = '   '.join(
+            f'{g} {v.mean():.1f}%±{v.std(ddof=1):.1f}' for g, v in por_grupo.items())
+        print(f"  por semilla: {detalle_txt}   compartidas {compartidas.mean():.1f}%")
+    return resumen
 
 
 def _filas_por_cruce(series):
@@ -846,7 +865,7 @@ def etapa3(args):
     print(f"  {', '.join(DISPLAY.get(l, l) for l in labels)}")
     print(f"{'='*70}\n")
 
-    pf, _ = pc.build_reference_front(series, None)
+    pf, pf_df = pc.build_reference_front(series, None)
     ind = pc.compute_indicators_per_run(series, None, pf) if pf is not None else {}
     print(f"  frente de referencia: {len(pf) if pf is not None else 0} soluciones\n")
     get = pc._build_series_value_getter(series, ind)
@@ -870,6 +889,15 @@ def etapa3(args):
                   for p in res['pairs']]).to_csv(
         os.path.join(args.out, 'tests_pares.csv'), index=False)
     print(f"  ✓ {os.path.join(args.out, 'tests_pares.csv')}")
+
+    # El hipervolumen mide la extensión del frente; esto mide quién aportó las
+    # soluciones que sobreviven al juntarlos.  Los dos pueden discrepar.
+    if pf_df is not None:
+        print()
+        write_contribucion_table(series, pf_df, 'finalistas', args.out,
+                                 grupo_de=pc._por_serie, etiqueta='Algoritmo')
+        pc.plot_frente_conjunto(series, 'final', args.out, pf_df,
+                                grupo_de=pc._por_serie)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1012,6 +1040,11 @@ MOLECULAS_OUT = os.path.join(OUT_ALGORITMOS, "moleculas_representativas.png")
 
 N_MOLECULAS = 5      # por algoritmo
 
+# Ventana de interés farmacológico, la misma con la que se caracteriza el aporte
+# al frente conjunto en las etapas 2 y 3.
+SA_MAX = 3.0
+FSP3_RANGO = (0.40, 0.60)
+
 
 def load_front(alg, finalistas):
     """Frente no dominado global de un algoritmo, sobre sus 20 ejecuciones."""
@@ -1022,10 +1055,23 @@ def load_front(alg, finalistas):
 
 
 def pick(front, n=N_MOLECULAS):
-    """Las n moléculas de mayor QED, desempatando por menor SA."""
-    f = front.assign(_qed=front['qed'].round(3))
-    return (f.sort_values(['_qed', 'sa'], ascending=[False, True])
-            .head(n).drop(columns='_qed').reset_index(drop=True))
+    """Las n moléculas de mayor QED dentro de la ventana de interés: SA por
+    debajo de SA_MAX y Fsp3 en FSP3_RANGO.
+
+    Ordenar solo por QED no sirve acá: en el frente hay decenas de moléculas
+    empatadas en QED ≈ 0.948, así que manda el desempate.  Con el desempate por
+    menor SA salían aromáticos planos —Fsp3 ≈ 0.17 contra 0.59 del frente, y
+    alguna en 0.0—, es decir lo contrario del tercer objetivo.  Restringir a la
+    ventana conserva el mismo QED máximo y deja Fsp3 en el rango buscado.
+
+    Si la ventana quedara vacía se cae al frente completo, para que la figura se
+    genere igual con un frente que no la alcance.
+    """
+    lo, hi = FSP3_RANGO
+    dentro = front[(front['sa'] < SA_MAX) & front['fsp3'].between(lo, hi)]
+    if dentro.empty:
+        dentro = front
+    return dentro.nlargest(n, 'qed').reset_index(drop=True)
 
 
 def render(smiles, size=(420, 320)):
@@ -1072,14 +1118,18 @@ def moleculas(args):
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
-            ax.set_xlabel(f"QED {m['qed']:.3f}   ·   SA {m['sa']:.2f}",
-                          fontsize=9.5, labelpad=3)
+            # Los tres objetivos, no dos: Fsp3 es el que define la ventana.
+            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
+                          f"·  Fsp3 {m['fsp3']:.2f}",
+                          fontsize=9, labelpad=3)
             if j == 0:
                 ax.set_ylabel(DISPLAY.get(alg, alg), fontsize=13,
                               fontweight='bold', labelpad=10)
 
+    lo, hi = FSP3_RANGO
     fig.suptitle(f'Las {N_MOLECULAS} moléculas de mayor QED del frente de cada '
-                 f'algoritmo',
+                 f'algoritmo, con SA $<$ {SA_MAX:g} y Fsp3 entre {lo:g} y {hi:g}'
+                 .replace('$<$', '<'),
                  fontsize=14, fontweight='bold', y=0.995)
     plt.tight_layout(rect=[0, 0, 1, 0.985])
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

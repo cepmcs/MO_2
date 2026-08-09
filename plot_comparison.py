@@ -68,6 +68,12 @@ DEFAULT_COLORS = ['#000000', '#FF0000', '#008000', '#1F77B4', '#7B1FA2', '#8C564
 # Orden en que se presentan los algoritmos en la comparación final.
 ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'MOPSO']
 
+# Nombres de presentación para captions.  analisis.py tiene su propio DISPLAY
+# con las baselines incluidas; acá alcanza con los algoritmos porque es lo
+# único que llega como etiqueta de reporte.
+DISPLAY_ALG = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
+               'AGEMOEA': 'AGE-MOEA', 'MOPSO': 'MOPSO'}
+
 # Todas las series usan el mismo marcador (punto): se distinguen por color,
 # no por forma.
 PARETO_MARKER = 'o'
@@ -622,7 +628,8 @@ def _combined_pareto_fronts(series):
 #   los tres objetivos: no hay umbrales ni ponderaciones de por medio.
 
 # Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
-CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'ambas': '#7F7F7F'}
+CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2'}
+COMPARTIDA_COLOR = '#7F7F7F'
 
 
 def _familia(label):
@@ -630,7 +637,22 @@ def _familia(label):
     return label.split('_')[0].upper()
 
 
-def atribuir_frente(series, pf_df):
+def _por_serie(label):
+    """Agrupación trivial: cada serie es su propio grupo.  Es la que se usa al
+    comparar algoritmos, donde no hay familias que agregar."""
+    return label
+
+
+def _grupos_de(series, grupo_de):
+    """Nombres de grupo en el orden de las series, sin repetir."""
+    return list(dict.fromkeys(grupo_de(s.label) for s in series))
+
+
+def _etiqueta_compartida(grupos):
+    return 'ambas' if len(grupos) == 2 else 'compartida'
+
+
+def atribuir_frente(series, pf_df, grupo_de=_familia):
     """Marca qué series produjeron cada molécula del frente conjunto.
 
     build_reference_front deduplica por SMILES quedándose con la primera
@@ -639,8 +661,11 @@ def atribuir_frente(series, pf_df):
     cada serie: una misma molécula puede haber sido hallada por varias, y
     contarla como exclusiva de una sería inventar una diferencia.
 
-    Agrega una columna booleana 'en_<label>' por serie, otra por familia de
-    cruce, y 'origen' ∈ {PCX, SBX, ambas} cuando hay exactamente dos familias.
+    grupo_de decide sobre qué se agrega: por familia de cruce al comparar
+    operadores, por serie al comparar algoritmos.
+
+    Agrega una columna booleana 'en_<label>' por serie, otra por grupo, y
+    'origen' con el grupo que la halló en exclusiva o la marca de compartida.
     """
     out = pf_df.copy()
     for s in series:
@@ -648,15 +673,17 @@ def atribuir_frente(series, pf_df):
         smiles = set(df['smiles']) if not df.empty else set()
         out[f'en_{s.label}'] = out['smiles'].isin(smiles)
 
-    familias = list(dict.fromkeys(_familia(s.label) for s in series))
-    for f in familias:
-        cols = [f'en_{s.label}' for s in series if _familia(s.label) == f]
-        out[f'en_{f}'] = out[cols].any(axis=1)
+    grupos = _grupos_de(series, grupo_de)
+    for g in grupos:
+        cols = [f'en_{s.label}' for s in series if grupo_de(s.label) == g]
+        out[f'en_{g}'] = out[cols].any(axis=1)
 
-    if len(familias) == 2:
-        a, b = familias
-        out['origen'] = np.where(out[f'en_{a}'] & out[f'en_{b}'], 'ambas',
-                                 np.where(out[f'en_{a}'], a, b))
+    if len(grupos) > 1:
+        cuenta = out[[f'en_{g}' for g in grupos]].sum(axis=1)
+        # idxmax sobre las booleanas devuelve el primer grupo que la halló; solo
+        # se usa cuando hay exactamente uno, así que no hay desempate que hacer.
+        unico = out[[f'en_{g}' for g in grupos]].idxmax(axis=1).str.slice(3)
+        out['origen'] = np.where(cuenta > 1, _etiqueta_compartida(grupos), unico)
     return out
 
 
@@ -674,14 +701,14 @@ def _perfil(df):
             'sa': float(df.sa.mean())}
 
 
-def contribucion_agregada(series, pf_df):
-    """Cuánto aporta cada combo y cada familia de cruce al frente conjunto,
-    sobre la unión de las 20 semillas.
+def contribucion_agregada(series, pf_df, grupo_de=_familia):
+    """Cuánto aporta cada serie —y cada grupo, si agrupan varias— al frente
+    conjunto, sobre la unión de las 20 semillas.
 
-    'aporta' cuenta toda molécula hallada por ese operador (compartidas
-    incluidas, así que las columnas no suman el total) y 'exclusiva' solo las
-    que no encontró ningún otro."""
-    at = atribuir_frente(series, pf_df)
+    'aporta' cuenta toda molécula hallada por esa serie (compartidas incluidas,
+    así que las columnas no suman el total) y 'exclusiva' solo las que no
+    encontró ninguna otra."""
+    at = atribuir_frente(series, pf_df, grupo_de)
     total = len(at)
     filas = []
 
@@ -698,27 +725,30 @@ def contribucion_agregada(series, pf_df):
         otras = at[[c for c in n_series if c != col]].any(axis=1)
         filas.append(fila(s.label, at[col], at[col] & ~otras))
 
-    familias = list(dict.fromkeys(_familia(s.label) for s in series))
-    if len(familias) > 1:
-        for f in familias:
-            col = f'en_{f}'
-            otras = at[[f'en_{o}' for o in familias if o != f]].any(axis=1)
-            filas.append(fila(f, at[col], at[col] & ~otras))
+    # Las filas de grupo solo agregan información si agrupan más de una serie.
+    grupos = _grupos_de(series, grupo_de)
+    if 1 < len(grupos) < len(series):
+        for g in grupos:
+            col = f'en_{g}'
+            otras = at[[f'en_{o}' for o in grupos if o != g]].any(axis=1)
+            filas.append(fila(g, at[col], at[col] & ~otras))
     return filas, at
 
 
-def contribucion_por_semilla(series):
+def contribucion_por_semilla(series, grupo_de=_familia):
     """Lo mismo pero dentro de cada semilla: los frentes de la misma semilla
     compiten entre sí y se recalcula la no-dominancia ahí.
 
-    Da un valor por semilla y por familia, o sea pares que admiten un test de
-    rangos con signo.  El agregado mide otra cosa —todo contra todo, 20 veces
-    más candidatos— así que los dos porcentajes no tienen por qué coincidir.
+    Da un valor por semilla y por grupo, o sea bloques que admiten un test de
+    rangos con signo o de Friedman.  El agregado mide otra cosa —todo contra
+    todo, 20 veces más candidatos— así que los dos porcentajes no tienen por
+    qué coincidir.
 
-    Devuelve dict familia → array con el % de aportes exclusivos por semilla, y
-    el % de moléculas compartidas.
+    Devuelve dict grupo → array con el % de aportes exclusivos por semilla, el
+    % de moléculas compartidas, y las semillas usadas.
     """
-    familias = list(dict.fromkeys(_familia(s.label) for s in series))
+    grupos = _grupos_de(series, grupo_de)
+    compartida = _etiqueta_compartida(grupos)
     por_serie = {}
     for s in series:
         df = load_pareto_molecules(s.pop_dir)
@@ -726,7 +756,7 @@ def contribucion_por_semilla(series):
             por_serie[s.label] = df
 
     runs = sorted(set().union(*(set(d['run']) for d in por_serie.values())))
-    acum = {f: [] for f in familias}
+    acum = {g: [] for g in grupos}
     compartidas = []
     for run in runs:
         trozos = []
@@ -734,43 +764,52 @@ def contribucion_por_semilla(series):
             t = df[df['run'] == run].copy()
             if t.empty:
                 continue
-            t['familia'] = _familia(label)
+            t['grupo'] = grupo_de(label)
             trozos.append(t)
         if not trozos:
             continue
         junto = pd.concat(trozos, ignore_index=True)
-        # Una molécula puede venir de varias familias: se resuelve por SMILES
+        # Una molécula puede venir de varios grupos: se resuelve por SMILES
         # antes de la no-dominancia para no contarla dos veces.
-        marca = junto.groupby('smiles')['familia'].agg(
-            lambda v: 'ambas' if len(set(v)) > 1 else next(iter(set(v))))
+        marca = junto.groupby('smiles')['grupo'].agg(
+            lambda v: compartida if len(set(v)) > 1 else next(iter(set(v))))
         unico = junto.drop_duplicates('smiles').set_index('smiles')
         unico['origen'] = marca
         frente = _compute_non_dominated(unico.reset_index())
         if frente.empty:
             continue
         n = len(frente)
-        for f in familias:
-            acum[f].append(100 * (frente['origen'] == f).sum() / n)
-        compartidas.append(100 * (frente['origen'] == 'ambas').sum() / n)
+        for g in grupos:
+            acum[g].append(100 * (frente['origen'] == g).sum() / n)
+        compartidas.append(100 * (frente['origen'] == compartida).sum() / n)
 
-    return ({f: np.array(v) for f, v in acum.items()},
+    return ({g: np.array(v) for g, v in acum.items()},
             np.array(compartidas), runs)
 
 
-def plot_frente_conjunto(series, pop_size, output_dir, pf_df):
+def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia):
     """El frente no dominado conjunto en los tres planos, cada molécula pintada
-    según la familia de cruce que la aportó.
+    según quién la aportó (familia de cruce al comparar operadores, algoritmo al
+    comparar algoritmos).
 
     Todos los puntos van en un único scatter con un array de colores: si se
-    dibujara una familia después de la otra, la segunda taparía a la primera en
-    la zona densa y la figura mostraría una diferencia de orden de dibujo en vez
-    de una diferencia real."""
-    at = atribuir_frente(series, pf_df)
+    dibujara un grupo después de otro, el último taparía a los anteriores en la
+    zona densa y la figura mostraría una diferencia de orden de dibujo en vez de
+    una diferencia real."""
+    at = atribuir_frente(series, pf_df, grupo_de)
     if 'origen' not in at.columns:
         return
-    orden = [f for f in ('PCX', 'SBX', 'ambas') if (at['origen'] == f).any()]
-    cuentas = {f: int((at['origen'] == f).sum()) for f in orden}
-    colores = at['origen'].map(CRUCE_COLORS).values
+    grupos = _grupos_de(series, grupo_de)
+    compartida = _etiqueta_compartida(grupos)
+    # Los combos de operadores no están en COLORS y caerían todos al mismo color
+    # del ciclo por defecto; los algoritmos sí tienen color propio asignado.
+    paleta = ({g: CRUCE_COLORS[g] for g in grupos} if set(grupos) <= set(CRUCE_COLORS)
+              else {g: get_color(g, i) for i, g in enumerate(grupos)})
+    paleta[compartida] = COMPARTIDA_COLOR
+
+    orden = [g for g in list(grupos) + [compartida] if (at['origen'] == g).any()]
+    cuentas = {g: int((at['origen'] == g).sum()) for g in orden}
+    colores = at['origen'].map(paleta).values
 
     n = len(PARETO_PLANES)
     fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8))
@@ -786,16 +825,17 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df):
 
     # 'solo X' y no 'X' a secas: estas cuentas son exclusivas, mientras que la
     # columna «Aporta» de la tabla incluye las compartidas.
-    etiqueta = {'PCX': 'solo PCX', 'SBX': 'solo SBX', 'ambas': 'ambas'}
-    handles = [mpatches.Patch(facecolor=CRUCE_COLORS[f], edgecolor='white',
-                              label=f'{etiqueta[f]} ({cuentas[f]})')
-               for f in orden]
+    handles = [mpatches.Patch(
+        facecolor=paleta[g], edgecolor='white',
+        label=f'{g if g == compartida else "solo " + str(g)} ({cuentas[g]})')
+        for g in orden]
     fig.legend(handles=handles, loc='lower center', ncol=len(handles),
                framealpha=0.9, edgecolor='#cccccc', fontsize=11,
                bbox_to_anchor=(0.5, 0.01))
 
     alg = _alg_from_output_dir(output_dir)
-    titulo = 'Frente no dominado conjunto por familia de cruce'
+    por = 'familia de cruce' if set(grupos) <= set(CRUCE_COLORS) else 'algoritmo'
+    titulo = f'Frente no dominado conjunto por {por}'
     fig.suptitle(titulo + (f' - {alg}' if alg else ''),
                  fontsize=14, fontweight='bold', y=1.0)
     plt.tight_layout(rect=[0, 0.09, 1, 0.97])
@@ -1017,10 +1057,15 @@ def _write_latex_comparison_table(series, col_values, metrics_cfg,
     col_spec = 'l' + 'c' * len(cols)
     header_cells = ['Algoritmo'] + [f'{h} {arrow(hb)}' for h, _, _, hb in cols]
 
+    # pop_size llega como etiqueta del reporte (el algoritmo al comparar
+    # operadores, 'final' al comparar algoritmos), no siempre como tamaño de
+    # población: solo tiene sentido anunciarlo como N si es un número.
+    sufijo = f' ($N={pop_size}$)' if str(pop_size).isdigit() else ''
+
     lines = [
         r'\begin{table}[htbp]',
         r'\centering',
-        f'\\caption{{{caption} ($N={pop_size}$)}}',
+        f'\\caption{{{caption}{sufijo}}}',
         f'\\label{{{tex_label}}}',
         f'\\begin{{tabular}}{{{col_spec}}}',
         r'\toprule',
@@ -1102,21 +1147,31 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
         ('Novedad',  'novelty',       '.4f', True),
     ]
 
-    # Contexto: en modo operadores output_dir es .../comparison/<ALG>/pop{N},
-    # así que el padre del dir pop es el algoritmo; en modo algoritmos es
-    # "comparison".  Se usa para desambiguar caption y \label entre reportes.
-    ctx = os.path.basename(os.path.dirname(output_dir))
-    cap_ctx = '' if ctx == 'comparison' else f' — {ctx}'
-    lab_ctx = '' if ctx == 'comparison' else f'_{ctx.lower()}'
+    # El contexto sale de pop_size, que es la etiqueta del reporte: el nombre
+    # del algoritmo al comparar operadores y 'final' al comparar algoritmos.
+    # Antes se derivaba del directorio padre, que con la estructura actual da
+    # 'plots' y no dice nada.  El \label mantiene la forma anterior para no
+    # romper referencias ya escritas.
+    ctx = str(pop_size)
+    cap_ctx = ('' if ctx == 'final'
+               else f' — {_latex_escape(DISPLAY_ALG.get(ctx, ctx))}')
+    dir_ctx = os.path.basename(os.path.dirname(output_dir))
+    lab_ctx = '' if dir_ctx == 'comparison' else f'_{dir_ctx.lower()}'
 
     _write_latex_comparison_table(
         series, col_values, multiobj_cfg,
         f'Comparación de indicadores multiobjetivo{cap_ctx}',
         f'tab:comparison_multiobjective{lab_ctx}_pop{pop_size}',
         output_dir, f'comparison_multiobjective_pop{pop_size}.tex', pop_size)
+    # El alcance no es el mismo en las seis columnas y conviene decirlo: QED, SA
+    # y Fsp3 son del frente acumulado, validez y novedad de todas las
+    # evaluaciones, y unicidad solo de la última generación.
     _write_latex_comparison_table(
         series, col_values, chem_cfg,
-        f'Comparación de indicadores químicos (media del frente final){cap_ctx}',
+        f'Comparación de indicadores químicos{cap_ctx}.  QED, SA y Fsp3 son la '
+        f'media del frente no dominado acumulado sobre la corrida completa; '
+        f'validez y novedad se calculan sobre las evaluaciones de toda la '
+        f'corrida; unicidad corresponde a la población de la última generación',
         f'tab:comparison_chemical{lab_ctx}_pop{pop_size}',
         output_dir, f'comparison_chemical_pop{pop_size}.tex', pop_size)
 
