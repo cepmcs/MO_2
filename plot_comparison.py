@@ -845,6 +845,88 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     print(f"  ✓ {fname}")
 
 
+# Elevación de la proyección isométrica: arctan(1/√2).  Con proyección
+# ortográfica y azimut múltiplo impar de 45° los tres ejes quedan igual de
+# escorzados, así que ninguno se lee privilegiado sobre los otros.
+ISO_ELEV = math.degrees(math.atan(1 / math.sqrt(2)))
+
+# Azimuts separados 90°: se leen como una rotación del mismo objeto.  Medidos
+# sobre el frente conjunto, -45° es el de mayor dispersión proyectada y +135° el
+# de menor oclusión entre puntos.
+VISTAS_3D = [-45, 45, 135]
+
+
+def plot_frente_conjunto_3d(series, pop_size, output_dir, pf_df,
+                            grupo_de=_familia, vistas=VISTAS_3D):
+    """El frente no dominado conjunto en 3D, desde varios azimuts.
+
+    Complementa a los planos 2D: las proyecciones muestran bien los pares de
+    objetivos pero aplastan la superficie, y acá lo que interesa es su forma.
+
+    Proyección ortográfica en todas las vistas: con la perspectiva por defecto
+    cada panel parece estar a una distancia distinta y los tamaños dejan de ser
+    comparables entre sí.
+    """
+    at = atribuir_frente(series, pf_df, grupo_de)
+    if 'origen' not in at.columns:
+        return
+    grupos = _grupos_de(series, grupo_de)
+    compartida = _etiqueta_compartida(grupos)
+    paleta = ({g: CRUCE_COLORS[g] for g in grupos} if set(grupos) <= set(CRUCE_COLORS)
+              else {g: get_color(g, i) for i, g in enumerate(grupos)})
+    paleta[compartida] = COMPARTIDA_COLOR
+
+    orden = [g for g in list(grupos) + [compartida] if (at['origen'] == g).any()]
+    cuentas = {g: int((at['origen'] == g).sum()) for g in orden}
+    colores = at['origen'].map(paleta).values
+
+    ncols = len(vistas)
+    fig = plt.figure(figsize=(6.2 * ncols, 6.0))
+    for i, azim in enumerate(vistas, start=1):
+        ax = fig.add_subplot(1, ncols, i, projection='3d')
+        ax.set_proj_type('ortho')
+        # Un único scatter: matplotlib ordena por profundidad dentro de la
+        # llamada, así que la superposición refleja la geometría y no el orden
+        # en que se dibujaron los grupos.
+        ax.scatter(at['qed'], at['sa'], at['fsp3'], c=colores,
+                   marker=PARETO_MARKER, s=26, depthshade=False,
+                   edgecolors='white', linewidths=0.25)
+        ax.view_init(elev=ISO_ELEV, azim=azim)
+        # La caja ortográfica deja aire alrededor de la nube, pero el zoom saca
+        # las etiquetas del eje z fuera de su panel: por encima de ~1.05 se
+        # montan sobre el panel vecino y la del último se sale del lienzo.
+        ax.set_box_aspect(None, zoom=1.05)
+        ax.set_xlabel(OBJECTIVE_LABELS.get('qed', 'qed'), labelpad=8)
+        ax.set_ylabel(OBJECTIVE_LABELS.get('sa', 'sa'), labelpad=8)
+        ax.set_zlabel(OBJECTIVE_LABELS.get('fsp3', 'fsp3'), labelpad=8)
+        ax.tick_params(labelsize=8.5, pad=1)
+        ax.grid(True)
+
+    handles = [mpatches.Patch(
+        facecolor=paleta[g], edgecolor='white',
+        label=f'{g if g == compartida else "solo " + str(g)} ({cuentas[g]})')
+        for g in orden]
+    fig.legend(handles=handles, loc='lower center', ncol=len(handles),
+               framealpha=0.9, edgecolor='#cccccc', fontsize=11,
+               bbox_to_anchor=(0.5, 0.015))
+
+    alg = _alg_from_output_dir(output_dir)
+    por = 'familia de cruce' if set(grupos) <= set(CRUCE_COLORS) else 'algoritmo'
+    fig.suptitle(f'Frente no dominado conjunto por {por}'
+                 + (f' - {alg}' if alg else ''),
+                 fontsize=14, fontweight='bold', y=0.98)
+    # Separación amplia entre paneles: las etiquetas del eje z de uno se meten
+    # sobre el panel vecino si se dejan pegados.
+    fig.subplots_adjust(left=0.03, right=0.95, bottom=0.11, top=0.92,
+                        wspace=1.25 / ncols)
+    fname = f"frente_conjunto_3d_pop{pop_size}.png"
+    # Sin bbox_inches='tight': los ejes 3D dibujan sus etiquetas por su cuenta y
+    # el recorte automático las deja fuera.  Los márgenes se fijan arriba.
+    plt.savefig(os.path.join(output_dir, fname), dpi=180)
+    plt.close(fig)
+    print(f"  ✓ {fname}")
+
+
 def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
     """Superpone frentes de Pareto combinados (todas las runs) de cada serie,
     un panel por cada plano de objetivos.

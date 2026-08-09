@@ -898,6 +898,8 @@ def etapa3(args):
                                  grupo_de=pc._por_serie, etiqueta='Algoritmo')
         pc.plot_frente_conjunto(series, 'final', args.out, pf_df,
                                 grupo_de=pc._por_serie)
+        pc.plot_frente_conjunto_3d(series, 'final', args.out, pf_df,
+                                   grupo_de=pc._por_serie)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
