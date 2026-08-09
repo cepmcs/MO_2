@@ -189,6 +189,10 @@ def _write_tex(lines, path, msg=None):
 #
 #   Los operadores no se testean acá: se barren dentro de cada bloque y su
 #   comparación es la etapa 2, ya con la configuración de cada combo afinada.
+#
+#   Deja tres archivos, todos a nivel de plots/hiperparametros/: la figura de
+#   selección con los cinco algoritmos, y selected_configs en .csv (lo lee
+#   run_experiments.py) y .tex.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # MOPSO no tiene operadores; se colorea por inercia, que es su factor dominante.
@@ -222,20 +226,6 @@ OPERATOR_COLORS = {
 # Combos tal como aparecen en el CSV del grid (la etapa 2 los lee de winners/,
 # donde son nombres de directorio con guion bajo: ver COMBO_DIRS).
 HP_COMBOS = ['pcx/pm', 'pcx/gauss', 'sbx/pm', 'sbx/gauss']
-
-FACTOR_LABELS = {
-    'budget':    'Población × Generaciones',
-    'crossover': 'Cruce',
-    'mutation':  'Mutación',
-    'cx_prob':   'Prob. de cruce',
-    'mut_prob':  'Prob. de mutación',
-    'w':         'Inercia $w$',
-    'c1':        'Cognitivo $c_1$',
-    'c2':        'Social $c_2$',
-}
-
-BUDGET_ORDER = ['100×1000', '200×500', '400×250']
-
 
 def factors_for(alg):
     return FACTORS_PSO if alg == 'MOPSO' else FACTORS_GA
@@ -292,115 +282,13 @@ def config_label(cfg, factors):
     return ' '.join(parts)
 
 
-def friedman_by_factor(g, factor, metric):
-    """Efecto marginal de un hiperparámetro con la semilla como bloque.
+# ─── Gráfica ─────────────────────────────────────────────────────────────────
 
-    Friedman sobre la matriz (semillas × niveles), donde cada celda es la mediana
-    marginal del nivel en esa semilla.  Tamaño de efecto: W de Kendall,
-    W = χ²/(m(k−1)), la concordancia del orden entre las m semillas
-    (0 = ninguna, 1 = las m ordenan igual).  Con 2 niveles Friedman degenera y se
-    usa Wilcoxon de rangos con signo.  Devuelve (delta, W, p), donde delta es la
-    diferencia entre el mejor y el peor nivel (mediana entre semillas)."""
-    B = g.pivot_table(index='run', columns=factor, values=metric,
-                      aggfunc='median').dropna()
-    m, k = B.shape
-    if m < 3 or k < 2:
-        return np.nan, np.nan, np.nan
-
-    level_medians = B.median(axis=0)
-    delta = float(level_medians.max() - level_medians.min())
-
-    R = np.apply_along_axis(stats.rankdata, 1, B.values)
-    chi2 = 12 / (m * k * (k + 1)) * np.sum(R.sum(axis=0) ** 2) - 3 * m * (k + 1)
-    W = float(max(chi2 / (m * (k - 1)), 0.0))
-
-    cols = [B[c].values for c in B.columns]
-    try:
-        p = (stats.wilcoxon(cols[0], cols[1]).pvalue if k == 2
-             else stats.friedmanchisquare(*cols).pvalue)
-    except ValueError:
-        return delta, W, np.nan
-    return delta, W, float(p)
-
-
-# ─── Gráficas ────────────────────────────────────────────────────────────────
-
-def _level_order(factor, levels):
-    """Orden natural de los niveles de un hiperparámetro."""
-    if factor == 'budget':
-        return [b for b in BUDGET_ORDER if b in levels]
-    try:
-        return sorted(levels, key=float)
-    except (TypeError, ValueError):
-        return sorted(levels)
-
-
-def plot_main_effects(g, alg, factors, metric, out_dir, por_combo=True):
-    """Un panel por hiperparámetro; en los GA, una curva por combinación de
-    operadores.  En MOPSO, una sola curva."""
-    label, higher = HP_METRICS[metric]
-    n = len(factors)
-    ncols = min(3, n)
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5.4 * ncols, 4.6 * nrows),
-                             squeeze=False, sharey=True)
-    axes = axes.flatten()
-
-    if por_combo:
-        g = g.copy()
-        g['_combo'] = g['crossover'].astype(str) + '/' + g['mutation'].astype(str)
-        series = [c for c in HP_COMBOS if c in set(g['_combo'])]
-    else:
-        series = [None]
-
-    for ax, f in zip(axes, factors):
-        levels = _level_order(f, g[f].dropna().unique().tolist())
-        x = np.arange(len(levels))
-        for s in series:
-            gs = g if s is None else g[g['_combo'] == s]
-            color = (pc.COLORS.get(alg, '#333333') if s is None
-                     else OPERATOR_COLORS.get(s, '#888888'))
-            meds = [np.median(gs.loc[gs[f] == lv, metric].dropna().values)
-                    for lv in levels]
-            ax.plot(x, meds, color=color, linewidth=2, zorder=3,
-                    label=s or 'Mediana')
-            ax.scatter(x, meds, s=45, color=color, zorder=4,
-                       edgecolors='white', linewidths=1.0)
-
-        # Δ y p no van acá: se reportan en effects_<ALG>.tex.
-        ax.set_title(FACTOR_LABELS.get(f, f), fontsize=11)
-        ax.set_xticks(x)
-        ax.set_xticklabels([str(lv) for lv in levels], fontsize=10)
-        ax.set_ylabel(f'{label} ({"↑" if higher else "↓"})')
-
-    for ax in axes[n:]:
-        ax.set_visible(False)
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    seen = dict(zip(labels, handles))
-    order = [l for l in (series if por_combo else labels) if l in seen]
-    order += [l for l in seen if l not in order]
-    fig.legend([seen[l] for l in order], order, loc='lower center',
-               ncol=len(order), framealpha=0.9, edgecolor='#cccccc',
-               fontsize=10, bbox_to_anchor=(0.5, -0.02))
-    sub = ' por combinación de operadores' if por_combo else ''
-    fig.suptitle(f'Efecto de los hiperparámetros{sub} — {alg}',
-                 fontsize=14, fontweight='bold', y=1.01)
-    plt.tight_layout(rect=[0, 0.03, 1, 1])
-    fname = f'main_effects_{alg}.png'
-    plt.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
-    plt.close(fig)
-    print(f"  ✓ {fname}")
-
-
-def plot_metric_vs_validity(g, alg, metric, out_dir, chosen, sub_factors,
-                            por_combo):
-    """Cada configuración del algoritmo como un punto: validez contra la métrica
-    de selección, ambas medianas sobre las semillas.  El color separa las
-    combinaciones de operadores (la inercia en MOPSO)."""
-    label, _ = HP_METRICS[metric]
-    if metric == 'validity':
-        return
+def _panel_seleccion(ax, g, alg, metric, chosen, sub_factors, por_combo):
+    """Un algoritmo: cada configuración del grid como un punto (validez contra
+    la métrica de selección, ambas medianas sobre las 20 semillas) y la elegida
+    de cada bloque resaltada.  El color separa las combinaciones de operadores;
+    en MOPSO, que no tiene operadores, la inercia."""
     fs = [f for f in factors_for(alg) if g[f].notna().any()]
     m = g.groupby(fs, observed=True)[[metric, 'validity']].median()
 
@@ -412,12 +300,10 @@ def plot_metric_vs_validity(g, alg, metric, out_dir, chosen, sub_factors,
         key = m.index.get_level_values('w')
         groups = [(w, c) for w, c in sorted(W_COLORS.items()) if w in set(key)]
 
-    fig, ax = plt.subplots(figsize=(8.2, 6.0))
     for name, color in groups:
         sel = key == name
-        lab = name if por_combo else f'$w$ = {name:g}'
-        ax.scatter(m.loc[sel, 'validity'], m.loc[sel, metric], s=34, alpha=0.65,
-                   color=color, linewidths=0, label=lab, zorder=2)
+        ax.scatter(m.loc[sel, 'validity'], m.loc[sel, metric], s=30, alpha=0.65,
+                   color=color, linewidths=0, zorder=2)
 
     for name, b in chosen.items():
         cfg = b['cfg'] if isinstance(b['cfg'], tuple) else (b['cfg'],)
@@ -427,132 +313,102 @@ def plot_metric_vs_validity(g, alg, metric, out_dir, chosen, sub_factors,
         r = m.loc[tuple(lv[f] for f in fs)]
         color = (OPERATOR_COLORS[name] if por_combo
                  else W_COLORS.get(lv.get('w'), '#333333'))
-        ax.scatter(r['validity'], r[metric], s=190, color=color,
+        ax.scatter(r['validity'], r[metric], s=170, color=color,
                    edgecolors='black', linewidths=1.6, zorder=4)
 
-    h, l = ax.get_legend_handles_labels()
-    h.append(plt.Line2D([], [], marker='o', linestyle='none', markersize=12,
-                        markerfacecolor='#bbbbbb', markeredgecolor='black',
-                        markeredgewidth=1.6))
-    l.append('Seleccionada')
-    leg = ax.legend(h, l, framealpha=0.9, edgecolor='#cccccc', fontsize=10,
-                    loc='best')
-    for lh in leg.legend_handles[:len(groups)]:
-        lh.set_alpha(1.0)
+    ax.margins(x=0.07, y=0.10)
+    ax.set_title(DISPLAY.get(alg, alg), fontsize=13)
 
-    ax.margins(x=0.06, y=0.06)
-    ax.set_xlabel('Validez (fracción de moléculas válidas) →')
-    ax.set_ylabel(f'{label} →')
-    ax.set_title(f'{label} contra validez — {alg}\n'
-                 f'una configuración por punto, mediana de 20 semillas',
-                 fontsize=12)
-    plt.tight_layout()
-    fname = f'{metric}_vs_validity_{alg}.png'
-    plt.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
+
+def _celda_leyenda(ax, con_operadores, con_pso):
+    """La celda libre de la grilla, usada como leyenda de toda la figura."""
+    ax.axis('off')
+    punto = lambda color, **kw: plt.Line2D([], [], marker='o', linestyle='none',
+                                           markersize=9, markerfacecolor=color,
+                                           markeredgewidth=0, **kw)
+    bloques = []
+    if con_operadores:
+        bloques.append(('Operadores (algoritmos genéticos)',
+                        [punto(OPERATOR_COLORS[c], label=c) for c in HP_COMBOS]))
+    if con_pso:
+        bloques.append(('MOPSO: inercia $w$',
+                        [punto(c, label=f'$w$ = {w:g}')
+                         for w, c in sorted(W_COLORS.items())]))
+    bloques.append((None, [plt.Line2D([], [], marker='o', linestyle='none',
+                                      markersize=13, markerfacecolor='#bbbbbb',
+                                      markeredgecolor='black',
+                                      markeredgewidth=1.6,
+                                      label='Configuración seleccionada')]))
+
+    # Los bloques se apilan de arriba abajo repartiendo la celda por filas
+    # (una por entrada, más una por título), para que entren siempre.
+    filas = [len(h) + (1 if t else 0) for t, h in bloques]
+    alto = min(0.085, 0.92 / max(sum(filas), 1))
+    y = 0.97
+    for (titulo, handles), n in zip(bloques, filas):
+        leg = ax.legend(handles=handles, title=titulo, loc='upper center',
+                        bbox_to_anchor=(0.5, y), frameon=False, fontsize=11,
+                        handletextpad=0.6, borderaxespad=0)
+        if titulo:
+            leg.get_title().set_fontweight('bold')
+        ax.add_artist(leg)
+        y -= alto * (n + 0.7)
+
+
+def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
+    """Los cinco algoritmos en una sola imagen: un panel por algoritmo con todo
+    su grid de configuraciones y la elegida de cada bloque resaltada.
+
+    Es la única figura de la etapa: muestra a la vez el compromiso entre validez
+    y calidad del frente, dónde cae cada familia de operadores y qué punto se
+    llevó cada bloque.  El eje de validez es común a los cinco paneles para que
+    la posición horizontal sea comparable; el de la métrica es propio de cada
+    uno, porque los rangos difieren y compartirlo aplastaría los paneles."""
+    label, _ = HP_METRICS[metric]
+    if metric == 'validity':
+        return
+    algs = [a for a in algs if a in per_alg]
+    if not algs:
+        return
+
+    ncols = 3
+    nrows = math.ceil((len(algs) + 1) / ncols)     # +1: la celda de la leyenda
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.7 * ncols, 4.9 * nrows),
+                             squeeze=False, sharex=True)
+    axes = axes.flatten()
+
+    for ax, alg in zip(axes, algs):
+        d = per_alg[alg]
+        _panel_seleccion(ax, df[df['algorithm'] == alg], alg, metric,
+                         d['blocks'], d['sub_factors'], d['por_combo'])
+        # sharex esconde las marcas de los paneles con otro axes debajo; acá
+        # ese "otro axes" puede ser la celda de la leyenda, que no lleva eje.
+        ax.tick_params(labelbottom=True)
+
+    _celda_leyenda(axes[len(algs)],
+                   con_operadores=any(per_alg[a]['por_combo'] for a in algs),
+                   con_pso=any(not per_alg[a]['por_combo'] for a in algs))
+    for ax in axes[len(algs) + 1:]:
+        ax.set_visible(False)
+
+    fig.supxlabel('Validez (fracción de moléculas válidas) →', fontsize=12,
+                  y=0.042)
+    fig.supylabel(f'{label} →', fontsize=12)
+    fig.suptitle(f'Selección de hiperparámetros: {label.lower()} contra validez',
+                 fontsize=15, fontweight='bold')
+    fig.text(0.5, 0.004,
+             'Cada punto es una de las configuraciones del grid, con validez e '
+             f'{label.lower()} medianos sobre las 20 semillas.  Con borde negro, '
+             'la configuración elegida en cada bloque.',
+             ha='center', va='bottom', fontsize=10, color='#555555')
+    fig.tight_layout(rect=[0.01, 0.065, 1, 0.98])
+    fname = f'{metric}_vs_validity.png'
+    fig.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
 
 
 # ─── Tablas ──────────────────────────────────────────────────────────────────
-
-def _latex_label(f):
-    """FACTOR_LABELS ya trae matemática ($w$, $c_1$); solo hay que traducir el '×'."""
-    return FACTOR_LABELS.get(f, f).replace('×', r'$\times$')
-
-
-def _holm_nan(pvals):
-    """Holm sobre los p que existen; las celdas sin datos vuelven como NaN."""
-    p = np.asarray(pvals, dtype=float)
-    out = np.full(p.shape, np.nan)
-    ok = ~np.isnan(p)
-    if ok.any():
-        out[ok] = holm(p[ok])
-    return out
-
-
-def _fmt_delta(delta, p_holm):
-    """Celda de la grilla: cuánto mueve la métrica entre el mejor y el peor
-    nivel, con asterisco si el efecto sobrevive la corrección de Holm."""
-    if pd.isna(delta):
-        return '---'
-    return f'{delta:.4f}' + ('*' if not pd.isna(p_holm) and p_holm < 0.05 else '')
-
-
-def write_effects_table(effects, alg, factors, out_dir, metric):
-    """Tabla LaTeX de sensibilidad a cada hiperparámetro.
-
-    Reporta Δ, el recorrido de la métrica entre el mejor y el peor nivel, en sus
-    propias unidades: es la magnitud del efecto y se lee contra el eje de
-    main_effects sin necesidad de una escala auxiliar.
-
-    Con combos de operadores la tabla es una grilla hiperparámetros × combos,
-    porque agrupar los combos produce un orden espurio: pcx y sbx viven en
-    regímenes de hipervolumen distintos y la mediana agrupada salta entre ellos."""
-    label, _ = HP_METRICS[metric]
-    por_combo = any(isinstance(v, dict) for v in effects.values())
-    combos = ([c for c in HP_COMBOS
-               if any(c in v for v in effects.values())] if por_combo else [])
-
-    # Una tabla son 12 tests (3 factores × 4 combos) o 4 en MOPSO; sin corregir,
-    # un p de 0.04 es lo que se espera por azar.  Se aplica Holm a la tabla
-    # completa, el mismo estándar que el post-hoc de las etapas 2-4.
-    if por_combo:
-        keys = [(f, c) for f in factors for c in combos]
-        raw = [effects[f].get(c, (np.nan,) * 3)[2] for f, c in keys]
-    else:
-        keys = [(f, None) for f in factors]
-        raw = [effects.get(f, (np.nan,) * 3)[2] for f, _ in keys]
-    p_holm = dict(zip(keys, _holm_nan(raw)))
-    n_tests = int(np.sum(~np.isnan(np.asarray(raw, dtype=float))))
-
-    # La grilla por combos marca la significancia con asterisco; la tabla sin
-    # combos tiene columna de p propia, así que el caption no debe hablar de un
-    # asterisco que no aparece.
-    sig = (f'* indica $p < 0.05$ en el test de Friedman con las 20 semillas '
-           f'como bloques, tras corregir por Holm las {n_tests} comparaciones '
-           f'de la tabla.' if por_combo else
-           f'$p$: test de Friedman con las 20 semillas como bloques, corregido '
-           f'por Holm sobre las {n_tests} comparaciones de la tabla.')
-    caption = (f'Sensibilidad de {_latex_escape(label)} a cada hiperparámetro '
-               f'de {_latex_escape(alg)}.  $\\Delta$: diferencia entre el mejor '
-               f'y el peor nivel, en unidades de {_latex_escape(label).lower()}.  '
-               f'{sig}')
-    if por_combo:
-        caption += ('  Cada columna es una combinación de operadores, evaluada '
-                    'por separado: agrupar los combos produce un orden espurio, '
-                    'porque los operadores de cruce operan en regímenes de '
-                    'hipervolumen distintos.')
-
-    lines = [
-        r'\begin{table}[htbp]', r'\centering',
-        f'\\caption{{{caption}}}',
-        f'\\label{{tab:hp_effects_{alg.lower()}}}',
-    ]
-
-    if por_combo:
-        lines += [
-            r'\begin{tabular}{l' + 'c' * len(combos) + '}', r'\toprule',
-            'Hiperparámetro & ' + ' & '.join(_latex_escape(c) for c in combos)
-            + r' \\', r'\midrule',
-        ]
-        for f in factors:
-            cells = [_fmt_delta(effects[f].get(c, (np.nan,) * 3)[0], p_holm[(f, c)])
-                     for c in combos]
-            lines.append(f'{_latex_label(f)} & ' + ' & '.join(cells) + r' \\')
-    else:
-        lines += [
-            r'\begin{tabular}{lcc}', r'\toprule',
-            r'Hiperparámetro & $\Delta$ & $p$ (Holm) \\', r'\midrule',
-        ]
-        for f in sorted(factors, key=lambda x: -np.nan_to_num(
-                effects.get(x, (0, 0, 1))[0])):
-            delta = effects.get(f, (np.nan,) * 3)[0]
-            lines.append(f'{_latex_label(f)} & {delta:.4f} & '
-                         f'{_fmt_p(p_holm[(f, None)])} \\\\')
-
-    lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
-    _write_tex(lines, os.path.join(out_dir, f'effects_{alg}.tex'))
-
 
 def write_selection_summary(per_alg, metric, out_dir):
     """CSV y tabla LaTeX de las configuraciones seleccionadas.  El CSV usa los
@@ -609,9 +465,9 @@ def write_selection_summary(per_alg, metric, out_dir):
 
 # ─── Orquestación ────────────────────────────────────────────────────────────
 
-def analyze_algorithm(g, alg, metric, out_dir):
-    """Elige la configuración de cada combinación de operadores y mide la
-    sensibilidad a cada hiperparámetro sobre el grid completo."""
+def analyze_algorithm(g, alg, metric):
+    """Elige la mejor configuración de cada combinación de operadores (la mejor
+    global en MOPSO, que no tiene operadores)."""
     factors = [f for f in factors_for(alg) if g[f].notna().any()]
     _, higher = HP_METRICS[metric]
     por_combo = set(COMBO_FACTORS).issubset(factors)
@@ -650,38 +506,8 @@ def analyze_algorithm(g, alg, metric, out_dir):
         print("  ⚠ sin configuraciones completas; se omite")
         return None
 
-    # Los operadores no se testean acá: se barren dentro de cada bloque y su
-    # comparación va en la etapa siguiente, entre las configuraciones ya
-    # seleccionadas de cada combo.  El resto se mide dentro de cada combo, no
-    # agrupando: pcx y sbx están en regímenes de hipervolumen distintos y al
-    # agruparlos la mediana salta entre ellos, generando un orden espurio.
-    if por_combo:
-        gg = g.copy()
-        gg['_combo'] = gg['crossover'].astype(str) + '/' + gg['mutation'].astype(str)
-        effects = {f: {c: friedman_by_factor(sub, f, metric)
-                       for c, sub in gg.groupby('_combo', observed=True)}
-                   for f in sub_factors}
-    else:
-        effects = {f: friedman_by_factor(g, f, metric) for f in sub_factors}
-
-    def _max_W(e):
-        """Con combos, un factor tiene un W por combo; se resume por el mayor."""
-        if isinstance(e, dict):
-            vals = [w for _, w, _ in e.values() if not pd.isna(w)]
-            return max(vals) if vals else np.nan
-        return e[1]
-
-    top_f = max(effects, key=lambda f: np.nan_to_num(_max_W(effects[f])))
-    print(f"  Hiperparámetro dominante: {FACTOR_LABELS.get(top_f, top_f)}  "
-          f"(W = {_max_W(effects[top_f]):.3f})")
-
-    plot_main_effects(g, alg, sub_factors, metric, out_dir, por_combo=por_combo)
-    plot_metric_vs_validity(g, alg, metric, out_dir, chosen, sub_factors,
-                            por_combo)
-    write_effects_table(effects, alg, sub_factors, out_dir, metric)
-
     return {'blocks': chosen, 'factors': factors, 'sub_factors': sub_factors,
-            'effects': effects, 'por_combo': por_combo}
+            'por_combo': por_combo}
 
 
 def etapa1(args):
@@ -713,14 +539,13 @@ def etapa1(args):
         if g.empty:
             print(f"\n  ⚠ {alg}: sin datos")
             continue
-        out_dir = os.path.join(args.out, alg)
-        os.makedirs(out_dir, exist_ok=True)
-        r = analyze_algorithm(g, alg, args.metric, out_dir)
+        r = analyze_algorithm(g, alg, args.metric)
         if r:
             per_alg[alg] = r
 
     if per_alg:
-        print(f"\n{'─'*66}\n  Resumen global\n{'─'*66}")
+        print(f"\n{'─'*66}\n  Salidas\n{'─'*66}")
+        plot_seleccion_grid(df, algs, args.metric, args.out, per_alg)
         write_selection_summary(per_alg, args.metric, args.out)
 
     print(f"\n{'='*66}")
