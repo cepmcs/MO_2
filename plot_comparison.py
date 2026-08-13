@@ -563,8 +563,8 @@ def _plot_pareto_plane(ax, series_order, combined_paretos, counts, xcol, ycol,
             continue
         color = get_color(s.color_key, idx)
         sc = ax.scatter(df[xcol], df[ycol], c=color, marker=PARETO_MARKER,
-                        s=45, alpha=1.0,
-                        edgecolors='white', linewidths=0.4,
+                        s=13, alpha=0.55,
+                        edgecolors='none', linewidths=0,
                         label=f'{s.label} ({counts[s.label]})', zorder=3)
         handles.append(sc)
         all_x.extend(df[xcol].values)
@@ -577,7 +577,7 @@ def _plot_pareto_plane(ax, series_order, combined_paretos, counts, xcol, ycol,
     for (xv, yv), cols in coord_colors.items():
         uniq = list(dict.fromkeys(cols))
         if len(uniq) >= 2:
-            _pie_marker(ax, xv, yv, uniq, size=58)
+            _pie_marker(ax, xv, yv, uniq, size=18)
 
     xlabel = OBJECTIVE_LABELS.get(xcol, xcol)
     ylabel = OBJECTIVE_LABELS.get(ycol, ycol)
@@ -815,7 +815,7 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8))
     for ax, (xcol, ycol) in zip(np.atleast_1d(axes), PARETO_PLANES):
         ax.scatter(at[xcol], at[ycol], c=colores, marker=PARETO_MARKER,
-                   s=45, edgecolors='white', linewidths=0.4, zorder=3)
+                   s=13, alpha=0.55, edgecolors='none', linewidths=0, zorder=3)
         ax.set_xlabel(OBJECTIVE_LABELS.get(xcol, xcol))
         ax.set_ylabel(OBJECTIVE_LABELS.get(ycol, ycol))
         ax.set_title(f'{OBJECTIVE_LABELS.get(xcol, xcol)} vs '
@@ -889,8 +889,8 @@ def plot_frente_conjunto_3d(series, pop_size, output_dir, pf_df,
         # llamada, así que la superposición refleja la geometría y no el orden
         # en que se dibujaron los grupos.
         ax.scatter(at['qed'], at['sa'], at['fsp3'], c=colores,
-                   marker=PARETO_MARKER, s=26, depthshade=False,
-                   edgecolors='white', linewidths=0.25)
+                   marker=PARETO_MARKER, s=9, depthshade=False, alpha=0.75,
+                   edgecolors='none', linewidths=0)
         ax.view_init(elev=ISO_ELEV, azim=azim)
         # La caja ortográfica deja aire alrededor de la nube, pero el zoom saca
         # las etiquetas del eje z fuera de su panel: por encima de ~1.05 se
@@ -1306,8 +1306,8 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir):
         sa  = pareto['sa'].values
         n_appeared = pareto['n_runs_appeared'].values
         sc = ax.scatter(qed, sa, c=n_appeared, cmap='plasma', norm=norm,
-                        s=90, alpha=0.85,
-                        edgecolors='#333333', linewidths=0.4, zorder=3)
+                        s=23, alpha=0.6,
+                        edgecolors='none', linewidths=0, zorder=3)
         ax.set_xlabel('QED (↑)', fontsize=11)
         ax.set_ylabel('SA (↓)', fontsize=11)
         ax.set_title(f'{s.label}  ({n_runs} ejecuciones, {len(pareto)} no-dom.)',
