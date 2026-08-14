@@ -628,7 +628,10 @@ def _combined_pareto_fronts(series):
 #   los tres objetivos: no hay umbrales ni ponderaciones de por medio.
 
 # Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
-CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2'}
+# MOPSO entra acá porque en el frente conjunto de candidatos convive con las dos
+# familias de cruce sin pertenecer a ninguna: no tiene operadores.  Su rojo va
+# oscurecido para que no se confunda con el naranja de PCX.
+CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'MOPSO': '#B01818'}
 COMPARTIDA_COLOR = '#7F7F7F'
 
 

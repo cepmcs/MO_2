@@ -73,6 +73,10 @@ OUT_HP         = os.path.join(PLOTS_DIR, "hiperparametros")
 OUT_OPERADORES = os.path.join(PLOTS_DIR, "operadores")
 OUT_ALGORITMOS = os.path.join(PLOTS_DIR, "comparacion_final")
 OUT_BASELINES  = os.path.join(PLOTS_DIR, "baselines")
+# El frente conjunto va aparte: no compara algoritmos entre sí como el resto de
+# la etapa 3, sino que caracteriza qué moléculas sobreviven al unirlos y de dónde
+# salen.  Son preguntas distintas y conviene que no se mezclen en la lectura.
+OUT_FRENTE     = os.path.join(PLOTS_DIR, "frente_conjunto")
 
 # Nombres para el documento (los directorios usan la forma corta).
 DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
@@ -892,6 +896,15 @@ def _test_aporte(por_grupo, runs):
                  'aporte_p': res['p_omnibus']}
 
 
+def _partir_etiqueta(nombre):
+    """'NSGA-II (PCX)' → ('NSGA-II', 'PCX').  Sin paréntesis, el segundo campo
+    queda vacío: es el caso de MOPSO, que no tiene operadores."""
+    if nombre.endswith(')') and '(' in nombre:
+        alg, cruce = nombre.rsplit('(', 1)
+        return alg.strip(), cruce[:-1].strip()
+    return nombre, '---'
+
+
 def write_contribucion_table(series, pf_df, nombre, out_dir,
                              grupo_de=None, etiqueta='Operador'):
     """Tabla LaTeX de la contribución al frente no dominado conjunto.
@@ -902,16 +915,19 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
     supervivientes: es dominancia de Pareto sobre los tres objetivos, sin
     umbrales.
 
-    grupo_de decide sobre qué se agrega — por familia de cruce al comparar
-    operadores, por serie al comparar algoritmos.
+    Las etiquetas del tipo 'NSGA-II (PCX)' se parten en dos columnas, con el
+    algoritmo en \\multirow: repetirlo en cada fila haría creer que son
+    entidades distintas, cuando son dos ramas de la misma.
 
     Devuelve el resumen del contraste para el CSV de la etapa.
     """
     grupo_de = grupo_de or pc._familia
     filas, _ = pc.contribucion_agregada(series, pf_df, grupo_de)
     por_grupo, compartidas, runs = pc.contribucion_por_semilla(series, grupo_de)
-    detalle, resumen = _test_aporte(por_grupo, runs)
+    _, resumen = _test_aporte(por_grupo, runs)
 
+    partidas = [_partir_etiqueta(DISPLAY.get(f['nombre'], f['nombre']))
+                for f in filas]
     total = filas[0]['total'] if filas else 0
     lines = [
         r'\begin{table}[htbp]', r'\centering',
@@ -921,20 +937,34 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         f'se recalcula la no-dominancia global ({total} soluciones).  «Aporta» '
         f'cuenta toda molécula del frente hallada por esa serie, por lo que las '
         f'compartidas suman en cada fila que las encontró; «exclusivas» solo '
-        f'las que no halló ninguna otra.' + (detalle or '') + '}',
+        f'las que no halló ninguna otra.  Las tres últimas columnas son la media '
+        f'de los objetivos sobre lo que cada serie aporta, y describen no cuánto '
+        f'sino qué aporta.}}',
         f'\\label{{tab:contribucion_{nombre.lower()}}}',
-        r'\begin{tabular}{lrrr}', r'\toprule',
-        f'{etiqueta} & Aporta & Exclusivas & \\% \\\\',
+        r'\begin{tabular}{llrrrrrr}', r'\toprule',
+        f'{etiqueta} & Cruce & Aporta & Exclusivas & \\% & QED $\\uparrow$ & '
+        f'SA $\\downarrow$ & Fsp3 $\\uparrow$ \\\\',
         r'\midrule',
     ]
-    for i, f in enumerate(filas):
+    for i, (f, (alg, cruce)) in enumerate(zip(filas, partidas)):
         # Las filas de grupo, si las hay, van separadas: agregan sobre las
         # anteriores y no son sumables con ellas.
         if i == len(series) and len(filas) > len(series):
             lines.append(r'\midrule')
+        # El nombre del algoritmo se escribe una sola vez, abarcando sus ramas.
+        n_ramas = sum(1 for a, _ in partidas if a == alg)
+        primera = i == 0 or partidas[i - 1][0] != alg
+        if primera:
+            if i:
+                lines.append(r'\midrule')
+            celda = (r'\multirow{%d}{*}{%s}' % (n_ramas, _latex_escape(alg))
+                     if n_ramas > 1 else _latex_escape(alg))
+        else:
+            celda = ''
         lines.append(
-            f"{_latex_escape(DISPLAY.get(f['nombre'], f['nombre']))} & "
-            f"{f['aporta']} & {f['exclusiva']} & {_num(100*f['frac'], 1)} \\\\")
+            f"{celda} & {_latex_escape(cruce)} & "
+            f"{f['aporta']} & {f['exclusiva']} & {_num(100*f['frac'], 1)} & "
+            f"{_num(f['qed'], 3)} & {_num(f['sa'], 2)} & {_num(f['fsp3'], 3)} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, f'contribucion_{nombre}.tex'))
 
@@ -1050,23 +1080,37 @@ ALG_METRIC_LABEL = 'hipervolumen'
 ALG_HIGHER_BETTER = True
 
 
-def write_groups_table(res, groups, out_dir):
-    """Las 10 comparaciones por pares, con el resultado resumido en grupos."""
+def write_groups_table(res, groups, out_dir, get_values, labels):
+    """Las 10 comparaciones por pares, con el resultado resumido en grupos.
+
+    Misma estructura que la tabla de operadores: al $p$ lo acompaña el tamaño de
+    efecto, y el ganador va en su propia columna.  Donde el post-hoc no separa no
+    se declara ganador, aunque las medianas ordenen."""
+    vals = {l: np.asarray(get_values(l, ALG_METRIC), dtype=float) for l in labels}
     lines = [
         r'\begin{table}[htbp]', r'\centering',
         f'\\caption{{Comparación entre algoritmos sobre {ALG_METRIC_LABEL}.  '
         f'Test de Friedman con las 20 semillas como bloques '
         f'($p$ = {_fmt_p(res["p_omnibus"])}), seguido de las comparaciones por '
-        f'pares con Wilcoxon de rangos con signo y corrección de Holm.  '
-        f'Grupos homogéneos, de mejor a peor: {fmt_groups(groups)}.}}',
+        f'pares con Wilcoxon de rangos con signo y corrección de Holm '
+        f'($\\alpha = {_num(0.05, 2)}$); $r_{{rb}}$ es la correlación '
+        f'rango-biserial de pares emparejados, con signo positivo cuando gana el '
+        f'primero del par.  Grupos homogéneos, de mejor a peor: '
+        f'{fmt_groups(groups)}.}}',
         r'\label{tab:comparacion_grupos}',
-        r'\begin{tabular}{lcc}', r'\toprule',
-        r'Par & $p$ (Holm) & Significativo \\', r'\midrule',
+        r'\begin{tabular}{lrrl}', r'\toprule',
+        r'Par & $p$ (Holm) & $r_{rb}$ & Mejor \\', r'\midrule',
     ]
     for p in res['pairs']:
-        sig = 'sí' if p['p_holm'] < 0.05 else 'no'
-        lines.append(f"{DISPLAY.get(p['a'], p['a'])} vs {DISPLAY.get(p['b'], p['b'])} "
-                     f"& {_fmt_p(p['p_holm'])} & {sig} \\\\")
+        a, b = p['a'], p['b']
+        r = rank_biserial(vals[a], vals[b])
+        mejor = (DISPLAY.get(a if res['medians'][a] > res['medians'][b] else b,
+                             a if res['medians'][a] > res['medians'][b] else b)
+                 if p['p_holm'] < 0.05 else '---')
+        lines.append(
+            f"{DISPLAY.get(a, a)} vs {DISPLAY.get(b, b)} & "
+            f"{_fmt_p(p['p_holm'])} & "
+            f"{('$+$' if r >= 0 else '$-$') + _num(abs(r), 3)} & {mejor} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
 
     path = os.path.join(out_dir, 'grupos_homogeneos.tex')
@@ -1107,23 +1151,90 @@ def etapa3(args):
         print(f"    {DISPLAY.get(lab, lab):10s} mediana = {res['medians'][lab]:.5f}")
     print("\n  grupos: " + ' > '.join('{' + ', '.join(g) + '}' for g in groups))
 
-    write_groups_table(res, groups, args.out)
+    write_groups_table(res, groups, args.out, get, labels)
     pd.DataFrame([{'a': p['a'], 'b': p['b'], 'p_raw': p['p_raw'],
                    'p_holm': p['p_holm'], 'significativo': p['p_holm'] < 0.05}
                   for p in res['pairs']]).to_csv(
         os.path.join(args.out, 'tests_pares.csv'), index=False)
     print(f"  ✓ {os.path.join(args.out, 'tests_pares.csv')}")
 
-    # El hipervolumen mide la extensión del frente; esto mide quién aportó las
-    # soluciones que sobreviven al juntarlos.  Los dos pueden discrepar.
-    if pf_df is not None:
-        print()
-        write_contribucion_table(series, pf_df, 'finalistas', args.out,
-                                 grupo_de=pc._por_serie, etiqueta='Algoritmo')
-        pc.plot_frente_conjunto(series, 'final', args.out, pf_df,
-                                grupo_de=pc._por_serie)
-        pc.plot_frente_conjunto_3d(series, 'final', args.out, pf_df,
-                                   grupo_de=pc._por_serie)
+    analisis_frente_conjunto(args)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#   Frente conjunto — el pool de candidatos
+#
+#   Va aparte de la etapa 3 porque responde otra pregunta.  La etapa 3 compara
+#   algoritmos a igual presupuesto, una configuración cada uno; acá se juntan
+#   las DOS familias de cruce de cada algoritmo, que es el material que llega a
+#   la fase de afinidad, y se mira qué sobrevive al enfrentarlas y de dónde sale.
+#
+#   Como cada AG aporta dos configuraciones y MOPSO una, los presupuestos no son
+#   comparables: esto caracteriza el pool, no ordena algoritmos.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# La mutación se mantiene fija en las dos ramas para que lo único que cambie
+# entre ellas sea el cruce.
+POOL_COMBOS = [('pcx', f'pcx_{MUT_STD}'), ('sbx', f'sbx_{MUT_STD}')]
+
+
+def _series_pool(winners_dir, finalistas_dir):
+    """Las dos ramas de cruce de cada AG, más MOPSO, que no tiene operadores."""
+    series = []
+    for alg in GA_ALGS:
+        for fam, combo in POOL_COMBOS:
+            cfgs = [d for d in sorted(glob.glob(os.path.join(winners_dir, alg, combo, '*')))
+                    if pc._has_runs(d)]
+            if cfgs:
+                series.append(pc.Series(f'{DISPLAY.get(alg, alg)} ({fam.upper()})',
+                                        cfgs[0]))
+    d = os.path.join(finalistas_dir, 'MOPSO')
+    if pc._has_runs(d):
+        series.append(pc.Series('MOPSO', d))
+    return series
+
+
+def _familia_pool(label):
+    """Agrupa por familia de cruce; MOPSO queda como su propio grupo."""
+    for fam in ('PCX', 'SBX'):
+        if f'({fam})' in label:
+            return fam
+    return 'MOPSO'
+
+
+def analisis_frente_conjunto(args):
+    series = _series_pool(args.winners, args.finalistas)
+    if len(series) < 2:
+        print(f"\n  ⚠ sin datos suficientes en {args.winners}; se omite el "
+              f"frente conjunto")
+        return
+
+    print(f"\n{'='*70}")
+    print("  FRENTE CONJUNTO — pool de candidatos")
+    print(f"  {len(series)} configuraciones: {', '.join(s.label for s in series)}")
+    print(f"{'='*70}\n")
+
+    pf_F, pf_df = pc.build_reference_front(series, None)
+    if pf_df is None:
+        print("  ⚠ no se pudo construir el frente conjunto")
+        return
+    os.makedirs(args.out_frente, exist_ok=True)
+
+    # El frente en sí, con la atribución: son las moléculas candidatas que pasan
+    # a la fase de afinidad, así que conviene tenerlas y no solo su resumen.
+    at = pc.atribuir_frente(series, pf_df, pc._por_serie)
+    at.to_csv(os.path.join(args.out_frente, 'frente_pool.csv'), index=False)
+    print(f"  ✓ frente_pool.csv  ({len(at)} moléculas)")
+
+    # La tabla desglosa por configuración —es la pregunta de cuánto aporta cada
+    # rama—; las figuras agrupan por familia, que con nueve colores serían
+    # ilegibles y además la separación que importa es la de las regiones.
+    write_contribucion_table(series, pf_df, 'pool', args.out_frente,
+                             grupo_de=pc._por_serie, etiqueta='Configuración')
+    pc.plot_frente_conjunto(series, 'pool', args.out_frente, pf_df,
+                            grupo_de=_familia_pool)
+    pc.plot_frente_conjunto_3d(series, 'pool', args.out_frente, pf_df,
+                               grupo_de=_familia_pool)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1258,11 +1369,15 @@ def etapa4(args):
 #   Moléculas representativas
 #
 #   Una imagen con las moléculas de mayor QED del frente de cada algoritmo.  El
-#   frente se arma juntando las moléculas de las 20 ejecuciones, deduplicando
-#   por SMILES y recalculando la dominancia global.
+#   frente se arma juntando las moléculas de las 20 ejecuciones de sus DOS ramas
+#   de cruce —las mismas configuraciones del pool—, deduplicando por SMILES y
+#   recalculando la dominancia global.
+#
+#   Va con el frente conjunto porque ilustra el material que llega a la fase de
+#   afinidad, no las configuraciones que se compararon en la etapa 3.
 # ═══════════════════════════════════════════════════════════════════════════
 
-MOLECULAS_OUT = os.path.join(OUT_ALGORITMOS, "moleculas_representativas.png")
+MOLECULAS_OUT = os.path.join(OUT_FRENTE, "moleculas_representativas.png")
 
 N_MOLECULAS = 5      # por algoritmo
 
@@ -1272,11 +1387,24 @@ SA_MAX = 3.0
 FSP3_RANGO = (0.40, 0.60)
 
 
-def load_front(alg, finalistas):
-    """Frente no dominado global de un algoritmo, sobre sus 20 ejecuciones."""
-    df = pc.load_pareto_molecules(os.path.join(finalistas, alg))
-    if df.empty:
-        return df
+def load_front(alg, winners_dir, finalistas_dir):
+    """Frente no dominado de un algoritmo sobre las configuraciones del pool.
+
+    Para los AG son sus dos ramas de cruce juntas; MOPSO no tiene operadores y
+    va con su única configuración."""
+    dfs = []
+    for _, combo in POOL_COMBOS:
+        cfgs = [d for d in sorted(glob.glob(os.path.join(winners_dir, alg, combo, '*')))
+                if pc._has_runs(d)]
+        if cfgs:
+            dfs.append(pc.load_pareto_molecules(cfgs[0]))
+    if not dfs:
+        d = os.path.join(finalistas_dir, alg)
+        if pc._has_runs(d):
+            dfs.append(pc.load_pareto_molecules(d))
+    if not dfs:
+        return pd.DataFrame()
+    df = pd.concat(dfs, ignore_index=True)
     return pc._compute_non_dominated(df.drop_duplicates(subset='smiles'))
 
 
@@ -1317,7 +1445,7 @@ def render(smiles, size=(420, 320)):
 def moleculas(args):
     algs = [a for a in pc.ALGORITHM_ORDER
             if pc._has_runs(os.path.join(args.finalistas, a))]
-    fronts = {a: load_front(a, args.finalistas) for a in algs}
+    fronts = {a: load_front(a, args.winners, args.finalistas) for a in algs}
     fronts = {a: f for a, f in fronts.items() if not f.empty}
     if not fronts:
         print(f"No se encontraron frentes en {args.finalistas}")
@@ -1413,6 +1541,10 @@ def main():
                         help="Comparación estadística entre algoritmos.")
     p3.add_argument('--finalistas', default=FINALISTAS_DIR)
     p3.add_argument('--out', default=OUT_ALGORITMOS)
+    p3.add_argument('--out-frente', default=OUT_FRENTE,
+                    help="Directorio del análisis del frente conjunto.")
+    p3.add_argument('--winners', default=WINNERS_DIR,
+                    help="De acá salen las dos ramas de cruce del pool.")
     p3.set_defaults(func=etapa3)
 
     p4 = sub.add_parser('etapa4', formatter_class=fmt,
@@ -1428,6 +1560,8 @@ def main():
                         help="Moléculas representativas del frente de cada "
                              "algoritmo.")
     pm.add_argument('--finalistas', default=FINALISTAS_DIR)
+    pm.add_argument('--winners', default=WINNERS_DIR,
+                    help="De acá salen las dos ramas de cruce de cada algoritmo.")
     pm.add_argument('--out', default=MOLECULAS_OUT)
     pm.set_defaults(func=moleculas)
 
