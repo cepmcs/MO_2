@@ -27,6 +27,7 @@ La carga de resultados y las gráficas comunes viven en plot_comparison.py.
 
 import io
 import os
+import re
 import math
 import glob
 import argparse
@@ -87,16 +88,25 @@ DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
 _latex_escape = pc._latex_escape
 
 
+def _num(x, dec):
+    """Número con el separador decimal del documento (pc.SEP_DECIMAL)."""
+    return f'{x:.{dec}f}'.replace('.', pc.SEP_DECIMAL)
+
+
 def _fmt_p(p):
     if p is None or pd.isna(p):
         return '---'
-    return r'$<$0.001' if p < 1e-3 else f'{p:.3f}'
+    return f'$<$0{pc.SEP_DECIMAL}001' if p < 1e-3 else _num(p, 3)
 
 
 def fmt_groups(groups):
-    """'{A, B} $>$ {C}' con los nombres de presentación."""
-    return ' $>$ '.join('\\{' + ', '.join(DISPLAY.get(x, x) for x in g) + '\\}'
-                        for g in groups)
+    """'{A, B} $>$ {C}' con los nombres de presentación.
+
+    Escapa los nombres: los combos de operadores llevan guion bajo (pcx\\_pm) y
+    sin escapar rompen la compilación."""
+    return ' $>$ '.join(
+        '\\{' + ', '.join(_latex_escape(DISPLAY.get(x, x)) for x in g) + '\\}'
+        for g in groups)
 
 
 def holm(pvals):
@@ -111,6 +121,32 @@ def holm(pvals):
         prev = max(prev, min(val, 1.0))    # monotonía
         adj[idx] = prev
     return adj
+
+
+def rank_biserial(x, y):
+    """Correlación rango-biserial de pares emparejados (Kerby, 2014).
+
+    Es el tamaño de efecto que acompaña al Wilcoxon de rangos con signo: sobre
+    los rangos de |x - y|, la suma de los que favorecen a x menos la de los que
+    favorecen a y, dividida por el total.  Va de -1 a +1; el signo dice quién
+    gana y el valor absoluto qué fracción de la evidencia lo respalda.
+
+    Satura en ±1 cuando todos los pares van en la misma dirección, así que dice
+    que el efecto es unánime, no cuán grande es en unidades del indicador.
+    Verificado contra pingouin.wilcoxon()['RBC'].
+    """
+    d = np.asarray(x, dtype=float) - np.asarray(y, dtype=float)
+    d = d[d != 0]                      # los empates exactos no aportan rango
+    if len(d) == 0:
+        return 0.0
+    r = stats.rankdata(np.abs(d))
+    return float((r[d > 0].sum() - r[d < 0].sum()) / r.sum())
+
+
+# No se etiqueta la magnitud (pequeño/mediano/grande): los umbrales que circulan
+# se derivan de convertir los cortes de Cohen a distintas escalas y no coinciden
+# entre fuentes, ninguna pensada para la versión de pares emparejados.  El valor
+# se reporta crudo.
 
 
 def compare_indicator(get_values, labels, col):
@@ -396,13 +432,106 @@ def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
     fig.supylabel(f'{label} →', fontsize=12)
     fig.suptitle(f'Selección de hiperparámetros: {label.lower()} contra validez',
                  fontsize=15, fontweight='bold')
-    fig.text(0.5, 0.004,
-             'Cada punto es una de las configuraciones del grid, con validez e '
-             f'{label.lower()} medianos sobre las 20 semillas.  Con borde negro, '
-             'la configuración elegida en cada bloque.',
-             ha='center', va='bottom', fontsize=10, color='#555555')
-    fig.tight_layout(rect=[0.01, 0.065, 1, 0.98])
+    fig.tight_layout(rect=[0.01, 0.02, 1, 0.98])
     fname = f'{metric}_vs_validity.png'
+    fig.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  ✓ {fname}")
+
+
+# Combinaciones de operadores tal como aparecen en el grid, y su codificación:
+# el color lleva el cruce y la trama la mutación, de modo que se distinguen las
+# cuatro sin gastar cuatro tonos y sin depender del color en impresión.
+EFECTO_COMBOS = [('pcx', 'pm'), ('pcx', 'gauss'), ('sbx', 'pm'), ('sbx', 'gauss')]
+EFECTO_TRAMA = {'pm': None, 'gauss': '///'}
+# Naranja y azul de Okabe-Ito (los mismos con que plot_comparison separa PCX de
+# SBX) y el rojo de MOPSO oscurecido: el rojo puro queda cerca del naranja en
+# pantallas de gama amplia, y bajar la luminosidad los separa igual.
+EFECTO_COLOR = {'pcx': '#D55E00', 'sbx': '#0072B2', 'pso': '#B01818'}
+
+# Perillas de cada familia de algoritmo: (columna, etiqueta corta).
+EFECTO_F_GA = [('budget', 'pob$\\times$gen'), ('cx_prob', '$P$(cruce)'),
+               ('mut_prob', '$P$(mut.)')]
+EFECTO_F_PSO = [('budget', 'pob$\\times$gen'), ('w', '$w$'),
+                ('c1', '$c_1$'), ('c2', '$c_2$')]
+
+
+def _efecto_factor(g, factor, metric):
+    """Diferencia entre el mejor y el peor nivel del factor, en mediana de la
+    métrica.  Se calcula siempre DENTRO de una combinación de operadores: sobre
+    el grid entero el número se infla, porque el cruce domina y cada nivel queda
+    con una distribución bimodal cuya mediana se mueve por el reparto entre modos
+    y no por el factor."""
+    m = g.groupby(factor, observed=True)[metric].median()
+    return float(m.max() - m.min()) if len(m) > 1 else np.nan
+
+
+def plot_efectos_hp(df, metric, out_dir):
+    """Cuánto mueve cada hiperparámetro a la métrica, un panel por algoritmo.
+
+    Responde la pregunta que deja abierta el grid —barrimos 513 configuraciones,
+    ¿cuál perilla importó?— y complementa a la figura de selección, que muestra
+    dónde cae cada configuración pero no qué factor explica la dispersión.  El
+    eje vertical es común para que las alturas sean comparables entre paneles."""
+    label, _ = HP_METRICS[metric]
+    algs = [a for a in GA_ALGS if a in set(df['algorithm'])]
+    con_pso = 'MOPSO' in set(df['algorithm'])
+    if not algs:
+        return
+
+    n = len(algs) + (1 if con_pso else 0)
+    fig, axes = plt.subplots(1, n, figsize=(3 * n, 3.6), squeeze=False,
+                             sharey=True)
+    axes = axes[0]
+    ancho = 0.20
+
+    for ax, alg in zip(axes, algs):
+        g = df[df['algorithm'] == alg]
+        x = np.arange(len(EFECTO_F_GA))
+        for k, (cx, mu) in enumerate(EFECTO_COMBOS):
+            sel = g[(g['crossover'] == cx) & (g['mutation'] == mu)]
+            ax.bar(x + (k - 1.5) * ancho,
+                   [_efecto_factor(sel, f, metric) for f, _ in EFECTO_F_GA],
+                   ancho, color=EFECTO_COLOR[cx], hatch=EFECTO_TRAMA[mu],
+                   edgecolor='white', linewidth=0.6, zorder=3)
+        ax.set_xticks(x)
+        ax.set_xticklabels([e for _, e in EFECTO_F_GA], fontsize=9)
+        ax.set_title(DISPLAY.get(alg, alg), fontsize=11, fontweight='bold', pad=8)
+
+    if con_pso:
+        ax = axes[len(algs)]
+        g = df[df['algorithm'] == 'MOPSO']
+        x = np.arange(len(EFECTO_F_PSO))
+        ax.bar(x, [_efecto_factor(g, f, metric) for f, _ in EFECTO_F_PSO], 0.62,
+               color=EFECTO_COLOR['pso'], edgecolor='white', linewidth=0.6,
+               zorder=3)
+        ax.set_xticks(x)
+        ax.set_xticklabels([e for _, e in EFECTO_F_PSO], fontsize=9)
+        ax.set_title(DISPLAY.get('MOPSO', 'MOPSO'), fontsize=11,
+                     fontweight='bold', pad=8)
+
+    for ax in axes:
+        ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=0)
+        ax.set_axisbelow(True)
+        for lado in ('top', 'right'):
+            ax.spines[lado].set_visible(False)
+
+    axes[0].set_ylabel(f'Efecto sobre {label.lower()}', fontsize=10)
+    manos = [plt.Rectangle((0, 0), 1, 1, facecolor=EFECTO_COLOR[cx],
+                           hatch=EFECTO_TRAMA[mu], edgecolor='white',
+                           linewidth=0.6) for cx, mu in EFECTO_COMBOS]
+    etiqs = [f'{cx.upper()} + {"PM" if mu == "pm" else "gaussiana"}'
+             for cx, mu in EFECTO_COMBOS]
+    if con_pso:
+        manos.append(plt.Rectangle((0, 0), 1, 1, facecolor=EFECTO_COLOR['pso']))
+        etiqs.append('MOPSO (sin operadores)')
+    fig.legend(manos, etiqs, loc='lower center', ncol=len(etiqs), frameon=False,
+               fontsize=9.5, bbox_to_anchor=(0.5, -0.13))
+
+    fig.suptitle(f'Efecto de los hiperparámetros sobre {label.lower()}',
+                 fontsize=13, fontweight='bold', y=1.04)
+    fig.tight_layout()
+    fname = f'efectos_{metric}.png'
     fig.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -455,10 +584,15 @@ def write_selection_summary(per_alg, metric, out_dir):
         if alg_cell and prev is not None:
             lines.append(r'\midrule')
         prev = r['algorithm']
+        # La etiqueta de configuración trae los hiperparámetros con punto (viene
+        # de config_label, que también alimenta el CSV); acá se ajusta al
+        # separador del documento.
+        cfg = re.sub(r'(\d)\.(\d)', rf'\1{pc.SEP_DECIMAL}\2',
+                     _latex_escape(r['config']))
         lines.append(
             f"{alg_cell} & {_latex_escape(r['operators']) or '---'} & "
-            f"{_latex_escape(r['config'])} & {r['avg_rank']:.2f} & "
-            f"{r['mean']:.4f} $\\pm$ {r['std']:.4f} \\\\")
+            f"{cfg} & {_num(r['avg_rank'], 2)} & "
+            f"{_num(r['mean'], 4)} $\\pm$ {_num(r['std'], 4)} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, 'selected_configs.tex'))
 
@@ -546,6 +680,7 @@ def etapa1(args):
     if per_alg:
         print(f"\n{'─'*66}\n  Salidas\n{'─'*66}")
         plot_seleccion_grid(df, algs, args.metric, args.out, per_alg)
+        plot_efectos_hp(df, args.metric, args.out)
         write_selection_summary(per_alg, args.metric, args.out)
 
     print(f"\n{'='*66}")
@@ -590,26 +725,128 @@ def _series_operadores(alg, winners_dir):
     return series
 
 
-def write_tests_table(res, alg, out_dir, label):
-    """Tabla LaTeX de las 6 comparaciones por pares sobre el indicador de
-    decisión.  La magnitud del efecto no se repite acá: está en la tabla de
-    indicadores, como media ± desvío por combo."""
+# ─── Análisis de operadores en dos pasos ─────────────────────────────────────
+#
+#   El grid es un 2×2 (cruce × mutación).  Se recorre en dos pasos:
+#     1. Dentro de cada familia de cruce se contrastan las dos mutaciones y se
+#        elige una: la ganadora si el test las separa, la estándar si no.
+#     2. Los dos representantes así elegidos se enfrentan entre sí.
+#   Los dos criterios se reportan juntos: el hipervolumen porque es el indicador
+#   de referencia, y la contribución al frente conjunto porque es el que decide.
+
+FAMILIAS = [('pcx', 'PCX'), ('sbx', 'SBX')]
+MUT_STD = 'pm'          # la estándar; se conserva cuando el test no separa
+CRITERIOS = [('hv', 'Hipervolumen $\\uparrow$', 4),
+             ('aporte', 'Contribución (\\%) $\\uparrow$', 1)]
+
+
+def _wilcoxon(a, b):
+    """p de Wilcoxon de rangos con signo sobre dos series pareadas."""
+    try:
+        return float(stats.wilcoxon(np.asarray(a, float), np.asarray(b, float)).pvalue)
+    except ValueError:      # todas las diferencias son cero
+        return 1.0
+
+
+def datos_operadores(series):
+    """Valores por semilla de cada combo, en los dos criterios.
+
+    El hipervolumen sale de metrics.csv.  La contribución se recalcula dentro de
+    cada semilla: se juntan los frentes de los cuatro combos, se recalcula la
+    no-dominancia y se mide qué fracción halló cada uno.  Hacerlo por semilla —y
+    no sobre las 20 juntas— es lo que da una distribución que admite test."""
+    labels = [s.label for s in series]
+    mols = {s.label: pc.load_pareto_molecules(s.pop_dir) for s in series}
+    runs = sorted(set.intersection(*(set(d['run']) for d in mols.values())))
+
+    hv = {}
+    for s in series:
+        m = pd.concat([pd.read_csv(f) for f in
+                       sorted(glob.glob(os.path.join(s.pop_dir, 'run_*', 'metrics.csv')))])
+        hv[s.label] = m.sort_values('run')['hypervolume'].values[:len(runs)]
+
+    aporte = {l: [] for l in labels}
+    for run in runs:
+        trozos = []
+        for l, df in mols.items():
+            t = df[df['run'] == run].copy()
+            t['combo'] = l
+            trozos.append(t)
+        junto = pd.concat(trozos, ignore_index=True)
+        frente = pc._compute_non_dominated(
+            junto.drop_duplicates(['smiles', 'combo'])).drop_duplicates('smiles')
+        vivos = set(frente['smiles'])
+        for l in labels:
+            hallo = set(junto.loc[junto['combo'] == l, 'smiles'])
+            aporte[l].append(100 * len(vivos & hallo) / len(vivos))
+
+    return {'hv': hv, 'aporte': {l: np.array(v) for l, v in aporte.items()},
+            'runs': runs}
+
+
+def write_tabla_operadores(res, groups, labels, alg, out_dir, get_values, col):
+    """La tabla de la etapa: las seis comparaciones por pares entre los cuatro
+    combos, cada una con su $p$ corregido y su tamaño de efecto.
+
+    Se listan las seis y no solo las que involucran al seleccionado: la de las
+    dos mutaciones dentro de SBX no interviene en la decisión pero sí es
+    significativa en algunos algoritmos, y omitirla dejaría ese resultado
+    únicamente insinuado por los grupos homogéneos.
+
+    El $p$ dice si hay diferencia y el $r_{rb}$ de qué tamaño; sin el segundo,
+    dos pares igualmente 'no significativos' parecen equivalentes cuando no lo
+    son.  Quién gana se resuelve en los grupos del caption, no par a par.
+
+    Devuelve el campeón: dentro del grupo ganador se conserva la mutación
+    estándar si está, porque el post-hoc no separa a sus miembros."""
+    orden = sorted(labels, key=lambda l: -res['medians'][l])
+    top = groups[0]
+    campeon = next((l for l in top if l.endswith(f'_{MUT_STD}')),
+                   max(top, key=lambda l: res['medians'][l]))
+    vals = {l: np.asarray(get_values(l, col), dtype=float) for l in labels}
+    medianas = ', '.join(f'{_latex_escape(l)} {_num(res["medians"][l], 4)}'
+                         for l in orden)
+
     lines = [
         r'\begin{table}[htbp]', r'\centering',
-        f'\\caption{{Comparación de operadores en {_latex_escape(alg)} sobre '
-        f'{label.lower()}.  Test de Friedman con las 20 semillas como bloques '
+        f'\\caption{{Comparación de operadores en '
+        f'{_latex_escape(DISPLAY.get(alg, alg))} sobre hipervolumen.  Test de '
+        f'Friedman con las 20 semillas como bloques '
         f'($p$ = {_fmt_p(res["p_omnibus"])}), seguido de las comparaciones por '
-        f'pares con Wilcoxon de rangos con signo y corrección de Holm.}}',
-        f'\\label{{tab:ops_tests_{alg.lower()}}}',
-        r'\begin{tabular}{lcc}', r'\toprule',
-        r'Par & $p$ (Holm) & Significativo \\', r'\midrule',
+        f'pares con Wilcoxon de rangos con signo y corrección de Holm '
+        f'($\\alpha = {_num(0.05, 2)}$); $r_{{rb}}$ es la correlación '
+        f'rango-biserial de '
+        f'pares emparejados, con signo positivo cuando gana el primero del par.  '
+        f'Medianas: {medianas}.  Grupos homogéneos, de mejor a peor: '
+        f'{fmt_groups(groups)}.  Como el post-hoc no separa a los miembros del '
+        f'grupo ganador, se selecciona el de mutación polinomial por ser la '
+        f'estándar ({_latex_escape(campeon)}).}}',
+        f'\\label{{tab:ops_{alg.lower()}}}',
+        r'\begin{tabular}{lrrl}', r'\toprule',
+        r'Par & $p$ (Holm) & $r_{rb}$ & Mejor \\', r'\midrule',
     ]
-    for pr in res['pairs']:
-        sig = 'sí' if pr['p_holm'] < 0.05 else 'no'
-        lines.append(f"{_latex_escape(pr['a'])} vs {_latex_escape(pr['b'])} & "
-                     f"{_fmt_p(pr['p_holm'])} & {sig} \\\\")
+    for p in res['pairs']:
+        a, b = p['a'], p['b']
+        r = rank_biserial(vals[a], vals[b])
+        # Donde el post-hoc no separa no se declara ganador: la mediana ordena
+        # igual, pero llamarlo «mejor» afirmaría una diferencia que no hay.
+        mejor = (_latex_escape(a if res['medians'][a] > res['medians'][b] else b)
+                 if p['p_holm'] < 0.05 else '---')
+        lines.append(
+            f"{_latex_escape(a)} vs {_latex_escape(b)} & "
+            f"{_fmt_p(p['p_holm'])} & "
+            f"{('$+$' if r >= 0 else '$-$') + _num(abs(r), 3)} & "
+            f"{mejor} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
-    _write_tex(lines, os.path.join(out_dir, f'tests_{alg}.tex'))
+    _write_tex(lines, os.path.join(out_dir, f'operadores_{alg}.tex'))
+
+    print(f"  grupos: " + ' > '.join('{' + ', '.join(g) + '}' for g in groups))
+    print(f"  campeón: {campeon}")
+    for p in res['pairs']:
+        r = rank_biserial(vals[p['a']], vals[p['b']])
+        print(f"    {p['a']:10s} vs {p['b']:11s} p={p['p_holm']:8.4f}  "
+              f"r_rb={r:+.3f}")
+    return campeon
 
 
 def _test_aporte(por_grupo, runs):
@@ -631,10 +868,10 @@ def _test_aporte(por_grupo, runs):
         g = a if por_grupo[a].mean() > por_grupo[b].mean() else b
         otro = b if g == a else a
         txt = (f'  Repitiendo el cálculo dentro de cada semilla, '
-               f'{_latex_escape(g)} aporta {por_grupo[g].mean():.1f}\\% $\\pm$ '
-               f'{por_grupo[g].std(ddof=1):.1f} frente a '
-               f'{por_grupo[otro].mean():.1f}\\% $\\pm$ '
-               f'{por_grupo[otro].std(ddof=1):.1f}, en '
+               f'{_latex_escape(g)} aporta {_num(por_grupo[g].mean(), 1)}\\% $\\pm$ '
+               f'{_num(por_grupo[g].std(ddof=1), 1)} frente a '
+               f'{_num(por_grupo[otro].mean(), 1)}\\% $\\pm$ '
+               f'{_num(por_grupo[otro].std(ddof=1), 1)}, en '
                f'{sum(por_grupo[g] > por_grupo[otro])} de las {len(runs)} '
                f'semillas (Wilcoxon de rangos con signo, $p$ = {_fmt_p(p)}).')
         return txt, {'aporte_grupo': g,
@@ -686,7 +923,7 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         f'compartidas suman en cada fila que las encontró; «exclusivas» solo '
         f'las que no halló ninguna otra.' + (detalle or '') + '}',
         f'\\label{{tab:contribucion_{nombre.lower()}}}',
-        r'\begin{tabular}{lccc}', r'\toprule',
+        r'\begin{tabular}{lrrr}', r'\toprule',
         f'{etiqueta} & Aporta & Exclusivas & \\% \\\\',
         r'\midrule',
     ]
@@ -697,7 +934,7 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
             lines.append(r'\midrule')
         lines.append(
             f"{_latex_escape(DISPLAY.get(f['nombre'], f['nombre']))} & "
-            f"{f['aporta']} & {f['exclusiva']} & {100*f['frac']:.1f} \\\\")
+            f"{f['aporta']} & {f['exclusiva']} & {_num(100*f['frac'], 1)} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, f'contribucion_{nombre}.tex'))
 
@@ -715,19 +952,6 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
             f'{g} {v.mean():.1f}%±{v.std(ddof=1):.1f}' for g, v in por_grupo.items())
         print(f"  por semilla: {detalle_txt}   compartidas {compartidas.mean():.1f}%")
     return resumen
-
-
-def _filas_por_cruce(series):
-    """Agrupa los combos por operador de cruce, en el orden de COMBO_DIRS.
-
-    Los cuatro frentes en un mismo panel se tapan entre sí en la zona densa, y
-    la diferencia que importa es entre familias de cruce (dentro de cada una,
-    las dos mutaciones no se separan en el test).  Una fila por familia deja dos
-    series por panel y la comparación pasa a ser fila contra fila."""
-    filas = {}
-    for s in series:
-        filas.setdefault(s.label.split('_')[0].upper(), []).append(s.label)
-    return list(filas.items()) if len(filas) > 1 else None
 
 
 def analyze_operators(alg, winners_dir, out_root, decision_col):
@@ -755,38 +979,38 @@ def analyze_operators(alg, winners_dir, out_root, decision_col):
     # Las salidas de la sección 3.2: tablas de indicadores, frentes por combo y
     # la atribución del frente conjunto (tabla + figura).
     pc.generate_latex_comparison_tables(series, alg, out_dir, get_values)
-    pc.plot_pareto_comparison(series, alg, out_dir,
-                              groups=_filas_por_cruce(series))
-    pc.plot_pareto_qed_sa_grid(series, alg, out_dir)
+    # Los frentes de cada combo por separado no se dibujan acá: en un mismo panel
+    # se tapan entre sí, y la pregunta de esta etapa —quién sobrevive al juntarlos—
+    # la responde mejor el frente conjunto de más abajo.
+    for modo in pc.GRID_COLOR_MODES:
+        pc.plot_pareto_qed_sa_grid(series, alg, out_dir, color_by=modo)
 
-    aporte = {}
     if pf_df is not None:
-        aporte = write_contribucion_table(series, pf_df, alg, out_dir)
+        # La tabla de contribución por combo no se emite en esta etapa: lo que
+        # decide está en las dos tablas de operadores de más abajo.  La figura
+        # del frente conjunto sí, que es la que muestra el mecanismo.
         pc.plot_frente_conjunto(series, alg, out_dir, pf_df)
 
-    # Test: solo sobre el indicador de decisión.  Los demás indicadores se
-    # reportan de forma descriptiva en las tablas de comparación.
+    # La comparación de operadores, sobre el indicador de decisión.
     label, higher = dict((c, (l, h)) for c, l, h in OP_INDICATORS)[decision_col]
     res = compare_indicator(get_values, labels, decision_col)
     if res is None:
         print(f"  ⚠ sin datos de {decision_col}; se omite el test")
         return None
 
-    n_sig = sum(1 for p in res['pairs'] if p['p_holm'] < 0.05)
-    print(f"  Friedman ({label}): p = {res['p_omnibus']:.4g}")
-    print(f"  pares significativos tras Holm: {n_sig} de {len(res['pairs'])}")
-
-    write_tests_table(res, alg, out_dir, label)
-
     groups = homogeneous_groups(res, labels, res['medians'], higher)
-    txt = ' > '.join('{' + ', '.join(g) + '}' for g in groups)
-    print(f"  grupos homogéneos: {txt}")
+    n_sig = sum(1 for p in res['pairs'] if p['p_holm'] < 0.05)
+    print(f"  Friedman ({label}): p = {res['p_omnibus']:.4g}   "
+          f"({n_sig}/{len(res['pairs'])} pares significativos)")
+    campeon = write_tabla_operadores(res, groups, labels, alg, out_dir,
+                                     get_values, decision_col)
 
-    return {'algorithm': alg, 'p_friedman': res['p_omnibus'],
+    return {'algorithm': alg, 'campeon': campeon,
+            'p_friedman': res['p_omnibus'],
             'n_pares_sig': n_sig, 'n_pares': len(res['pairs']),
-            'grupos': txt,
+            'grupos': ' > '.join('{' + ', '.join(g) + '}' for g in groups),
             'mejor_grupo': ', '.join(groups[0]),
-            **aporte}
+            'mediana': round(res['medians'][campeon], 6)}
 
 
 def etapa2(args):
@@ -954,7 +1178,7 @@ def write_baseline_tables(res, groups, medians, stds, labels, metric_label,
         elif i == n_moea:
             tipo = r'\multirow{%d}{*}{Baseline}' % (len(labels) - n_moea)
         lines.append(f"{tipo} & {DISPLAY.get(lab, lab)} & "
-                     f"${medians[lab]:.4f} \\pm {stds[lab]:.4f}$ \\\\")
+                     f"${_num(medians[lab], 4)} \\pm {_num(stds[lab], 4)}$ \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, 'comparacion.tex'))
 

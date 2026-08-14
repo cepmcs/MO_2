@@ -1092,6 +1092,18 @@ def _compute_uniqueness(series):
     return results
 
 
+# Separador decimal de todas las tablas LaTeX, en los dos módulos (analisis.py
+# lo toma de acá).  Para coma usar '{,}': las llaves hacen que en modo matemático
+# LaTeX la trate como símbolo ordinario y no como puntuación, que llevaría un
+# espacio detrás.
+SEP_DECIMAL = '.'
+
+
+def _num_es(x, fmt):
+    """Número con el separador decimal del documento."""
+    return f'{x:{fmt}}'.replace('.', SEP_DECIMAL)
+
+
 def _latex_escape(s):
     """Escapa caracteres especiales de LaTeX en texto (p. ej. el guion bajo
     de nombres de operadores como pcx_gauss → pcx\\_gauss)."""
@@ -1161,7 +1173,7 @@ def _write_latex_comparison_table(series, col_values, metrics_cfg,
                 cells.append('--')
                 continue
             m, sd = means[(s.label, col)], stds[(s.label, col)]
-            body = f'{m:{fmt}} \\pm {sd:{fmt}}'
+            body = f'{_num_es(m, fmt)} \\pm {_num_es(sd, fmt)}'
             cell = f'$\\mathbf{{{body}}}$' if best.get(col) == s.label else f'${body}$'
             cells.append(cell)
         lines.append(' & '.join(cells) + r' \\')
@@ -1260,12 +1272,29 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
 
 
 
-def plot_pareto_qed_sa_grid(series, pop_size, output_dir):
+# Variantes de color del grid QED vs SA.  Los dos paneles comparten geometría y
+# responden preguntas distintas, así que se generan como archivos separados:
+#   nruns → ¿el hallazgo se repite entre semillas, o lo vio una sola?
+#   fsp3  → ¿dónde cae el tercer objetivo sobre el compromiso QED-SA?
+# El sufijo va en el nombre del archivo para que no se confundan.
+GRID_COLOR_MODES = {
+    'nruns': dict(col='n_runs_appeared', cmap='plasma',
+                  label='Nº de ejecuciones en que aparece'),
+    'fsp3':  dict(col='fsp3', cmap='viridis', label='Fsp3 (↑)'),
+}
+
+
+def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
     """Genera UNA imagen con un panel por serie (los 5 separados, no
     superpuestos), mostrando solo el frente de Pareto QED vs SA.
     Cada serie combina las moléculas de sus runs, elimina duplicados de
     SMILES y recalcula el frente no-dominado global.
-    Color: plasma según nº de runs en que aparece cada molécula."""
+
+    color_by elige qué se codifica en color (ver GRID_COLOR_MODES)."""
+    if color_by not in GRID_COLOR_MODES:
+        raise ValueError(f"color_by debe ser uno de {list(GRID_COLOR_MODES)}")
+    modo = GRID_COLOR_MODES[color_by]
+
     # Recolectar frente por serie
     paretos = []   # (s, pareto_df, n_runs)
     for s in series:
@@ -1282,30 +1311,42 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir):
             continue
         pareto = pareto.merge(run_counts, on='smiles', how='left')
         pareto['n_runs_appeared'] = pareto['n_runs_appeared'].fillna(1).astype(int)
-        paretos.append((s, pareto, n_runs))
+        if modo['col'] not in pareto.columns:
+            continue
+        # Los valores altos se dibujan últimos para que el grueso del frente no
+        # los tape: son justamente los que interesa ver.
+        paretos.append((s, pareto.sort_values(modo['col']), n_runs))
 
     if not paretos:
         print("  ⚠ Sin datos de Pareto para grid QED vs SA")
         return
 
-    # Normalización global: 1 run → violeta, max_runs → amarillo
-    global_max_runs = max(nr for _, _, nr in paretos)
+    if color_by == 'fsp3':
+        # Escala absoluta: Fsp3 está acotado a [0,1] por definición, y fijarla
+        # hace comparables los paneles entre sí.  Con una escala por-datos, un
+        # panel sin extremos se vería igual de "caliente" que uno lleno.
+        norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
+    else:
+        # 1 run → violeta, max_runs → amarillo
+        global_max_runs = max(nr for _, _, nr in paretos)
+        norm = mcolors.Normalize(vmin=1, vmax=max(global_max_runs, 2))
 
     n_plots = len(paretos)
-    ncols = min(3, n_plots)
+    # Con 4 series (los combos de operadores) una grilla 2×2 queda pareja; con
+    # 3 columnas sobraría una celda vacía.  Con 5 (los algoritmos) 3+2 es lo mejor.
+    ncols = 2 if n_plots == 4 else min(3, n_plots)
     nrows = math.ceil(n_plots / ncols)
     fig, axes = plt.subplots(nrows, ncols,
                              figsize=(6.5 * ncols, 5.5 * nrows),
                              squeeze=False, constrained_layout=True)
     axes_flat = axes.flatten()
 
-    norm = mcolors.Normalize(vmin=1, vmax=max(global_max_runs, 2))
     sc = None
     for ax, (s, pareto, n_runs) in zip(axes_flat, paretos):
         qed = pareto['qed'].values
         sa  = pareto['sa'].values
-        n_appeared = pareto['n_runs_appeared'].values
-        sc = ax.scatter(qed, sa, c=n_appeared, cmap='plasma', norm=norm,
+        sc = ax.scatter(qed, sa, c=pareto[modo['col']].values,
+                        cmap=modo['cmap'], norm=norm,
                         s=23, alpha=0.6,
                         edgecolors='none', linewidths=0, zorder=3)
         ax.set_xlabel('QED (↑)', fontsize=11)
@@ -1321,16 +1362,18 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir):
     if sc is not None:
         cbar = fig.colorbar(sc, ax=axes.ravel().tolist(), orientation='horizontal',
                             shrink=0.6, pad=0.06, aspect=35)
-        cbar.set_label('Nº de ejecuciones en que aparece', fontsize=11)
+        cbar.set_label(modo['label'], fontsize=11)
 
     title = 'Frentes de Pareto QED vs SA por algoritmo'
     alg = _alg_from_output_dir(output_dir)
     if alg:
         title = f'Frentes de Pareto QED vs SA por operador - {alg}'
+    # Qué codifica el color no va en el título: lo dice la colorbar, y el detalle
+    # va en el pie de figura del documento.
 
     fig.suptitle(title,
                  fontsize=14, fontweight='bold')
-    fname = f"pareto_qed_sa_grid_pop{pop_size}.png"
+    fname = f"pareto_qed_sa_grid_{color_by}_pop{pop_size}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -1534,9 +1577,11 @@ def _generate_report(series, pop_size, output_dir, report_label):
 
 
 
-    # 9. Grid QED vs SA: los N algoritmos separados en una sola imagen
-    print("🧩 Grid QED vs SA por algoritmo (una imagen)...")
-    plot_pareto_qed_sa_grid(series, pop_size, output_dir)
+    # 9. Grid QED vs SA: los N algoritmos separados en una sola imagen, en sus
+    #    dos variantes de color (reproducibilidad entre semillas y tercer objetivo).
+    print("🧩 Grid QED vs SA por algoritmo (una imagen por variante de color)...")
+    for modo in GRID_COLOR_MODES:
+        plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by=modo)
 
 
 # ─── Construcción de series por modo ────────────────────────────────────────
