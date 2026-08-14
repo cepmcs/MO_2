@@ -1302,9 +1302,12 @@ def _cmap_recortada(nombre, hasta):
 #
 # El valor va solo en el color: todos los marcadores miden lo mismo, así que la
 # posición de un punto no compite con su tamaño por la atención del lector.
+# 'entero' marca las escalas que cuentan cosas: la colorbar lleva solo marcas
+# enteras, porque una molécula no aparece en 2.5 ejecuciones.  Fsp3 es una
+# fracción continua y ahí las marcas decimales son las correctas.
 GRID_COLOR_MODES = {
     'nruns': dict(col='n_runs_appeared', cmap=_cmap_recortada('plasma', 0.72),
-                  label='Nº de ejecuciones en que aparece'),
+                  label='Nº de ejecuciones en que aparece', entero=True),
     'fsp3':  dict(col='fsp3', cmap='viridis', label='Fsp3 (↑)'),
 }
 
@@ -1387,6 +1390,14 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
     if sc is not None:
         cbar = fig.colorbar(sc, ax=axes.ravel().tolist(), orientation='horizontal',
                             shrink=0.6, pad=0.06, aspect=35)
+        if modo.get('entero'):
+            # Marcas enteras con paso redondo, y siempre los dos extremos: 1 (la
+            # halló una sola ejecución) y el total, que son los que interpretan la
+            # escala.  Con 20 ejecuciones da 1, 5, 10, 15, 20.
+            hi = int(round(norm.vmax))
+            paso = next(p for p in (1, 2, 5, 10, 25, 50, 100)
+                        if (hi - 1) / p <= 5)
+            cbar.set_ticks(sorted({1, hi} | set(range(paso, hi, paso)) - {0}))
         cbar.set_label(modo['label'], fontsize=11)
 
     title = 'Frentes de Pareto QED vs SA por algoritmo'
