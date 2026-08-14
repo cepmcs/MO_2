@@ -716,76 +716,22 @@ OP_INDICATORS = [
 ]
 
 
-def _series_operadores(alg, winners_dir):
-    """Una serie por combo de operadores.  El nivel de configuración se resuelve
-    con glob porque cada combo ganó con hiperparámetros distintos."""
-    series = []
-    for combo in COMBO_DIRS:
-        matches = sorted(glob.glob(os.path.join(winners_dir, alg, combo, '*')))
-        cfg_dirs = [d for d in matches if pc._has_runs(d)]
-        if not cfg_dirs:
-            continue
-        series.append(pc.Series(combo, cfg_dirs[0], color_key=combo))
-    return series
-
-
-# ─── Análisis de operadores en dos pasos ─────────────────────────────────────
+# ─── Comparación de operadores ───────────────────────────────────────────────
 #
-#   El grid es un 2×2 (cruce × mutación).  Se recorre en dos pasos:
-#     1. Dentro de cada familia de cruce se contrastan las dos mutaciones y se
-#        elige una: la ganadora si el test las separa, la estándar si no.
-#     2. Los dos representantes así elegidos se enfrentan entre sí.
-#   Los dos criterios se reportan juntos: el hipervolumen porque es el indicador
-#   de referencia, y la contribución al frente conjunto porque es el que decide.
+#   El grid es un 2×2 (cruce × mutación) y los cuatro combos se contrastan de una
+#   vez: Friedman con las 20 semillas como bloques y las seis comparaciones por
+#   pares con Wilcoxon corregidas por Holm, resumidas en grupos homogéneos.
+#   Decide UN indicador, el que llega en --metric (por defecto el hipervolumen);
+#   dentro del grupo ganador, que por definición el post-hoc no separa, se
+#   conserva la mutación estándar.
+#
+#   La contribución al frente conjunto se evaluó como criterio de decisión
+#   alternativo y se descartó (los ganadores quedaron por hipervolumen: pcx_pm en
+#   los cuatro AG).  De ella esta etapa emite solo la figura del frente conjunto,
+#   que muestra el mecanismo; el contraste con test propio quedó en la etapa 3,
+#   sobre el pool de candidatos.
 
-FAMILIAS = [('pcx', 'PCX'), ('sbx', 'SBX')]
 MUT_STD = 'pm'          # la estándar; se conserva cuando el test no separa
-CRITERIOS = [('hv', 'Hipervolumen $\\uparrow$', 4),
-             ('aporte', 'Contribución (\\%) $\\uparrow$', 1)]
-
-
-def _wilcoxon(a, b):
-    """p de Wilcoxon de rangos con signo sobre dos series pareadas."""
-    try:
-        return float(stats.wilcoxon(np.asarray(a, float), np.asarray(b, float)).pvalue)
-    except ValueError:      # todas las diferencias son cero
-        return 1.0
-
-
-def datos_operadores(series):
-    """Valores por semilla de cada combo, en los dos criterios.
-
-    El hipervolumen sale de metrics.csv.  La contribución se recalcula dentro de
-    cada semilla: se juntan los frentes de los cuatro combos, se recalcula la
-    no-dominancia y se mide qué fracción halló cada uno.  Hacerlo por semilla —y
-    no sobre las 20 juntas— es lo que da una distribución que admite test."""
-    labels = [s.label for s in series]
-    mols = {s.label: pc.load_pareto_molecules(s.pop_dir) for s in series}
-    runs = sorted(set.intersection(*(set(d['run']) for d in mols.values())))
-
-    hv = {}
-    for s in series:
-        m = pd.concat([pd.read_csv(f) for f in
-                       sorted(glob.glob(os.path.join(s.pop_dir, 'run_*', 'metrics.csv')))])
-        hv[s.label] = m.sort_values('run')['hypervolume'].values[:len(runs)]
-
-    aporte = {l: [] for l in labels}
-    for run in runs:
-        trozos = []
-        for l, df in mols.items():
-            t = df[df['run'] == run].copy()
-            t['combo'] = l
-            trozos.append(t)
-        junto = pd.concat(trozos, ignore_index=True)
-        frente = pc._compute_non_dominated(
-            junto.drop_duplicates(['smiles', 'combo'])).drop_duplicates('smiles')
-        vivos = set(frente['smiles'])
-        for l in labels:
-            hallo = set(junto.loc[junto['combo'] == l, 'smiles'])
-            aporte[l].append(100 * len(vivos & hallo) / len(vivos))
-
-    return {'hv': hv, 'aporte': {l: np.array(v) for l, v in aporte.items()},
-            'runs': runs}
 
 
 def write_tabla_operadores(res, groups, labels, alg, out_dir, get_values, col):
@@ -906,7 +852,7 @@ def _partir_etiqueta(nombre):
 
 
 def write_contribucion_table(series, pf_df, nombre, out_dir,
-                             grupo_de=None, etiqueta='Operador'):
+                             grupo_de=None, etiqueta='Operador', nota=''):
     """Tabla LaTeX de la contribución al frente no dominado conjunto.
 
     Complementa al test sobre el hipervolumen, que mide la extensión del frente
@@ -939,10 +885,10 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         f'compartidas suman en cada fila que las encontró; «exclusivas» solo '
         f'las que no halló ninguna otra.  Las tres últimas columnas son la media '
         f'de los objetivos sobre lo que cada serie aporta, y describen no cuánto '
-        f'sino qué aporta.}}',
+        f'sino qué aporta.{nota}}}',
         f'\\label{{tab:contribucion_{nombre.lower()}}}',
         r'\begin{tabular}{llrrrrrr}', r'\toprule',
-        f'{etiqueta} & Cruce & Aporta & Exclusivas & \\% & QED $\\uparrow$ & '
+        f'{etiqueta} & Operadores & Aporta & Exclusivas & \\% & QED $\\uparrow$ & '
         f'SA $\\downarrow$ & Fsp3 $\\uparrow$ \\\\',
         r'\midrule',
     ]
@@ -985,7 +931,8 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
 
 
 def analyze_operators(alg, winners_dir, out_root, decision_col):
-    series = _series_operadores(alg, winners_dir)
+    # COMBO_DIRS fija el orden en que los combos aparecen en tablas y leyendas.
+    series = pc.build_operator_series_winners(alg, winners_dir, COMBO_DIRS)
     if len(series) < 2:
         print(f"\n  ⚠ {alg}: {len(series)} combo(s) con datos; se omite")
         return None
@@ -997,11 +944,11 @@ def analyze_operators(alg, winners_dir, out_root, decision_col):
     print(f"\n{'─'*64}\n  {alg}   combos: {', '.join(labels)}\n{'─'*64}")
 
     # Frente de referencia común a los 4 combos → IGD+ y ε+ comparables.
-    pf_F, pf_df = pc.build_reference_front(series, None)
+    pf_F, pf_df = pc.build_reference_front(series)
     indicator_data = {}
     if pf_F is not None:
         print(f"  frente de referencia: {len(pf_F)} soluciones no dominadas")
-        indicator_data = pc.compute_indicators_per_run(series, None, pf_F)
+        indicator_data = pc.compute_indicators_per_run(series, pf_F)
         pf_df.to_csv(os.path.join(out_dir, f'reference_front_{alg}.csv'), index=False)
 
     get_values = pc._build_series_value_getter(series, indicator_data)
@@ -1133,8 +1080,8 @@ def etapa3(args):
     print(f"  {', '.join(DISPLAY.get(l, l) for l in labels)}")
     print(f"{'='*70}\n")
 
-    pf, pf_df = pc.build_reference_front(series, None)
-    ind = pc.compute_indicators_per_run(series, None, pf) if pf is not None else {}
+    pf, pf_df = pc.build_reference_front(series)
+    ind = pc.compute_indicators_per_run(series, pf) if pf is not None else {}
     print(f"  frente de referencia: {len(pf) if pf is not None else 0} soluciones\n")
     get = pc._build_series_value_getter(series, ind)
 
@@ -1173,33 +1120,106 @@ def etapa3(args):
 #   comparables: esto caracteriza el pool, no ordena algoritmos.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# La mutación se mantiene fija en las dos ramas para que lo único que cambie
-# entre ellas sea el cruce.
-POOL_COMBOS = [('pcx', f'pcx_{MUT_STD}'), ('sbx', f'sbx_{MUT_STD}')]
+# Cada familia de cruce aporta una rama al pool.
+POOL_FAMILIAS = ['pcx', 'sbx']
+
+
+def combos_pool(alg, winners_dir, alpha=0.05):
+    """Los dos combos con que un algoritmo genético entra al pool: uno por
+    familia de cruce y, dentro de cada familia, la mutación que gana.
+
+    Se aplica la misma regla con que la etapa 2 elige su campeón —la ganadora si
+    el post-hoc la separa, la estándar si no— pero por familia, y leyendo el
+    mismo $p$ corregido por Holm que publica la tabla de esa etapa, para que la
+    decisión se pueda seguir desde el cuadro.  Decide el hipervolumen, como en el
+    resto del pipeline.
+
+    En la práctica esto deja la mutación polinomial en todas las ramas salvo la
+    SBX de MOEA/D y de AGE-MOEA, donde el test sí separa a las dos mutaciones
+    (p = 0.038 y 0.021) y gana la gaussiana.  Fijar pm también ahí metía al pool
+    la peor de las dos variantes SBX según el test; medido, el cambio no importa
+    la cola de bajo QED y sube el aporte de esas dos ramas.
+
+    Devuelve [(familia, combo)] en el orden de POOL_FAMILIAS."""
+    series = pc.build_operator_series_winners(alg, winners_dir, COMBO_DIRS)
+    if not series:
+        return []          # MOPSO: sin operadores no hay ramas que elegir
+    hv = {s.label: pc.load_metrics(s.pop_dir).sort_values('run')['hypervolume'].values
+          for s in series}
+    res = compare_indicator(lambda lab, _col: hv[lab], list(hv), None)
+
+    elegidos = []
+    for fam in POOL_FAMILIAS:
+        pm, gauss = f'{fam}_{MUT_STD}', f'{fam}_gauss'
+        if pm not in hv:
+            continue
+        if gauss not in hv or res is None:
+            elegidos.append((fam, pm))
+            continue
+        p = next((x['p_holm'] for x in res['pairs']
+                  if {x['a'], x['b']} == {pm, gauss}), 1.0)
+        gana_gauss = p < alpha and res['medians'][gauss] > res['medians'][pm]
+        elegidos.append((fam, gauss if gana_gauss else pm))
+    return elegidos
 
 
 def _series_pool(winners_dir, finalistas_dir):
     """Las dos ramas de cruce de cada AG, más MOPSO, que no tiene operadores."""
     series = []
     for alg in GA_ALGS:
-        for fam, combo in POOL_COMBOS:
-            cfgs = [d for d in sorted(glob.glob(os.path.join(winners_dir, alg, combo, '*')))
-                    if pc._has_runs(d)]
-            if cfgs:
-                series.append(pc.Series(f'{DISPLAY.get(alg, alg)} ({fam.upper()})',
-                                        cfgs[0]))
+        # El combo va en la etiqueta y no solo la familia: desde que la mutación
+        # puede cambiar entre ramas, decir 'SBX' a secas escondería cuál es.
+        for _, combo in combos_pool(alg, winners_dir):
+            cfg_dir = pc.winner_cfg_dir(winners_dir, alg, combo)
+            if cfg_dir:
+                series.append(pc.Series(f'{DISPLAY.get(alg, alg)} ({combo})',
+                                        cfg_dir))
     d = os.path.join(finalistas_dir, 'MOPSO')
     if pc._has_runs(d):
         series.append(pc.Series('MOPSO', d))
     return series
 
 
-def _familia_pool(label):
-    """Agrupa por familia de cruce; MOPSO queda como su propio grupo."""
-    for fam in ('PCX', 'SBX'):
-        if f'({fam})' in label:
-            return fam
-    return 'MOPSO'
+def _nota_pool(winners_dir):
+    """Frase para el caption de la tabla del pool: con qué configuración entró
+    cada algoritmo, y a dónde ir por la justificación.
+
+    Las excepciones se arman con la misma regla que elige las ramas, así que la
+    frase no puede quedar diciendo una cosa mientras el pool hace otra.  El
+    detalle estadístico no se repite acá —vive en las tablas de la etapa 2— y se
+    remite a ellas por \\ref: la sección del frente conjunto describe el material,
+    no vuelve a discutir la comparación de operadores."""
+    excepciones = []
+    for alg in GA_ALGS:
+        for fam, combo in combos_pool(alg, winners_dir):
+            mut = combo.split('_')[1]
+            if mut != MUT_STD:
+                excepciones.append(
+                    f'{_latex_escape(DISPLAY.get(alg, alg))} en {fam.upper()} '
+                    f'({"gaussiana" if mut == "gauss" else _latex_escape(mut)}, '
+                    f'cuadro~\\ref{{tab:ops_{alg.lower()}}})')
+
+    nota = ('  Cada algoritmo genético entra con dos ramas, una por familia de '
+            'cruce, en la configuración que ganó su bloque en la selección de '
+            'hiperparámetros.  La mutación es la polinomial')
+    if not excepciones:
+        return nota + ' en todas las ramas.'
+    detalle = (' y '.join(excepciones) if len(excepciones) < 3
+               else ', '.join(excepciones[:-1]) + ' y ' + excepciones[-1])
+    return (nota + ', salvo en las ramas donde la comparación de operadores '
+            f'separó a las dos mutaciones: {detalle}.')
+
+
+def _algoritmo_pool(label):
+    """Agrupa por algoritmo: las dos ramas de cruce de un AG caen en el mismo
+    grupo ('NSGA-II (PCX)' → 'NSGA-II'), y MOPSO, que no tiene operadores, queda
+    como el suyo.
+
+    Es la agrupación de las figuras del frente conjunto.  Antes agrupaban por
+    familia de cruce, que responde otra pregunta —de qué operador sale cada
+    región— y ya la contesta la figura por algoritmo de la etapa 2.  Acá lo que
+    interesa es qué algoritmo puso cada molécula del pool de candidatos."""
+    return _partir_etiqueta(label)[0]
 
 
 def analisis_frente_conjunto(args):
@@ -1214,7 +1234,7 @@ def analisis_frente_conjunto(args):
     print(f"  {len(series)} configuraciones: {', '.join(s.label for s in series)}")
     print(f"{'='*70}\n")
 
-    pf_F, pf_df = pc.build_reference_front(series, None)
+    pf_F, pf_df = pc.build_reference_front(series)
     if pf_df is None:
         print("  ⚠ no se pudo construir el frente conjunto")
         return
@@ -1227,14 +1247,16 @@ def analisis_frente_conjunto(args):
     print(f"  ✓ frente_pool.csv  ({len(at)} moléculas)")
 
     # La tabla desglosa por configuración —es la pregunta de cuánto aporta cada
-    # rama—; las figuras agrupan por familia, que con nueve colores serían
-    # ilegibles y además la separación que importa es la de las regiones.
-    write_contribucion_table(series, pf_df, 'pool', args.out_frente,
-                             grupo_de=pc._por_serie, etiqueta='Configuración')
+    # rama—; las figuras agrupan por algoritmo, porque nueve colores serían
+    # ilegibles y las dos ramas de un mismo AG no son entidades distintas.
+    write_contribucion_table(
+        series, pf_df, 'pool', args.out_frente,
+        grupo_de=pc._por_serie, etiqueta='Configuración',
+        nota=_nota_pool(args.winners))
     pc.plot_frente_conjunto(series, 'pool', args.out_frente, pf_df,
-                            grupo_de=_familia_pool)
+                            grupo_de=_algoritmo_pool)
     pc.plot_frente_conjunto_3d(series, 'pool', args.out_frente, pf_df,
-                               grupo_de=_familia_pool)
+                               grupo_de=_algoritmo_pool)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1336,8 +1358,8 @@ def etapa4(args):
     print(f"  {', '.join(DISPLAY.get(l, l) for l in labels)}")
     print(f"{'='*70}\n")
 
-    pf, _ = pc.build_reference_front(series, None)
-    ind = pc.compute_indicators_per_run(series, None, pf) if pf is not None else {}
+    pf, _ = pc.build_reference_front(series)
+    ind = pc.compute_indicators_per_run(series, pf) if pf is not None else {}
     get = pc._build_series_value_getter(series, ind)
 
     res = compare_indicator(get, labels, args.metric)
@@ -1393,11 +1415,10 @@ def load_front(alg, winners_dir, finalistas_dir):
     Para los AG son sus dos ramas de cruce juntas; MOPSO no tiene operadores y
     va con su única configuración."""
     dfs = []
-    for _, combo in POOL_COMBOS:
-        cfgs = [d for d in sorted(glob.glob(os.path.join(winners_dir, alg, combo, '*')))
-                if pc._has_runs(d)]
-        if cfgs:
-            dfs.append(pc.load_pareto_molecules(cfgs[0]))
+    for _, combo in combos_pool(alg, winners_dir):
+        cfg_dir = pc.winner_cfg_dir(winners_dir, alg, combo)
+        if cfg_dir:
+            dfs.append(pc.load_pareto_molecules(cfg_dir))
     if not dfs:
         d = os.path.join(finalistas_dir, alg)
         if pc._has_runs(d):

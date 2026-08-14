@@ -1,25 +1,31 @@
 """
 Gráficas comparativas entre algoritmos MOO.
 
-Estructura de resultados esperada:
-  results/<crossover>_<mutation>/<ALGORITMO>/pop<N>/run_XX/
+Los dos modos leen de resultados/, que es lo que baja del cluster (ver la
+cabecera de analisis.py):
 
-Dos modos de comparación (mismo suite de gráficas):
+  1. Algoritmos (default): superpone los cinco algoritmos, cada uno con la
+     configuración que quedó elegida tras las etapas 1 y 2.
+     Lee resultados/finalistas/<ALG>/run_XX/   →   plots/comparacion_final/.
 
-  1. Algoritmos (default): superpone los algoritmos entre sí para un combo
-     de operadores.  Lee de results/<combo>/<ALGO>/pop{N}/.
-     Salida en plots/<combo>/pop{N}/.
+  2. Operadores (--operadores): para cada algoritmo, superpone las cuatro
+     combinaciones de operadores que ganaron su bloque en la etapa 1.
+     Lee resultados/winners/<ALG>/<cruce_mutacion>/<config>/run_XX/
+        →  plots/operadores/<ALG>/winners/.  Va a un subdirectorio propio para
+     no mezclarse con las tablas que analisis.py etapa2 deja un nivel arriba.
 
-  2. Operadores (--operadores): para cada algoritmo, superpone las variantes
-     de operadores genéticos.  Lee de results/<combo>/<ALGO>/pop{N}/.
-     Salida en plots/operadores/<ALGO>/pop{N}/.
+Las funciones de carga y de figura de este módulo son además el motor que reusa
+analisis.py en sus cuatro etapas.  Una Series es cualquier directorio con
+run_XX/{metrics,molecules,convergence}.csv, así que para comparar otras carpetas
+—celdas del grid, por ejemplo— alcanza con apuntar --finalistas a un directorio
+cuyos hijos sean las series.  Lo que NO se puede es leer el results/ crudo del
+cluster: su estructura es <ALG>/<combo>/<config>/run_XX (ver utils_mo.ga_run_dir)
+y la copia que llega al PC como resultados/grid/ viene sin convergence.csv.
 
 Uso:
-    python plot_comparison.py                          # Algoritmos (auto-detecta combo)
-    python plot_comparison.py --combo sbx_pm           # Algoritmos con combo específico
+    python plot_comparison.py                            # comparación final
     python plot_comparison.py --algorithms NSGA2 MOPSO AGEMOEA
-    python plot_comparison.py --pop_size 200
-    python plot_comparison.py --operadores             # Operadores por algoritmo
+    python plot_comparison.py --operadores               # operadores por algoritmo
     python plot_comparison.py --operadores --algorithms NSGA2 NSGA3
 """
 
@@ -51,7 +57,7 @@ plt.rcParams.update({
 })
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(ROOT_DIR, "results")
+RESULTADOS_DIR = os.path.join(ROOT_DIR, "resultados")
 PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
 
 # Paleta de colores distinguibles.  Para algoritmos se usa el nombre como clave;
@@ -73,14 +79,35 @@ ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'MOPSO']
 # único que llega como etiqueta de reporte.
 DISPLAY_ALG = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
                'AGEMOEA': 'AGE-MOEA', 'MOPSO': 'MOPSO'}
+_ALG_POR_DISPLAY = {v: k for k, v in DISPLAY_ALG.items()}
 
 # Todas las series usan el mismo marcador (punto): se distinguen por color,
 # no por forma.
 PARETO_MARKER = 'o'
 
+# Tamaño del marcador en las figuras de frentes 2D.  Lo elige la densidad de
+# puntos del panel, que es lo que produce el solape:
+#   pareto_comparison superpone las 5 series en un mismo panel → ~58 pts/in²
+#   el grid QED-SA y el frente conjunto dibujan un frente      → ~12-15 pts/in²
+# El frente conjunto venía con el valor de la figura densa sin tener su densidad,
+# y encima es la figura más ancha (3 paneles), así que al escalarla al ancho de
+# texto sus puntos quedaban casi la mitad de los del grid.
+MARCADOR_DENSO  = 13    # varias series superpuestas en el panel
+MARCADOR_NORMAL = 23    # un frente por panel
+
 
 def get_color(key, idx=0):
-    return COLORS.get(key, DEFAULT_COLORS[idx % len(DEFAULT_COLORS)])
+    """Color de una serie o de un grupo.  Acepta el nombre corto del algoritmo
+    (NSGA2) y también el de presentación (NSGA-II): las figuras que agrupan por
+    nombre legible —el frente conjunto del pool— tienen que salir con el mismo
+    color que el algoritmo lleva en el resto del documento, no con el del ciclo
+    por defecto, que le asignaría a NSGA-III el rojo de MOPSO."""
+    if key in COLORS:
+        return COLORS[key]
+    corto = _ALG_POR_DISPLAY.get(key)
+    if corto in COLORS:
+        return COLORS[corto]
+    return DEFAULT_COLORS[idx % len(DEFAULT_COLORS)]
 
 
 # ─── Serie a comparar ────────────────────────────────────────────────────────
@@ -118,42 +145,6 @@ def _alg_from_output_dir(output_dir):
 
 
 # ─── Carga de datos ──────────────────────────────────────────────────────────
-
-def discover_operator_combos():
-    """Lista los combos de operadores bajo results/ (primer nivel de dirs)."""
-    combos = []
-    if not os.path.isdir(RESULTS_DIR):
-        return combos
-    skip = {'comparison', 'comparison_operadores'}
-    for name in sorted(os.listdir(RESULTS_DIR)):
-        path = os.path.join(RESULTS_DIR, name)
-        if os.path.isdir(path) and name not in skip:
-            combos.append(name)
-    return combos
-
-
-def discover_algorithms(pop_size, combo=None):
-    """Descubre qué algoritmos tienen resultados para un pop_size dado.
-    Si combo es None, busca en todos los combos disponibles."""
-    if combo:
-        base = os.path.join(RESULTS_DIR, combo)
-        if not os.path.isdir(base):
-            return []
-        algorithms = []
-        for alg_name in sorted(os.listdir(base)):
-            alg_path = os.path.join(base, alg_name)
-            if not os.path.isdir(alg_path) or alg_name == "comparison":
-                continue
-            pop_path = os.path.join(alg_path, f"pop{pop_size}")
-            if os.path.isdir(pop_path) and _has_runs(pop_path):
-                algorithms.append(alg_name)
-        return algorithms
-    else:
-        algs = set()
-        for c in discover_operator_combos():
-            algs.update(discover_algorithms(pop_size, combo=c))
-        return sorted(algs)
-
 
 def load_convergence_data(pop_dir):
     """Carga convergence.csv de todas las runs de una serie.
@@ -249,7 +240,7 @@ def _objective_curves(series, objective):
     return curves
 
 
-def _plot_convergence_grid(series, pop_size, output_dir, panels, fname, suptitle):
+def _plot_convergence_grid(series, output_dir, panels, fname, suptitle):
     """Dibuja una grilla de paneles de convergencia (3 por fila).
     panels: lista de (ylabel, title, curves) donde
             curves = {label: (gens, vals)}."""
@@ -318,7 +309,7 @@ BOXPLOT_CHEM_CONFIGS = [
 ]
 
 
-def plot_boxplots(series, pop_size, output_dir, get_values, plot_configs,
+def plot_boxplots(series, output_dir, get_values, plot_configs,
                   fname, suptitle):
     """Boxplots comparativos de un grupo de métricas finales.
     get_values(label, col) → array de valores per-run (o None).
@@ -450,7 +441,7 @@ def _additive_epsilon(F, pf):
 
 # ─── Frente de referencia combinado e indicadores ────────────────────────────
 
-def build_reference_front(series, pop_size):
+def build_reference_front(series):
     """Construye frente de Pareto de referencia combinando todas las runs
     de todas las series.  Retorna (pf_F, pf_df) donde pf_F es la
     matriz de objetivos de minimización y pf_df el DataFrame con SMILES.
@@ -475,7 +466,7 @@ def build_reference_front(series, pop_size):
     return pf_F, pf_df
 
 
-def compute_indicators_per_run(series, pop_size, pf_F):
+def compute_indicators_per_run(series, pf_F):
     """Computa IGD+ y ε+ para cada run de cada serie.
     Retorna dict[label] → DataFrame con columnas [run, igd_plus, epsilon]."""
     results = {}
@@ -563,7 +554,7 @@ def _plot_pareto_plane(ax, series_order, combined_paretos, counts, xcol, ycol,
             continue
         color = get_color(s.color_key, idx)
         sc = ax.scatter(df[xcol], df[ycol], c=color, marker=PARETO_MARKER,
-                        s=13, alpha=0.55,
+                        s=MARCADOR_DENSO, alpha=0.55,
                         edgecolors='none', linewidths=0,
                         label=f'{s.label} ({counts[s.label]})', zorder=3)
         handles.append(sc)
@@ -790,6 +781,57 @@ def contribucion_por_semilla(series, grupo_de=_familia):
             np.array(compartidas), runs)
 
 
+def _atribucion_por_origen(series, pf_df, grupo_de):
+    """Prepara el frente conjunto para dibujarlo: lo atribuye, arma la paleta y
+    cuenta cuántas moléculas puso cada grupo en exclusiva.
+
+    Lo comparten las dos figuras del frente conjunto —la de los tres planos y la
+    3D—, que difieren solo en la geometría: si cada una armara su paleta por su
+    cuenta, un cambio de color entraría en una y no en la otra y los dos paneles
+    del documento dejarían de ser el mismo objeto.
+
+    Devuelve None cuando la atribución no aplica (sin la columna 'origen' no hay
+    nada que colorear, que es el caso de una sola serie)."""
+    at = atribuir_frente(series, pf_df, grupo_de)
+    if 'origen' not in at.columns:
+        return None
+    grupos = _grupos_de(series, grupo_de)
+    compartida = _etiqueta_compartida(grupos)
+    # Los combos de operadores no están en COLORS y caerían todos al mismo color
+    # del ciclo por defecto; los algoritmos sí tienen color propio asignado.
+    por_cruce = set(grupos) <= set(CRUCE_COLORS)
+    paleta = ({g: CRUCE_COLORS[g] for g in grupos} if por_cruce
+              else {g: get_color(g, i) for i, g in enumerate(grupos)})
+    paleta[compartida] = COMPARTIDA_COLOR
+
+    orden = [g for g in list(grupos) + [compartida] if (at['origen'] == g).any()]
+    return {'at': at, 'paleta': paleta, 'compartida': compartida, 'orden': orden,
+            'cuentas': {g: int((at['origen'] == g).sum()) for g in orden},
+            'colores': at['origen'].map(paleta).values,
+            'por': 'familia de cruce' if por_cruce else 'algoritmo'}
+
+
+def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
+    """Leyenda de grupos y título de las figuras del frente conjunto.  Las dos
+    coordenadas verticales son lo único que cambia entre la versión 2D y la 3D.
+
+    'solo X' y no 'X' a secas: estas cuentas son exclusivas, mientras que la
+    columna «Aporta» de la tabla incluye las compartidas."""
+    compartida = atr['compartida']
+    handles = [mpatches.Patch(
+        facecolor=atr['paleta'][g], edgecolor='white',
+        label=f'{g if g == compartida else "solo " + str(g)} ({atr["cuentas"][g]})')
+        for g in atr['orden']]
+    fig.legend(handles=handles, loc='lower center', ncol=len(handles),
+               framealpha=0.9, edgecolor='#cccccc', fontsize=11,
+               bbox_to_anchor=(0.5, leyenda_y))
+
+    alg = _alg_from_output_dir(output_dir)
+    fig.suptitle(f'Frente no dominado conjunto por {atr["por"]}'
+                 + (f' - {alg}' if alg else ''),
+                 fontsize=14, fontweight='bold', y=titulo_y)
+
+
 def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia):
     """El frente no dominado conjunto en los tres planos, cada molécula pintada
     según quién la aportó (familia de cruce al comparar operadores, algoritmo al
@@ -799,26 +841,17 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     dibujara un grupo después de otro, el último taparía a los anteriores en la
     zona densa y la figura mostraría una diferencia de orden de dibujo en vez de
     una diferencia real."""
-    at = atribuir_frente(series, pf_df, grupo_de)
-    if 'origen' not in at.columns:
+    atr = _atribucion_por_origen(series, pf_df, grupo_de)
+    if atr is None:
         return
-    grupos = _grupos_de(series, grupo_de)
-    compartida = _etiqueta_compartida(grupos)
-    # Los combos de operadores no están en COLORS y caerían todos al mismo color
-    # del ciclo por defecto; los algoritmos sí tienen color propio asignado.
-    paleta = ({g: CRUCE_COLORS[g] for g in grupos} if set(grupos) <= set(CRUCE_COLORS)
-              else {g: get_color(g, i) for i, g in enumerate(grupos)})
-    paleta[compartida] = COMPARTIDA_COLOR
-
-    orden = [g for g in list(grupos) + [compartida] if (at['origen'] == g).any()]
-    cuentas = {g: int((at['origen'] == g).sum()) for g in orden}
-    colores = at['origen'].map(paleta).values
+    at, colores = atr['at'], atr['colores']
 
     n = len(PARETO_PLANES)
     fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8))
     for ax, (xcol, ycol) in zip(np.atleast_1d(axes), PARETO_PLANES):
         ax.scatter(at[xcol], at[ycol], c=colores, marker=PARETO_MARKER,
-                   s=13, alpha=0.55, edgecolors='none', linewidths=0, zorder=3)
+                   s=MARCADOR_NORMAL, alpha=0.55, edgecolors='none',
+                   linewidths=0, zorder=3)
         ax.set_xlabel(OBJECTIVE_LABELS.get(xcol, xcol))
         ax.set_ylabel(OBJECTIVE_LABELS.get(ycol, ycol))
         ax.set_title(f'{OBJECTIVE_LABELS.get(xcol, xcol)} vs '
@@ -826,21 +859,7 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
         ax.set_xlim(*_pad_lim(at[xcol].values))
         ax.set_ylim(*_pad_lim(at[ycol].values))
 
-    # 'solo X' y no 'X' a secas: estas cuentas son exclusivas, mientras que la
-    # columna «Aporta» de la tabla incluye las compartidas.
-    handles = [mpatches.Patch(
-        facecolor=paleta[g], edgecolor='white',
-        label=f'{g if g == compartida else "solo " + str(g)} ({cuentas[g]})')
-        for g in orden]
-    fig.legend(handles=handles, loc='lower center', ncol=len(handles),
-               framealpha=0.9, edgecolor='#cccccc', fontsize=11,
-               bbox_to_anchor=(0.5, 0.01))
-
-    alg = _alg_from_output_dir(output_dir)
-    por = 'familia de cruce' if set(grupos) <= set(CRUCE_COLORS) else 'algoritmo'
-    titulo = f'Frente no dominado conjunto por {por}'
-    fig.suptitle(titulo + (f' - {alg}' if alg else ''),
-                 fontsize=14, fontweight='bold', y=1.0)
+    _leyenda_y_titulo_origen(fig, atr, output_dir, 0.01, 1.0)
     plt.tight_layout(rect=[0, 0.09, 1, 0.97])
     fname = f"frente_conjunto_pop{pop_size}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
@@ -870,18 +889,10 @@ def plot_frente_conjunto_3d(series, pop_size, output_dir, pf_df,
     cada panel parece estar a una distancia distinta y los tamaños dejan de ser
     comparables entre sí.
     """
-    at = atribuir_frente(series, pf_df, grupo_de)
-    if 'origen' not in at.columns:
+    atr = _atribucion_por_origen(series, pf_df, grupo_de)
+    if atr is None:
         return
-    grupos = _grupos_de(series, grupo_de)
-    compartida = _etiqueta_compartida(grupos)
-    paleta = ({g: CRUCE_COLORS[g] for g in grupos} if set(grupos) <= set(CRUCE_COLORS)
-              else {g: get_color(g, i) for i, g in enumerate(grupos)})
-    paleta[compartida] = COMPARTIDA_COLOR
-
-    orden = [g for g in list(grupos) + [compartida] if (at['origen'] == g).any()]
-    cuentas = {g: int((at['origen'] == g).sum()) for g in orden}
-    colores = at['origen'].map(paleta).values
+    at, colores = atr['at'], atr['colores']
 
     ncols = len(vistas)
     fig = plt.figure(figsize=(6.2 * ncols, 6.0))
@@ -891,6 +902,9 @@ def plot_frente_conjunto_3d(series, pop_size, output_dir, pf_df,
         # Un único scatter: matplotlib ordena por profundidad dentro de la
         # llamada, así que la superposición refleja la geometría y no el orden
         # en que se dibujaron los grupos.
+        # Marcador más chico que en 2D y no MARCADOR_NORMAL: la nube proyectada
+        # ocupa una fracción del panel y los puntos se tapan además en
+        # profundidad, así que acá el solape aparece antes.
         ax.scatter(at['qed'], at['sa'], at['fsp3'], c=colores,
                    marker=PARETO_MARKER, s=9, depthshade=False, alpha=0.75,
                    edgecolors='none', linewidths=0)
@@ -905,19 +919,7 @@ def plot_frente_conjunto_3d(series, pop_size, output_dir, pf_df,
         ax.tick_params(labelsize=8.5, pad=1)
         ax.grid(True)
 
-    handles = [mpatches.Patch(
-        facecolor=paleta[g], edgecolor='white',
-        label=f'{g if g == compartida else "solo " + str(g)} ({cuentas[g]})')
-        for g in orden]
-    fig.legend(handles=handles, loc='lower center', ncol=len(handles),
-               framealpha=0.9, edgecolor='#cccccc', fontsize=11,
-               bbox_to_anchor=(0.5, 0.015))
-
-    alg = _alg_from_output_dir(output_dir)
-    por = 'familia de cruce' if set(grupos) <= set(CRUCE_COLORS) else 'algoritmo'
-    fig.suptitle(f'Frente no dominado conjunto por {por}'
-                 + (f' - {alg}' if alg else ''),
-                 fontsize=14, fontweight='bold', y=0.98)
+    _leyenda_y_titulo_origen(fig, atr, output_dir, 0.015, 0.98)
     # Separación amplia entre paneles: las etiquetas del eje z de uno se meten
     # sobre el panel vecino si se dejan pegados.
     fig.subplots_adjust(left=0.03, right=0.95, bottom=0.11, top=0.92,
@@ -1275,13 +1277,33 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
 
 
 
+def _cmap_recortada(nombre, hasta):
+    """El tramo [0, hasta] de un colormap, como rampa propia.
+
+    El extremo pálido de plasma —el amarillo— es ilegible sobre el fondo blanco de
+    la figura, y ahí caen justamente los valores altos: las moléculas que reaparecen
+    en muchas semillas, que son ~10% del frente y lo que interesa ver.  Recortarlo
+    las deja en naranja saturado y conserva el tramo oscuro, que es el que lleva el
+    grueso de los puntos y le da forma al frente.
+
+    Cambiar a un tono único claro→oscuro, que es la regla habitual para codificar
+    magnitud, acá no sirve: tres cuartos de las moléculas están en el valor mínimo,
+    así que el extremo claro se queda con el grueso y el frente se desdibuja."""
+    base = plt.get_cmap(nombre)
+    return mcolors.LinearSegmentedColormap.from_list(
+        f'{nombre}_{hasta:g}', base(np.linspace(0.0, hasta, 256)))
+
+
 # Variantes de color del grid QED vs SA.  Los dos paneles comparten geometría y
 # responden preguntas distintas, así que se generan como archivos separados:
 #   nruns → ¿el hallazgo se repite entre semillas, o lo vio una sola?
 #   fsp3  → ¿dónde cae el tercer objetivo sobre el compromiso QED-SA?
 # El sufijo va en el nombre del archivo para que no se confundan.
+#
+# El valor va solo en el color: todos los marcadores miden lo mismo, así que la
+# posición de un punto no compite con su tamaño por la atención del lector.
 GRID_COLOR_MODES = {
-    'nruns': dict(col='n_runs_appeared', cmap='plasma',
+    'nruns': dict(col='n_runs_appeared', cmap=_cmap_recortada('plasma', 0.72),
                   label='Nº de ejecuciones en que aparece'),
     'fsp3':  dict(col='fsp3', cmap='viridis', label='Fsp3 (↑)'),
 }
@@ -1350,7 +1372,7 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         sa  = pareto['sa'].values
         sc = ax.scatter(qed, sa, c=pareto[modo['col']].values,
                         cmap=modo['cmap'], norm=norm,
-                        s=23, alpha=0.6,
+                        s=MARCADOR_NORMAL, alpha=0.6,
                         edgecolors='none', linewidths=0, zorder=3)
         ax.set_xlabel('QED (↑)', fontsize=11)
         ax.set_ylabel('SA (↓)', fontsize=11)
@@ -1487,10 +1509,10 @@ def _generate_report(series, pop_size, output_dir, report_label):
     ind_curves = {'igd_plus': {}, 'epsilon': {}}
     if len(series) >= 2:
         print("📐 Construyendo frente de referencia combinado...")
-        pf_F, pf_df = build_reference_front(series, pop_size)
+        pf_F, pf_df = build_reference_front(series)
         if pf_F is not None:
             print(f"   Frente de referencia: {len(pf_F)} soluciones no-dominadas")
-            indicator_data = compute_indicators_per_run(series, pop_size, pf_F)
+            indicator_data = compute_indicators_per_run(series, pf_F)
 
             # Guardar frente de referencia
             pf_path = os.path.join(output_dir, f"reference_front_pop{pop_size}.csv")
@@ -1516,7 +1538,7 @@ def _generate_report(series, pop_size, output_dir, report_label):
     # 2. Convergencia de indicadores multiobjetivo (HV, IGD+, ε+).
     print("📈 Convergencia de indicadores MO (HV, IGD+, ε+)...")
     _plot_convergence_grid(
-        series, pop_size, output_dir,
+        series, output_dir,
         panels=[
             ('Hipervolumen', 'Convergencia de Hipervolumen (↑)',
              _conv_csv_curves(series, 'hv')),
@@ -1531,7 +1553,7 @@ def _generate_report(series, pop_size, output_dir, report_label):
     #     QED, SA, Fsp3 como promedio de objetivo por generación).
     print("📈 Convergencia de indicadores químicos...")
     _plot_convergence_grid(
-        series, pop_size, output_dir,
+        series, output_dir,
         panels=[
             ('Tasa de Validez', 'Convergencia de Validez',
              _conv_csv_curves(series, 'validity')),
@@ -1558,11 +1580,11 @@ def _generate_report(series, pop_size, output_dir, report_label):
         get_values = _build_series_value_getter(series, indicator_data)
 
         print("📊 Boxplots multiobjetivo (HV, Espaciamiento, IGD+, ε+, Pareto)...")
-        plot_boxplots(series, pop_size, output_dir, get_values, BOXPLOT_MO_CONFIGS,
+        plot_boxplots(series, output_dir, get_values, BOXPLOT_MO_CONFIGS,
                       f"boxplots_mo_pop{pop_size}.png",
                       "Distribución de Indicadores Multiobjetivo")
         print("📊 Boxplots químicos (QED, SA, Fsp3, Validez, Unicidad, Novedad)...")
-        plot_boxplots(series, pop_size, output_dir, get_values, BOXPLOT_CHEM_CONFIGS,
+        plot_boxplots(series, output_dir, get_values, BOXPLOT_CHEM_CONFIGS,
                       f"boxplots_chemical_pop{pop_size}.png",
                       "Distribución de Indicadores Químicos")
 
@@ -1589,25 +1611,6 @@ def _generate_report(series, pop_size, output_dir, report_label):
 
 # ─── Construcción de series por modo ────────────────────────────────────────
 
-def build_algorithm_series(algorithms, pop_size, combo):
-    """Modo algoritmos: una serie por algoritmo para un combo de operadores."""
-    series = []
-    for alg in algorithms:
-        pop_dir = os.path.join(RESULTS_DIR, combo, alg, f"pop{pop_size}")
-        series.append(Series(alg, pop_dir, color_key=alg))
-    return series
-
-
-def build_operator_series(alg, pop_size, combos):
-    """Modo operadores: para un algoritmo, una serie por combo de operadores."""
-    series = []
-    for combo in combos:
-        pop_dir = os.path.join(RESULTS_DIR, combo, alg, f"pop{pop_size}")
-        if _has_runs(pop_dir):
-            series.append(Series(combo, pop_dir, color_key=combo))
-    return series
-
-
 def build_finalist_series(algorithms, finalistas_dir):
     """Modo algoritmos sobre finalistas/<ALG>/run_XX/: la configuración elegida
     de cada algoritmo tras las etapas 1 y 2."""
@@ -1619,134 +1622,83 @@ def build_finalist_series(algorithms, finalistas_dir):
     return series
 
 
-def build_operator_series_winners(alg, winners_dir):
+def winner_cfg_dir(winners_dir, alg, combo):
+    """Directorio de la configuración con que un combo ganó su bloque en la
+    etapa 1.  Cada uno ganó con hiperparámetros distintos, así que el nivel de
+    configuración no se puede nombrar: se resuelve con glob y se toma el hijo con
+    runs.  None si ese combo no tiene datos."""
+    cfgs = [d for d in sorted(glob.glob(os.path.join(winners_dir, alg, combo, '*')))
+            if _has_runs(d)]
+    return cfgs[0] if cfgs else None
+
+
+def build_operator_series_winners(alg, winners_dir, combos=None):
     """Modo operadores sobre winners/<ALG>/<combo>/<config>/: las configuraciones
-    que ganaron su bloque en la etapa 1.  Cada combo ganó con hiperparámetros
-    distintos, así que el nivel de configuración se resuelve con glob."""
+    que ganaron su bloque en la etapa 1.
+
+    combos fija el orden de las series, que es el de las leyendas y el de las
+    filas de las tablas; sin él se toman los combos del directorio, alfabéticos."""
+    if combos is None:
+        base = os.path.join(winners_dir, alg)
+        combos = [c for c in sorted(os.listdir(base))
+                  if os.path.isdir(os.path.join(base, c))]
     series = []
-    for combo in sorted(os.listdir(os.path.join(winners_dir, alg))):
-        combo_dir = os.path.join(winners_dir, alg, combo)
-        if not os.path.isdir(combo_dir):
-            continue
-        cfgs = [d for d in sorted(glob.glob(os.path.join(combo_dir, '*')))
-                if _has_runs(d)]
-        if cfgs:
-            series.append(Series(combo, cfgs[0], color_key=combo))
+    for combo in combos:
+        cfg_dir = winner_cfg_dir(winners_dir, alg, combo)
+        if cfg_dir:
+            series.append(Series(combo, cfg_dir, color_key=combo))
     return series
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
-def run_algorithm_comparison(algorithms, pop_size, combo=None, finalistas=None):
-    """Comparación entre algoritmos.
-
-    Con finalistas se lee la configuración elegida de cada algoritmo desde
-    finalistas/<ALG>/; sin él, el grid original bajo results/<combo>/<ALG>/pop<N>/."""
-    if finalistas:
-        if not os.path.isdir(finalistas):
-            print(f"No existe {finalistas}")
-            return
-        algorithms = algorithms or [a for a in ALGORITHM_ORDER
-                                    if _has_runs(os.path.join(finalistas, a))]
-        series = build_finalist_series(algorithms, finalistas)
-        if len(series) < 2:
-            print(f"Se necesitan ≥2 algoritmos con datos en {finalistas}")
-            return
-        print(f"\n{'='*60}")
-        print("  Comparación final entre algoritmos")
-        print(f"  Origen: {finalistas}")
-        print(f"  Algoritmos: {', '.join(s.label for s in series)}")
-        print(f"{'='*60}")
-        output_dir = os.path.join(PLOTS_DIR, "comparacion_final")
-        _generate_report(series, "final", output_dir,
-                         "Comparación Final — Todos los Algoritmos")
-        print(f"\n{'='*60}\n  ✅ Generación completa: {output_dir}\n{'='*60}\n")
+def run_algorithm_comparison(algorithms, finalistas):
+    """Comparación final entre algoritmos: la configuración elegida de cada uno,
+    leída de finalistas/<ALG>/ (symlinks a la ganadora dentro de winners/)."""
+    if not os.path.isdir(finalistas):
+        print(f"No existe {finalistas}")
         return
-
-    if combo is None:
-        combos = discover_operator_combos()
-        if not combos:
-            print(f"No se encontraron combos de operadores en {RESULTS_DIR}")
-            return
-        elif len(combos) == 1:
-            combo = combos[0]
-            print(f"  Auto-detectado combo: {combo}")
-        else:
-            print(f"Múltiples combos encontrados: {', '.join(combos)}")
-            print("Especificá uno con --combo <nombre>")
-            return
-
-    if algorithms is None:
-        algorithms = discover_algorithms(pop_size, combo=combo)
-        if not algorithms:
-            print(f"No se encontraron resultados para combo={combo}, "
-                  f"pop_size={pop_size}")
-            combo_dir = os.path.join(RESULTS_DIR, combo)
-            if os.path.isdir(combo_dir):
-                print(f"Directorios en {combo_dir}:")
-                for d in sorted(os.listdir(combo_dir)):
-                    full = os.path.join(combo_dir, d)
-                    if os.path.isdir(full):
-                        pops = [p for p in os.listdir(full)
-                                if os.path.isdir(os.path.join(full, p))]
-                        print(f"  {d}: {pops}")
-            return
-
+    algorithms = algorithms or [a for a in ALGORITHM_ORDER
+                                if _has_runs(os.path.join(finalistas, a))]
+    series = build_finalist_series(algorithms, finalistas)
+    if len(series) < 2:
+        print(f"Se necesitan ≥2 algoritmos con datos en {finalistas}")
+        return
     print(f"\n{'='*60}")
-    print("  Comparación entre algoritmos")
-    print(f"  Combo: {combo}")
-    print(f"  Algoritmos: {', '.join(algorithms)}")
-    print(f"  pop_size: {pop_size}")
+    print("  Comparación final entre algoritmos")
+    print(f"  Origen: {finalistas}")
+    print(f"  Algoritmos: {', '.join(s.label for s in series)}")
     print(f"{'='*60}")
-
-    series = build_algorithm_series(algorithms, pop_size, combo)
-    output_dir = os.path.join(PLOTS_DIR, combo, f"pop{pop_size}")
-    _generate_report(series, pop_size, output_dir,
-                     f"Comparación — {combo} — Todos los Algoritmos")
-
-    print(f"\n{'='*60}")
-    print(f"  ✅ Generación completa: {output_dir}")
-    print(f"{'='*60}\n")
+    output_dir = os.path.join(PLOTS_DIR, "comparacion_final")
+    _generate_report(series, "final", output_dir,
+                     "Comparación Final — Todos los Algoritmos")
+    print(f"\n{'='*60}\n  ✅ Generación completa: {output_dir}\n{'='*60}\n")
 
 
-def run_operator_comparison(algorithms, pop_size, winners_dir=None):
-    """Comparación de variantes de operadores, un reporte por algoritmo.
+def run_operator_comparison(algorithms, winners_dir):
+    """Comparación de variantes de operadores, un reporte por algoritmo, sobre
+    las configuraciones que ganaron su bloque en la etapa 1
+    (winners/<ALG>/<combo>/<config>/), cada una con sus propios hiperparámetros.
 
-    Con winners_dir se leen las configuraciones ganadoras de la etapa 1
-    (winners/<ALG>/<combo>/<config>/), cada una con sus propios hiperparámetros;
-    sin él, el grid original bajo results/<combo>/<ALG>/pop<N>/."""
-    if winners_dir:
-        if not os.path.isdir(winners_dir):
-            print(f"No existe {winners_dir}")
-            return
-        algorithms = algorithms or sorted(
-            d for d in os.listdir(winners_dir)
-            if os.path.isdir(os.path.join(winners_dir, d)))
-        tag = "winners"
-    else:
-        combos = discover_operator_combos()
-        if len(combos) < 2:
-            print("Se necesitan ≥2 combos de operadores para comparar.")
-            print(f"Combos encontrados: {combos if combos else '(ninguno)'}")
-            return
-        if algorithms is None:
-            algorithms = discover_algorithms(pop_size)
-            if not algorithms:
-                print(f"No se encontraron algoritmos con resultados "
-                      f"para pop_size={pop_size}")
-                return
-        tag = f"pop{pop_size}"
+    La salida va a plots/operadores/<ALG>/winners/: un nivel más abajo que las
+    tablas de analisis.py etapa2, que escribe en plots/operadores/<ALG>/."""
+    if not os.path.isdir(winners_dir):
+        print(f"No existe {winners_dir}")
+        return
+    algorithms = algorithms or sorted(
+        d for d in os.listdir(winners_dir)
+        if os.path.isdir(os.path.join(winners_dir, d)))
+    tag = "winners"
 
     print(f"\n{'='*60}")
     print("  Comparación de operadores (por algoritmo)")
-    print(f"  Origen: {winners_dir or RESULTS_DIR}")
+    print(f"  Origen: {winners_dir}")
     print(f"  Algoritmos candidatos: {', '.join(algorithms)}")
     print(f"{'='*60}")
 
     generated = []
     for alg in algorithms:
-        series = (build_operator_series_winners(alg, winners_dir) if winners_dir
-                  else build_operator_series(alg, pop_size, combos))
+        series = build_operator_series_winners(alg, winners_dir)
         if len(series) < 2:
             print(f"\n  ⚠ {alg}: solo {len(series)} combo(s) con datos; "
                   f"se omite (se requieren ≥2 para comparar).")
@@ -1768,33 +1720,26 @@ def run_operator_comparison(algorithms, pop_size, winners_dir=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Gráficas comparativas MOO")
+    parser = argparse.ArgumentParser(
+        description="Gráficas comparativas MOO",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--algorithms', nargs='+', default=None,
                         help="Algoritmos a comparar (auto-detecta si no se especifica)")
-    parser.add_argument('--pop_size', type=int, default=200,
-                        help="Tamaño de población (default: 200)")
-    parser.add_argument('--combo', default=None,
-                        help="Combo de operadores (ej: sbx_pm). "
-                             "Auto-detecta si solo hay uno.")
     parser.add_argument('--operadores', action='store_true',
                         help="Compara variantes de operadores por algoritmo")
-    parser.add_argument('--winners', nargs='?',
-                        const=os.path.join(ROOT_DIR, 'resultados', 'winners'),
-                        default=None,
-                        help="Con --operadores: lee las configuraciones ganadoras "
-                             "de la etapa 1 desde resultados/winners/<ALG>/<combo>/<config>/")
-    parser.add_argument('--finalistas', nargs='?',
-                        const=os.path.join(ROOT_DIR, 'resultados', 'finalistas'),
-                        default=None,
-                        help="Comparación final: lee la configuración elegida de "
-                             "cada algoritmo desde resultados/finalistas/<ALG>/")
+    parser.add_argument('--winners', default=os.path.join(RESULTADOS_DIR, 'winners'),
+                        help="Con --operadores: las configuraciones ganadoras de "
+                             "la etapa 1, en <winners>/<ALG>/<combo>/<config>/")
+    parser.add_argument('--finalistas', default=os.path.join(RESULTADOS_DIR,
+                                                             'finalistas'),
+                        help="Comparación final: la configuración elegida de cada "
+                             "algoritmo, en <finalistas>/<ALG>/")
     args = parser.parse_args()
 
     if args.operadores:
-        run_operator_comparison(args.algorithms, args.pop_size, args.winners)
+        run_operator_comparison(args.algorithms, args.winners)
     else:
-        run_algorithm_comparison(args.algorithms, args.pop_size, args.combo,
-                                 args.finalistas)
+        run_algorithm_comparison(args.algorithms, args.finalistas)
 
 
 if __name__ == "__main__":
