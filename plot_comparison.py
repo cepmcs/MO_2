@@ -95,6 +95,13 @@ PARETO_MARKER = 'o'
 MARCADOR_DENSO  = 13    # varias series superpuestas en el panel
 MARCADOR_NORMAL = 23    # un frente por panel
 
+# Etiqueta legible por objetivo (con dirección de optimización)
+OBJECTIVE_LABELS = {
+    'qed':  'QED (↑)',
+    'sa':   'SA (↓)',
+    'fsp3': 'Fsp3 (↑)',
+}
+
 
 def get_color(key, idx=0):
     """Color de una serie o de un grupo.  Acepta el nombre corto del algoritmo
@@ -201,9 +208,13 @@ def _smooth(values, window):
     return pd.Series(values).rolling(window=window, min_periods=1).mean().values
 
 
+# Las curvas se construyen CRUDAS y el suavizado se aplica al dibujar: así el CSV
+# de curvas publica el promedio real sobre las runs y no una media móvil, mientras
+# las figuras siguen legibles.  La ventana de cada panel va en su especificación.
+
 def _conv_csv_curves(series, metric):
     """Curva de convergencia de una métrica de convergence.csv.
-    Devuelve {label: (gens, mean_suavizada)} (media sobre runs)."""
+    Devuelve {label: (gens, media sobre runs)}, sin suavizar."""
     curves = {}
     for s in series:
         df = load_convergence_data(s.pop_dir)
@@ -211,14 +222,13 @@ def _conv_csv_curves(series, metric):
             print(f"  ⚠ {s.label}: sin datos de '{metric}'")
             continue
         grouped = df.groupby('gen')[metric].mean().reset_index()
-        curves[s.label] = (grouped['gen'].values,
-                           _smooth(grouped[metric].values, 20))
+        curves[s.label] = (grouped['gen'].values, grouped[metric].values)
     return curves
 
 
 def _objective_curves(series, objective):
     """Curva de convergencia del promedio de un objetivo (all_molecules.csv.gz).
-    Devuelve {label: (gens, mean_suavizada)} (media sobre runs)."""
+    Devuelve {label: (gens, media sobre runs)}, sin suavizar."""
     curves = {}
     for s in series:
         all_means = []
@@ -235,19 +245,118 @@ def _objective_curves(series, objective):
             print(f"  ⚠ {s.label}: sin datos de '{objective}' en all_molecules.csv.gz")
             continue
         mean_over_runs = pd.concat(all_means, axis=1).mean(axis=1)
-        curves[s.label] = (mean_over_runs.index.values,
-                           _smooth(mean_over_runs.values, 20))
+        curves[s.label] = (mean_over_runs.index.values, mean_over_runs.values)
     return curves
 
 
-def _plot_convergence_grid(series, output_dir, panels, fname, suptitle):
+# Paneles de las figuras de convergencia: (columna, etiqueta y, título, ventana
+# de suavizado).  La columna es también el nombre en el CSV de curvas, así que la
+# figura y el dato salen de la misma fuente y no pueden divergir.  Los indicadores
+# vs frente de referencia llevan ventana 5 y no 20 porque vienen submuestreados
+# cada 10 generaciones.
+PANELES_MO = [
+    ('hv',       'Hipervolumen',   'Convergencia de Hipervolumen (↑)', 20),
+    ('igd_plus', 'IGD+ (↓)',       'Convergencia IGD+ (↓)',             5),
+    ('epsilon',  'ε+ Aditivo (↓)', 'Convergencia ε+ Aditivo (↓)',       5),
+]
+
+PANELES_QUIM = [
+    ('validity',   'Tasa de Validez',  'Convergencia de Validez',  20),
+    ('uniqueness', 'Tasa de Unicidad', 'Convergencia de Unicidad', 20),
+    ('novelty',    'Tasa de Novedad',  'Convergencia de Novedad',  20),
+] + [(col, f'Promedio de {OBJECTIVE_LABELS[col]}',
+      f'Convergencia de {OBJECTIVE_LABELS[col]}', 20)
+     for col in ('qed', 'sa', 'fsp3')]
+
+
+def _mapa_evaluaciones(series):
+    """{label: Series(gen → evaluaciones acumuladas)}, promediado sobre las runs.
+
+    Sale de la columna n_eval de convergence.csv y no de gen × pop_size: no
+    siempre coinciden —MOPSO evalúa 200 en una generación y 100 en el resto— y
+    acá el eje tiene que ser el gasto real."""
+    mapas = {}
+    for s in series:
+        acum = []
+        for f in sorted(glob.glob(os.path.join(s.pop_dir, "run_*", "convergence.csv"))):
+            c = pd.read_csv(f)
+            if {'gen', 'n_eval'}.issubset(c.columns):
+                acum.append(pd.Series(c['n_eval'].cumsum().values,
+                                      index=c['gen'].values))
+        if acum:
+            mapas[s.label] = pd.concat(acum, axis=1).mean(axis=1)
+    return mapas
+
+
+def _a_evaluaciones(curvas, mapas, escala=1000.0):
+    """Reindexa curvas de generación a evaluaciones acumuladas (en miles).
+
+    Con presupuestos distintos —200×500 y 100×1000 conviven entre los
+    finalistas— la generación no es un eje comparable: en la 500 un algoritmo de
+    población 200 ya gastó las 100.000 evaluaciones y uno de 100 va por la mitad.
+    Sobre el eje de evaluaciones las cinco curvas terminan en el mismo punto y
+    cualquier lectura vertical es a igual presupuesto."""
+    out = {}
+    for label, (gens, vals) in curvas.items():
+        m = mapas.get(label)
+        if m is None:
+            continue
+        ev = m.reindex(gens).values
+        ok = ~np.isnan(ev)
+        out[label] = (ev[ok] / escala, np.asarray(vals)[ok])
+    return out
+
+
+def escribir_curvas_csv(series, curvas, mapas, output_dir, pop_size):
+    """CSV con todas las curvas de convergencia en formato largo: una fila por
+    serie y generación, con las evaluaciones acumuladas y una columna por métrica.
+
+    Son los valores CRUDOS —promedio sobre las runs, sin la media móvil que llevan
+    las figuras—, así que sirven para citar números en el documento.  IGD+ y ε+
+    quedan vacíos en las generaciones que no cayeron en el submuestreo con que se
+    calculan (cada 10)."""
+    cols = [c for c, *_ in PANELES_MO + PANELES_QUIM]
+    filas = []
+    for s in series:
+        m = mapas.get(s.label)
+        if m is None:
+            continue
+        datos = {c: dict(zip(*curvas[c][s.label]))
+                 for c in cols if s.label in (curvas.get(c) or {})}
+        for gen in m.index:
+            fila = {'series': s.label, 'gen': int(gen),
+                    'evaluaciones': int(round(m.loc[gen]))}
+            fila.update({c: datos[c].get(gen) for c in cols if c in datos})
+            filas.append(fila)
+    if not filas:
+        return
+    out = os.path.join(output_dir, f"convergence_curves_pop{pop_size}.csv")
+    pd.DataFrame(filas, columns=['series', 'gen', 'evaluaciones'] + cols
+                 ).to_csv(out, index=False)
+    print(f"  ✓ convergence_curves_pop{pop_size}.csv  ({len(filas)} filas)")
+
+
+def _plot_convergence_grid(series, output_dir, specs, curvas, fname, suptitle,
+                           mapas=None):
     """Dibuja una grilla de paneles de convergencia (3 por fila).
-    panels: lista de (ylabel, title, curves) donde
-            curves = {label: (gens, vals)}."""
-    panels = [p for p in panels if p[2]]   # descarta paneles sin datos
+
+    specs: lista de (col, ylabel, title, ventana) — ver PANELES_MO / PANELES_QUIM.
+    curvas: {col: {label: (gens, vals crudos)}}.
+    mapas: con el mapa de evaluaciones, el eje pasa de generación a evaluaciones;
+           sin él, queda en generación."""
+    eje_eval = mapas is not None
+    panels = []
+    for col, ylabel, title, ventana in specs:
+        c = curvas.get(col) or {}
+        c = {lab: (x, _smooth(v, ventana)) for lab, (x, v) in c.items()}
+        if eje_eval:
+            c = _a_evaluaciones(c, mapas)
+        if c:
+            panels.append((ylabel, title, c))
     if not panels:
         print(f"  ⚠ {fname}: sin datos de convergencia")
         return
+    xlabel = 'Evaluaciones (miles)' if eje_eval else 'Generación'
 
     n_plots = len(panels)
     ncols = min(3, n_plots)
@@ -263,13 +372,13 @@ def _plot_convergence_grid(series, output_dir, panels, fname, suptitle):
         for idx, s in enumerate(series):
             if s.label not in curves:
                 continue
-            gens, vals = curves[s.label]
-            line, = ax.plot(gens, vals, color=get_color(s.color_key, idx),
+            x, vals = curves[s.label]
+            line, = ax.plot(x, vals, color=get_color(s.color_key, idx),
                             linewidth=1.2, label=s.label, zorder=3)
             if s.label not in legend_labels:
                 legend_handles.append(line)
                 legend_labels.append(s.label)
-        ax.set_xlabel('Generación')
+        ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.set_ylim(bottom=0)
@@ -1415,12 +1524,6 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
     print(f"  ✓ {fname}")
 
 
-# Etiqueta legible por objetivo (con dirección de optimización)
-OBJECTIVE_LABELS = {
-    'qed':      'QED (↑)',
-    'sa':       'SA (↓)',
-    'fsp3': 'Fsp3 (↑)',
-}
 
 
 def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
@@ -1482,12 +1585,11 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
         print("  ⚠ Sin datos de all_molecules.csv.gz para convergencia de indicadores")
         return {'igd_plus': {}, 'epsilon': {}}
 
-    # Reorganiza a {col: {label: (gens, vals_suavizadas)}}
+    # Reorganiza a {col: {label: (gens, vals)}}; el suavizado lo aplica el dibujo.
     out = {'igd_plus': {}, 'epsilon': {}}
     for label, curve in series_curves.items():
         for col in out:
-            out[col][label] = (curve.index.values,
-                               _smooth(curve[col].values, 5))
+            out[col][label] = (curve.index.values, curve[col].values)
 
     # Guardar las curvas en CSV (formato largo)
     long_rows = []
@@ -1546,44 +1648,42 @@ def _generate_report(series, pop_size, output_dir, report_label):
         else:
             print("  ⚠ No se pudo construir frente de referencia")
 
-    # 2. Convergencia de indicadores multiobjetivo (HV, IGD+, ε+).
-    print("📈 Convergencia de indicadores MO (HV, IGD+, ε+)...")
-    _plot_convergence_grid(
-        series, output_dir,
-        panels=[
-            ('Hipervolumen', 'Convergencia de Hipervolumen (↑)',
-             _conv_csv_curves(series, 'hv')),
-            ('IGD+ (↓)', 'Convergencia IGD+ (↓)', ind_curves['igd_plus']),
-            ('ε+ Aditivo (↓)', 'Convergencia ε+ Aditivo (↓)', ind_curves['epsilon']),
-        ],
-        fname=f"convergence_mo_pop{pop_size}.png",
-        suptitle="Convergencia de Indicadores Multiobjetivo")
+    # 2. Todas las curvas de convergencia, crudas y en un solo diccionario
+    #    indexado por el nombre de columna: de acá salen las cuatro figuras y el
+    #    CSV, así que el dato publicado y el dibujado no pueden divergir.  Se
+    #    calculan una sola vez porque _objective_curves lee los
+    #    all_molecules.csv.gz de todas las runs y es la parte cara.
+    print("📈 Curvas de convergencia (MO y químicas)...")
+    curvas = {
+        'hv':         _conv_csv_curves(series, 'hv'),
+        'igd_plus':   ind_curves['igd_plus'],
+        'epsilon':    ind_curves['epsilon'],
+        'validity':   _conv_csv_curves(series, 'validity'),
+        'uniqueness': _conv_csv_curves(series, 'uniqueness'),
+        'novelty':    _conv_csv_curves(series, 'novelty'),
+        'qed':        _objective_curves(series, 'qed'),
+        'sa':         _objective_curves(series, 'sa'),
+        'fsp3':       _objective_curves(series, 'fsp3'),
+    }
 
-    # 3. Convergencia de indicadores químicos
-    #    (Validez, Unicidad, Novedad desde convergence.csv;
-    #     QED, SA, Fsp3 como promedio de objetivo por generación).
-    print("📈 Convergencia de indicadores químicos...")
-    _plot_convergence_grid(
-        series, output_dir,
-        panels=[
-            ('Tasa de Validez', 'Convergencia de Validez',
-             _conv_csv_curves(series, 'validity')),
-            ('Tasa de Unicidad', 'Convergencia de Unicidad',
-             _conv_csv_curves(series, 'uniqueness')),
-            ('Tasa de Novedad', 'Convergencia de Novedad',
-             _conv_csv_curves(series, 'novelty')),
-            (f"Promedio de {OBJECTIVE_LABELS.get('qed', 'QED')}",
-             f"Convergencia de {OBJECTIVE_LABELS.get('qed', 'QED')}",
-             _objective_curves(series, 'qed')),
-            (f"Promedio de {OBJECTIVE_LABELS.get('sa', 'SA')}",
-             f"Convergencia de {OBJECTIVE_LABELS.get('sa', 'SA')}",
-             _objective_curves(series, 'sa')),
-            (f"Promedio de {OBJECTIVE_LABELS.get('fsp3', 'Fsp3')}",
-             f"Convergencia de {OBJECTIVE_LABELS.get('fsp3', 'Fsp3')}",
-             _objective_curves(series, 'fsp3')),
-        ],
-        fname=f"convergence_chemical_pop{pop_size}.png",
-        suptitle="Convergencia de Indicadores Químicos")
+    # 3. Cada juego de paneles se dibuja dos veces.  Por generación se ve la
+    #    dinámica propia de cada algoritmo; por evaluaciones es el único eje donde
+    #    la comparación entre los cinco es a igual presupuesto, porque conviven
+    #    repartos de 200×500 y 100×1000 y en la generación 500 uno ya gastó las
+    #    100.000 evaluaciones y el otro la mitad.
+    mapas_eval = _mapa_evaluaciones(series)
+    for specs, base, titulo in [
+            (PANELES_MO, 'mo', 'Convergencia de Indicadores Multiobjetivo'),
+            (PANELES_QUIM, 'chemical', 'Convergencia de Indicadores Químicos')]:
+        _plot_convergence_grid(series, output_dir, specs, curvas,
+                               f"convergence_{base}_pop{pop_size}.png", titulo)
+        if mapas_eval:
+            _plot_convergence_grid(
+                series, output_dir, specs, curvas,
+                f"convergence_{base}_evals_pop{pop_size}.png", titulo,
+                mapas=mapas_eval)
+    if mapas_eval:
+        escribir_curvas_csv(series, curvas, mapas_eval, output_dir, pop_size)
 
     # 5. Boxplots + tablas (requiere ≥2 series).  Comparten un único getter
     #    de valores per-run (metrics + indicadores + medias químicas + unicidad).
