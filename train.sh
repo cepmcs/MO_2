@@ -12,7 +12,7 @@
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Wrapper SLURM: solo pide GPU + entorno y delega TODO en run_experiments.py.
-#  Ese script arma el grid (4 GA × 4 operadores × N_RUNS + MOPSO × N_RUNS), corre
+#  Ese script arma el grid (4 GA × 4 operadores × N_RUNS + CMOPSO × N_RUNS), corre
 #  en paralelo, reanuda por molecules.csv, muestra ETA y genera los resúmenes.
 #  Nada de lógica de experimentos vive aquí: el .py es la única fuente de verdad.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -44,7 +44,7 @@ if [ "$DEVICE" = "cuda" ]; then
 fi
 
 echo "======================================================"
-echo "  Sensibilidad de hiperparámetros MO — SA(↓) d(ALOGP)(↑) d(HBD)(↑)"
+echo "  Sensibilidad de hiperparámetros MO — QED(↑) SA(↓) | constraint Fsp3"
 echo "  Nodo         : $(hostname)   cores: $(nproc)   device: $DEVICE"
 echo "  Concurrencia : $PARALLEL runs   n_runs: $N_RUNS"
 echo "======================================================"
