@@ -21,13 +21,14 @@ Uso:
 import os, time, argparse
 import numpy as np
 import torch
-from pymoo.algorithms.moo.moead import ParallelMOEAD
 from pymoo.optimize import minimize
 
+from algoritmos_mo import MOEADConstr
 from utils_mo import (
     load_model, load_seed_mus, load_train_smiles, set_device,
     NormalizedMolecularLatentProblem, LatentSampling, GenerationTracker,
     postprocess_run, consolidate_all, get_operators, ga_run_dir, get_ref_dirs,
+    FSP3_MIN,
 )
 
 ALG_NAME = "MOEAD"
@@ -85,9 +86,10 @@ def main():
     crossover, mutation = get_operators(args.crossover, args.mutation, args.cx_prob, mut_prob)
     problem  = NormalizedMolecularLatentProblem(model, stoi, itos, latent_dim)
     tracker  = GenerationTracker(problem, train_smiles)
-    # ParallelMOEAD: variante síncrona que evalúa todo el offspring en lote,
-    # lo que permite el decode batcheado.
-    algorithm = ParallelMOEAD(
+    # MOEADConstr: ParallelMOEAD (variante síncrona que evalúa todo el offspring en
+    # lote, lo que permite el decode batcheado) con dominancia de factibilidad, porque
+    # el MOEA/D de pymoo aborta con assert ante un problema con constraints.
+    algorithm = MOEADConstr(
         ref_dirs=ref_dirs,
         n_neighbors=20,
         prob_neighbor_mating=0.9,
@@ -103,14 +105,15 @@ def main():
 
     # Post-procesamiento (los hiperparámetros barridos van como columnas de metrics.csv)
     hp = {'crossover': args.crossover, 'mutation': args.mutation,
-          'cx_prob': args.cx_prob, 'mut_prob': round(mut_prob, 6)}
+          'cx_prob': args.cx_prob, 'mut_prob': round(mut_prob, 6), 'fsp3_min': FSP3_MIN}
     metrics, pareto, hv, spacing, validity = postprocess_run(
         ALG_NAME, args.pop_size, args.n_gen, args.run_id,
         problem, tracker, elapsed, run_dir, hp=hp)
 
-    print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Div={metrics['diversity']:.4f}  Valid={validity:.0%}  "
-          f"n={len(pareto)}  QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
-          f"Fsp3={metrics['best_fsp3']}  t={metrics['time_sec']}s", flush=True)
+    print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Div={metrics['diversity']:.4f}  "
+          f"Valid={validity:.0%}  Feas={metrics['feasibility']:.0%}  n={len(pareto)}  "
+          f"QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
+          f"Fsp3={metrics['mean_fsp3']}  t={metrics['time_sec']}s", flush=True)
 
 
 if __name__ == "__main__":

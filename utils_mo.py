@@ -1,6 +1,8 @@
 """
 Utilidades para optimización multi-objetivo de moléculas en espacio latente VAE.
-Objetivos: QED (↑), SA (↓), Fsp3 (↑)  →  pymoo minimiza [-QED, SA, -Fsp3].
+Objetivos: QED (↑), SA (↓)  →  pymoo minimiza [-QED, SA].
+Fsp3 (↑) NO es objetivo: entra como CONSTRAINT de desigualdad (Fsp3 ≥ FSP3_MIN),
+así el frente de Pareto queda en 2D y la saturación solo filtra qué es admisible.
 QED ∈ [0,1] (druglikeness agregada, rdkit.Chem.QED.qed); Fsp3 ∈ [0,1] (fracción de
 carbonos sp3, CalcFractionCSP3); SA ∈ [1,10] (accesibilidad sintética).
 """
@@ -35,15 +37,30 @@ RESULTS_DIR = os.path.join(ROOT_DIR, "results")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
-# Bounds teóricos por objetivo [-QED, SA, -Fsp3] para normalizar el HV a [0,1]^3:
-#   -QED ∈ [-1, 0],  SA ∈ [1, 10],  -Fsp3 ∈ [-1, 0]
-F_MIN   = np.array([-1.0, 1.0, -1.0])   # mejor caso por objetivo
-F_RANGE = np.array([ 1.0, 9.0, 1.0])    # peor - mejor
+# Umbral del constraint de saturación: factible si Fsp3 ≥ FSP3_MIN  →  G = FSP3_MIN - Fsp3.
+# Como Fsp3 dejó de ser objetivo, nada empuja por encima del umbral: las soluciones se
+# estacionan EN el borde, así que este valor es el Fsp3 que se obtiene, no un piso.
+# Referencias medidas sobre los datos del proyecto, para interpretar el valor elegido:
+#   etapa lipinski (Fsp3 sin optimizar)  media 0.073, solo 0.6% del frente llega a 0.3
+#   MOSES train (lo que aprendió el VAE) mediana 0.333, media 0.350; 56% cumple ≥ 0.3
+#   etapa con Fsp3 como objetivo          media 0.61-0.70 por frente
+# Costo en QED medio según banda (frentes de la etapa a 3 objetivos): 0.906 en
+# [0.25,0.35) vs 0.887 en [0.35,0.45).  El máximo de QED (0.948) no cambia con la banda.
+FSP3_MIN = 0.3
+
+# Bounds teóricos por objetivo [-QED, SA] para normalizar el HV a [0,1]^2:
+#   -QED ∈ [-1, 0],  SA ∈ [1, 10]
+F_MIN   = np.array([-1.0, 1.0])   # mejor caso por objetivo
+F_RANGE = np.array([ 1.0, 9.0])   # peor - mejor
 # Ref point HV en el espacio normalizado: 10% más allá del peor (1.0) en cada eje.
-# Los 3 objetivos pesan igual y el HV queda en [0, 1.1^3 ≈ 1.331].
-HV_REF    = np.array([1.1, 1.1, 1.1])
+# Los 2 objetivos pesan igual y el HV queda en [0, 1.1^2 = 1.21].
+# OJO: no comparable con el HV de los experimentos a 3 objetivos (máx 1.331).
+HV_REF    = np.array([1.1, 1.1])
 # Penalización para inválidas: fuera del hipercubo de referencia (escala cruda).
-INVALID_F = [1.0, 12.0, 1.0]
+INVALID_F = [1.0, 12.0]
+# Violación asignada a las inválidas: un SMILES que no parsea no puede ser factible,
+# si no competiría de igual a igual contra moléculas reales que sí cumplen el umbral.
+INVALID_G = 1.0
 
 SMILES_REGEX = re.compile(
     r"(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|\=|#|-|\+|\\\\|\/|:|~|@|\?|>|<|\*|\$|%[0-9]{2}|[0-9])"
@@ -90,27 +107,38 @@ def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
     return os.path.join(base, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
 
 
-def mopso_run_dir(pop_size, n_gen, w, c1, c2, run_id, results_dir=None):
-    """Directorio de una run MOPSO (sus hiperparámetros: pob, gen, w, c1, c2)."""
+def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
+                   results_dir=None):
+    """Directorio de una run CMOPSO (pob, gen, elite_size, mutación por-gen, velocidad).
+
+    CMOPSO no tiene w/c1/c2: su ecuación de velocidad usa coeficientes aleatorios por
+    dimensión y no hay pbest, así que esas tres perillas del grid MOPSO desaparecen."""
     base = results_dir if results_dir is not None else RESULTS_DIR
-    cfg = f"pop{pop_size}_gen{n_gen}_w{_slug(w)}_c1{_slug(c1)}_c2{_slug(c2)}"
-    return os.path.join(base, "MOPSO", cfg, f"run_{run_id + 1:02d}")
+    cfg = (f"pop{pop_size}_gen{n_gen}_e{_slug(elite_size)}"
+           f"_mut{_slug(mut_prob)}_vel{_slug(vel_rate)}")
+    return os.path.join(base, "CMOPSO", cfg, f"run_{run_id + 1:02d}")
 
 
 def get_ref_dirs(n_points, seed=1):
-    """Direcciones de referencia (Riesz s-energy, 3 objetivos) para NSGA-III / MOEA-D.
-    Deterministas (seed fijo) pero caras (~6 s). Se cachean en disco y se reutilizan
-    entre todas las runs, en vez de recalcularlas idénticas en cada proceso."""
-    cache = os.path.join(ROOT_DIR, "data", f"ref_dirs_energy_3obj_p{n_points}_s{seed}.npy")
-    if os.path.exists(cache):
-        return np.load(cache)
+    """Direcciones de referencia (Das-Dennis uniforme, 2 objetivos) para NSGA-III /
+    MOEA-D: exactamente n_points, equiespaciadas sobre el símplex.
+
+    Con 2 objetivos el símplex es un segmento y Das-Dennis con n_points-1 particiones
+    da la solución EXACTA: n_points puntos a distancia 1/(n_points-1).  La etapa a 3
+    objetivos usaba Riesz s-energy porque ahí Das-Dennis no puede dar un n arbitrario,
+    pero en 2D energy es un optimizador numérico que aproxima algo que ya tiene forma
+    cerrada, y lo hace peor: medido con seed=1 devuelve una dirección DUPLICADA en
+    p=200 y p=400, y huecos de hasta 3-6x el espaciado ideal.  El duplicado importa
+    sobre todo en MOEA/D, donde cada dirección es un subproblema y pop_size = len(
+    ref_dirs): dos direcciones idénticas son un slot de población desperdiciado.
+
+    Es determinista y cuesta ~1 ms, así que no se cachea en disco (el cache anterior
+    llevaba el nº de objetivos en el nombre y era una fuente de errores silenciosos:
+    los .npy de 3 objetivos siguen en data/ y no los toca nadie).
+
+    seed se acepta por compatibilidad de firma; Das-Dennis no lo usa."""
     from pymoo.util.ref_dirs import get_reference_directions
-    rd  = get_reference_directions("energy", 3, n_points, seed=seed)
-    tmp = f"{cache}.{os.getpid()}.tmp"       # atómico: no deja un cache a medias
-    with open(tmp, "wb") as f:
-        np.save(f, rd)
-    os.replace(tmp, cache)
-    return rd
+    return get_reference_directions("uniform", 2, n_partitions=n_points - 1)
 
 
 
@@ -283,43 +311,58 @@ def calc_properties(smi):
 # ─── Problema pymoo ──────────────────────────────────────────────────────────
 
 class MolecularLatentProblem(Problem):
-    """Optimización tri-objetivo en espacio latente VAE.
-    F = [-QED, SA, -Fsp3] → pymoo minimiza los 3."""
+    """Optimización bi-objetivo con constraint de saturación en espacio latente VAE.
+
+    F = [-QED, SA]            → pymoo minimiza los 2.
+    G = [FSP3_MIN - Fsp3]     → factible si ≤ 0, o sea Fsp3 ≥ FSP3_MIN.
+
+    El constraint no entra al frente ni al HV: los algoritmos lo manejan por
+    dominancia de factibilidad (factible gana a infactible; entre infactibles,
+    menor violación), nativa en NSGA-II/III, AGE-MOEA y CMOPSO.  El único que
+    necesita subclase es MOEA/D (ver algoritmos_mo.MOEADConstr)."""
 
     def __init__(self, model, stoi, itos, latent_dim):
         self.model, self.stoi, self.itos = model, stoi, itos
         self.eval_log = []
-        super().__init__(n_var=latent_dim, n_obj=3, xl=-5.0, xu=5.0)
+        super().__init__(n_var=latent_dim, n_obj=2, n_ieq_constr=1, xl=-5.0, xu=5.0)
 
     def _evaluate(self, x, out, *args, **kwargs):
         smiles = decode_z_batch(self.model, x, self.stoi, self.itos)
         F = np.empty((len(smiles), self.n_obj), dtype=float)
+        G = np.empty((len(smiles), 1), dtype=float)
         for i, smi in enumerate(smiles):
             props = calc_properties(smi)
             if props is None:
                 F[i] = INVALID_F
+                G[i] = INVALID_G
                 self.eval_log.append({
                     'smiles': None, 'qed': None, 'sa': None,
-                    'fsp3': None, 'valid': False,
+                    'fsp3': None, 'valid': False, 'feasible': False,
                 })
             else:
-                F[i] = (-props['qed'], props['sa'], -props['fsp3'])
+                F[i] = (-props['qed'], props['sa'])
+                G[i] = FSP3_MIN - props['fsp3']
                 self.eval_log.append({
                     'smiles': props['smiles'], 'qed': props['qed'],
                     'sa': props['sa'], 'fsp3': props['fsp3'],
-                    'valid': True,
+                    'valid': True, 'feasible': bool(props['fsp3'] >= FSP3_MIN),
                 })
         out["F"] = F
+        out["G"] = G
 
 
 class NormalizedMolecularLatentProblem(MolecularLatentProblem):
     """MolecularLatentProblem con normalización estática de objetivos.
 
-    Normaliza F a [0,1]^3 usando bounds teóricos fijos:
-      -QED ∈ [-1, 0],  SA ∈ [1, 10],  -Fsp3 ∈ [-1, 0]
+    Normaliza F a [0,1]^2 usando bounds teóricos fijos:
+      -QED ∈ [-1, 0],  SA ∈ [1, 10]
+
+    G queda SIN normalizar a propósito: con dominancia de factibilidad los
+    objetivos y la violación nunca se mezclan en la misma escala, y dejar G
+    crudo mantiene la violación interpretable como "cuánto Fsp3 falta".
 
     eval_log mantiene valores crudos → post-procesamiento comparable.
-    Diseñado para MOEA/D y MOPSO donde la escala cruda de SA
+    Diseñado para MOEA/D y CMOPSO donde la escala cruda de SA
     domina la descomposición Tchebycheff / velocidad de partículas.
     """
 
@@ -372,24 +415,35 @@ class GenerationTracker(Callback):
         for e in new:
             e['gen'] = gen
 
-        F = algorithm.pop.get("F")
-        # HV sobre objetivos normalizados a [0,1]^3. El problema Normalized ya
-        # entrega F normalizado; el crudo ([-QED, SA, -Fsp3]) se normaliza aquí.
-        if not hasattr(self.problem, '_F_MIN'):
-            F = (F - F_MIN) / F_RANGE
-        try:
-            hv = float(HV(ref_point=HV_REF)(F))
-        except Exception:
+        # HV solo sobre los individuos FACTIBLES de la población: el HV final se
+        # calcula sobre el frente factible, y mezclar infactibles acá haría que la
+        # curva de convergencia mida algo distinto de su propio punto de llegada.
+        feas = algorithm.pop.get("FEAS")
+        pop_feasible = algorithm.pop[feas.flatten()] if feas is not None else algorithm.pop
+        if len(pop_feasible) == 0:
             hv = 0.0
+        else:
+            F = pop_feasible.get("F")
+            # HV sobre objetivos normalizados a [0,1]^2. El problema Normalized ya
+            # entrega F normalizado; el crudo ([-QED, SA]) se normaliza aquí.
+            if not hasattr(self.problem, '_F_MIN'):
+                F = (F - F_MIN) / F_RANGE
+            try:
+                hv = float(HV(ref_point=HV_REF)(F))
+            except Exception:
+                hv = 0.0
 
         valid  = [e['smiles'] for e in new if e['valid']]
         n_valid = len(valid)
         unique  = set(valid)
         n_novel = sum(1 for s in valid if s not in self.train_smiles)
+        n_feas  = sum(1 for e in new if e['valid'] and e.get('feasible'))
 
         self.history.append({
             'gen': gen,
             'hv': round(hv, 6),
+            'n_feasible': n_feas,
+            'feasibility': round(n_feas / n_valid, 4) if n_valid else 0.0,
             'n_eval': len(new),
             'n_valid': n_valid,
             'validity': round(n_valid / len(new), 4) if new else 0.0,
@@ -411,7 +465,7 @@ def _non_dominated_front(F):
     n = len(F)
     if n == 0:
         return np.empty(0, dtype=int)
-    order = np.lexsort((F[:, 2], F[:, 1], F[:, 0]))   # asc por obj0, obj1, obj2
+    order = np.lexsort(F.T[::-1])                      # asc por obj0, luego obj1, ...
     kept_idx = []
     cap = 256
     buf = np.empty((cap, F.shape[1]))                  # objetivos de los no-dominados
@@ -432,15 +486,15 @@ def non_dominated(results):
     """Filtra soluciones no-dominadas (memoria O(frente); ver _non_dominated_front)."""
     if not results:
         return []
-    F = np.array([[-r['qed'], r['sa'], -r['fsp3']] for r in results], dtype=float)
+    F = np.array([[-r['qed'], r['sa']] for r in results], dtype=float)
     return [results[i] for i in _non_dominated_front(F)]
 
 
 def compute_hv(pareto):
-    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^3."""
+    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^2."""
     if not pareto:
         return 0.0
-    F = np.array([[-r['qed'], r['sa'], -r['fsp3']] for r in pareto])
+    F = np.array([[-r['qed'], r['sa']] for r in pareto])
     F = (F - F_MIN) / F_RANGE
     try:
         return float(HV(ref_point=HV_REF)(F))
@@ -452,8 +506,8 @@ def compute_spacing(pareto):
     """Spacing de Schott normalizado (CV de distancias al vecino más cercano)."""
     if len(pareto) < 2:
         return 0.0
-    F = np.array([[-r['qed'], r['sa'], -r['fsp3']] for r in pareto])
-    # Normalizar ejes para compensar escalas distintas (SA~[1,10] vs QED/Fsp3~[0,1])
+    F = np.array([[-r['qed'], r['sa']] for r in pareto])
+    # Normalizar ejes para compensar escalas distintas (SA~[1,10] vs QED~[0,1])
     ranges = F.max(axis=0) - F.min(axis=0)
     ranges[ranges == 0] = 1.0
     F_norm = F / ranges
@@ -492,13 +546,22 @@ def compute_diversity(pareto):
 
 
 def build_pareto(eval_log):
-    """Construye frente de Pareto desde el log completo. Retorna (pareto, validity)."""
+    """Construye frente de Pareto desde el log completo.
+    Retorna (pareto, validity, feasibility).
+
+    Solo compiten las moléculas FACTIBLES (Fsp3 ≥ FSP3_MIN): el frente reportado
+    debe cumplir el constraint, si no molecules.csv publicaría soluciones que
+    violan el umbral. 'feasibility' es la fracción de válidas que lo cumplen."""
     n_valid = 0
+    n_feasible = 0
     seen = {}
     for e in eval_log:
         if not e['valid']:
             continue
         n_valid += 1
+        if not e.get('feasible', True):
+            continue
+        n_feasible += 1
         smi = e['smiles']
         if smi not in seen:
             seen[smi] = {
@@ -506,6 +569,7 @@ def build_pareto(eval_log):
                 'sa': e['sa'], 'fsp3': e['fsp3'],
             }
     validity = round(n_valid / len(eval_log), 4) if eval_log else 0.0
+    feasibility = round(n_feasible / n_valid, 4) if n_valid else 0.0
     pareto = non_dominated(list(seen.values()))
 
     # Agregar propiedades extendidas (mw, logp, hbd, hba) para el CSV
@@ -514,7 +578,7 @@ def build_pareto(eval_log):
         if props:
             m.update(props)
 
-    return pareto, validity
+    return pareto, validity, feasibility
 
 
 # ─── I/O ─────────────────────────────────────────────────────────────────────
@@ -573,7 +637,7 @@ def consolidate_all(results_dir=None):
 def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, hp=None):
     """Calcula métricas, guarda resultados y CSVs de una run.
     hp: dict con los hiperparámetros barridos (se agregan como columnas a metrics.csv)."""
-    pareto, validity = build_pareto(problem.eval_log)
+    pareto, validity, feasibility = build_pareto(problem.eval_log)
     hv        = compute_hv(pareto)
     spacing   = compute_spacing(pareto)
     diversity = compute_diversity(pareto)
@@ -588,9 +652,12 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         **(hp or {}),                       # hiperparámetros barridos como columnas
         'run': run_id + 1, 'n_pareto': len(pareto),
         'hypervolume': round(hv, 6), 'spacing': spacing, 'diversity': diversity,
-        'validity': validity, 'novelty': novelty,
+        'validity': validity, 'feasibility': feasibility, 'novelty': novelty,
         'best_qed': round(max((r['qed'] for r in pareto), default=float('nan')), 4),
         'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
+        # Fsp3 ya no es objetivo: el frente es factible por construcción, así que
+        # 'mean_fsp3' (dónde se paró respecto del umbral) informa más que el máximo.
+        'mean_fsp3': round(float(np.mean([r['fsp3'] for r in pareto])), 4) if pareto else float('nan'),
         'best_fsp3': round(max((r['fsp3'] for r in pareto), default=float('nan')), 4),
         'time_sec': round(elapsed, 1),
     }

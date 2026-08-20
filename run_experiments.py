@@ -8,7 +8,9 @@ cuenta como completa si existe su molecules.csv.
 Diseño (dos preguntas separadas, presupuesto fijo de 100k evaluaciones):
   • GA (NSGA2/NSGA3/MOEAD/AGEMOEA): por cada reparto pob×gen, cada combo de
     operadores y cada (prob_cruce, prob_mutación) → 3·4·3·3 = 108 configs c/u.
-  • MOPSO: por cada reparto pob×gen y cada (w, c1, c2) → 3·3·3·3 = 81 configs.
+  • CMOPSO: por cada reparto pob×gen y cada (elite_size, mut, vel) → 3·3·3·3 = 81
+    configs.  CMOPSO no tiene w/c1/c2 (su velocidad usa coeficientes aleatorios y
+    no hay pbest), así que reemplazan a esas tres perillas del grid MOPSO anterior.
 Total: 4·108 + 81 = 513 configuraciones × N_RUNS semillas.
 
 Cada perilla barrida queda codificada en el path (results/<ALG>/<slug>/run_k) y
@@ -29,7 +31,7 @@ import argparse
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils_mo import ga_run_dir, mopso_run_dir, consolidate_all
+from utils_mo import ga_run_dir, cmopso_run_dir, consolidate_all, FSP3_MIN
 
 ROOT   = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable   # el python del entorno actual (nada de rutas hardcodeadas)
@@ -43,10 +45,15 @@ MUT_PROBS = [0.004, 0.012, 0.031]
 # Combos de operadores GA: (crossover, mutation).
 OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
 
-# MOPSO: sus propias perillas (no tiene cruce/mutación).
-W_VALS  = [0.4, 0.6, 0.9]
-C1_VALS = [1.5, 2.0, 2.5]
-C2_VALS = [1.5, 2.0, 2.5]
+# CMOPSO: sus propias perillas.  elite_size es el tamaño al que pymoo poda su archivo
+# de elites (no es exactamente el γ del paper: el archivo crece hasta pop_size y solo
+# entonces se poda, así que el conjunto real oscila).  La mutación se barre POR GEN con
+# los mismos valores que los GA, para que sea comparable entre las cinco familias:
+# CMOPSO fija prob por-individuo y deja el por-gen en 1/n_var, y el script lo pisa.
+# vel_rate no está en el paper (sus ecuaciones no acotan la velocidad); se barre como
+# salvaguarda contra el «swarm explosion» en un latente de 256 dimensiones.
+ELITE_SIZES = [5, 10, 25]
+VEL_RATES   = [0.1, 0.2, 0.35]
 
 GA_ALGS = [
     ("NSGA2",   "experimento_nsga2.py"),
@@ -71,20 +78,21 @@ def build_tasks(n_runs):
                                               pop=pop, gen=gen, cx=cx, mut=mut,
                                               cxp=cxp, mutp=mutp, run=run))
     for pop, gen in POP_GEN:
-        for w in W_VALS:
-            for c1 in C1_VALS:
-                for c2 in C2_VALS:
+        for es in ELITE_SIZES:
+            for mutp in MUT_PROBS:
+                for vel in VEL_RATES:
                     for run in range(n_runs):
-                        tasks.append(dict(kind="mopso", alg="MOPSO",
-                                          script="experimento_mopso.py",
-                                          pop=pop, gen=gen, w=w, c1=c1, c2=c2, run=run))
+                        tasks.append(dict(kind="cmopso", alg="CMOPSO",
+                                          script="experimento_cmopso.py",
+                                          pop=pop, gen=gen, es=es, mutp=mutp,
+                                          vel=vel, run=run))
     return tasks
 
 
 def run_dir_of(t):
     """Path de la run — misma fuente de verdad que usan los scripts (utils_mo)."""
-    if t['kind'] == 'mopso':
-        return mopso_run_dir(t['pop'], t['gen'], t['w'], t['c1'], t['c2'], t['run'])
+    if t['kind'] == 'cmopso':
+        return cmopso_run_dir(t['pop'], t['gen'], t['es'], t['mutp'], t['vel'], t['run'])
     return ga_run_dir(t['alg'], t['cx'], t['mut'], t['cxp'], t['mutp'],
                       t['pop'], t['gen'], t['run'])
 
@@ -96,8 +104,8 @@ def is_done(t):
 
 def label(t):
     cfg = f"pop{t['pop']}xgen{t['gen']}/run_{t['run'] + 1:02d}"
-    if t['kind'] == 'mopso':
-        return f"MOPSO[w{t['w']:g}_c1{t['c1']:g}_c2{t['c2']:g}]/{cfg}"
+    if t['kind'] == 'cmopso':
+        return f"CMOPSO[e{t['es']:g}_mut{t['mutp']:g}_vel{t['vel']:g}]/{cfg}"
     return f"{t['alg']}[{t['cx']}{t['cxp']:g}+{t['mut']}{t['mutp']:g}]/{cfg}"
 
 
@@ -117,8 +125,9 @@ def run_one(t, device, threads):
     cmd = [PYTHON, os.path.join(ROOT, t['script']),
            "--pop_size", str(t['pop']), "--n_gen", str(t['gen']),
            "--run_id", str(t['run']), "--device", device]
-    if t['kind'] == 'mopso':
-        cmd += ["--w", str(t['w']), "--c1", str(t['c1']), "--c2", str(t['c2'])]
+    if t['kind'] == 'cmopso':
+        cmd += ["--elite_size", str(t['es']), "--mut_prob", str(t['mutp']),
+                "--vel_rate", str(t['vel'])]
     else:
         cmd += ["--crossover", t['cx'], "--mutation", t['mut'],
                 "--cx_prob", str(t['cxp']), "--mut_prob", str(t['mutp'])]
@@ -161,13 +170,16 @@ def default_parallel(device):
 
 
 def prewarm_caches():
-    """Pre-calcula los caches deterministas UNA sola vez (evita que los N workers los
-    reconstruyan en paralelo): SMILES de train de MOSES y las direcciones de referencia
-    de NSGA-III/MOEA-D para CADA población del grid (~6 s c/u). Idempotente."""
+    """Pre-calcula el cache determinista UNA sola vez (evita que los N workers lo
+    reconstruyan en paralelo): los SMILES de train de MOSES.  Idempotente.
+
+    Las direcciones de referencia ya no se cachean: con 2 objetivos son Das-Dennis
+    exacto y cuestan ~1 ms, así que cada run las genera sola.  Se siguen imprimiendo
+    como verificación de que salen con la dimensión y el tamaño correctos."""
     pops = sorted({p for p, _ in POP_GEN})
     code = ("import utils_mo; "
             "print('  MOSES:', len(utils_mo._load_moses_train_smiles()), 'SMILES'); "
-            + "".join(f"print('  ref_dirs p{p}:', len(utils_mo.get_ref_dirs({p})), 'dirs'); "
+            + "".join(f"print('  ref_dirs p{p}:', utils_mo.get_ref_dirs({p}).shape); "
                       for p in pops))
     print(f"[{time.strftime('%F %T')}] preparando caches (MOSES SMILES + ref_dirs)...", flush=True)
     subprocess.run([PYTHON, "-c", code], cwd=ROOT)
@@ -203,14 +215,14 @@ def main():
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
     n_ga    = len(GA_ALGS) * len(POP_GEN) * len(OPERATORS) * len(CX_PROBS) * len(MUT_PROBS)
-    n_mopso = len(POP_GEN) * len(W_VALS) * len(C1_VALS) * len(C2_VALS)
+    n_cmopso = len(POP_GEN) * len(ELITE_SIZES) * len(MUT_PROBS) * len(VEL_RATES)
 
     print("=" * 54)
-    print("  Sensibilidad de hiperparámetros — QED(↑) SA(↓) Fsp3(↑)")
+    print(f"  Sensibilidad de hiperparámetros — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")
     print(f"  Máquina        : {os.uname().nodename}  ({os.cpu_count()} núcleos)")
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")
-    print(f"  Configs        : {n_ga} GA + {n_mopso} MOPSO = {n_ga + n_mopso}")
+    print(f"  Configs        : {n_ga} GA + {n_cmopso} CMOPSO = {n_ga + n_cmopso}")
     print(f"  Total de runs  : {total}   (ya hechas: {done0}, pendientes: {len(pending)})")
     print("=" * 54)
 
