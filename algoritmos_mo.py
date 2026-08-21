@@ -6,16 +6,6 @@ AGE-MOEA y CMOPSO manejan constraints de forma nativa por dominancia de factibil
 (Survival.do → split_by_feasibility; en CMOPSO además el archivo de elites filtra por
 factibilidad al insertar).  El único que necesita subclase es MOEA/D.
 
-Nota sobre CMOPSO, relevante al describirlo en la tesis: la implementación de pymoo se
-desvía del paper original (Zhang et al., Inf. Sci. 427:63-76, 2018) en su contribución
-central.  El paper selecciona los elites FRESCOS del enjambre actual en cada generación
-y remarca que CMOPSO «does not need any external archive» (Alg. 2 línea 3); pymoo usa un
-archivo externo persistente (MultiObjectiveArchive con max_size=pop_size,
-truncate_size=elite_size).  Consecuencia práctica: `elite_size` NO es el γ del paper —
-el archivo crece hasta pop_size y solo entonces se poda, así que el conjunto real de
-elites oscila (medido: 2..100 con pop_size=100, con media 20/29/42 para elite_size
-10/25/50).  Sigue siendo una perilla con efecto monótono y barrible, pero conviene
-citarla como «elite_size de la implementación de pymoo» y no como el γ del artículo.
 """
 
 import numpy as np
