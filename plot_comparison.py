@@ -1,6 +1,11 @@
 """
 Gráficas comparativas entre algoritmos MOO.
 
+Espacio de objetivos: QED (↑) y SA (↓), o sea F = [-QED, SA] en minimización.
+Fsp3 NO es objetivo — entra como constraint (Fsp3 ≥ FSP3_MIN), así que el frente
+vive en un plano y Fsp3 se reporta como propiedad de lo que el constraint dejó
+pasar, nunca como una dimensión más de la dominancia (ver utils_mo).
+
 Los dos modos leen de resultados/, que es lo que baja del cluster (ver la
 cabecera de analisis.py):
 
@@ -24,7 +29,7 @@ y la copia que llega al PC como resultados/grid/ viene sin convergence.csv.
 
 Uso:
     python plot_comparison.py                            # comparación final
-    python plot_comparison.py --algorithms NSGA2 MOPSO AGEMOEA
+    python plot_comparison.py --algorithms NSGA2 CMOPSO AGEMOEA
     python plot_comparison.py --operadores               # operadores por algoritmo
     python plot_comparison.py --operadores --algorithms NSGA2 NSGA3
 """
@@ -64,7 +69,7 @@ PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
 # para operadores (claves no presentes aquí) se cae al ciclo DEFAULT por índice.
 COLORS = {
     'NSGA2':   '#000000',   # Negro
-    'MOPSO':   '#FF0000',   # Rojo 100%
+    'CMOPSO':  '#FF0000',   # Rojo 100%
     'AGEMOEA': '#008000',   # Verde
     'MOEAD':   '#1F77B4',   # Azul
     'NSGA3':   '#7B1FA2',   # Violeta
@@ -72,13 +77,13 @@ COLORS = {
 DEFAULT_COLORS = ['#000000', '#FF0000', '#008000', '#1F77B4', '#7B1FA2', '#8C564B']
 
 # Orden en que se presentan los algoritmos en la comparación final.
-ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'MOPSO']
+ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'CMOPSO']
 
 # Nombres de presentación para captions.  analisis.py tiene su propio DISPLAY
 # con las baselines incluidas; acá alcanza con los algoritmos porque es lo
 # único que llega como etiqueta de reporte.
 DISPLAY_ALG = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
-               'AGEMOEA': 'AGE-MOEA', 'MOPSO': 'MOPSO'}
+               'AGEMOEA': 'AGE-MOEA', 'CMOPSO': 'CMOPSO'}
 _ALG_POR_DISPLAY = {v: k for k, v in DISPLAY_ALG.items()}
 
 # Todas las series usan el mismo marcador (punto): se distinguen por color,
@@ -95,12 +100,25 @@ PARETO_MARKER = 'o'
 MARCADOR_DENSO  = 13    # varias series superpuestas en el panel
 MARCADOR_NORMAL = 23    # un frente por panel
 
-# Etiqueta legible por objetivo (con dirección de optimización)
+# Umbral del constraint de saturación, espejo de utils_mo.FSP3_MIN.  Se define
+# acá y no se importa para no arrastrar torch y el VAE a un módulo de gráficas;
+# cada metrics.csv trae además la columna 'fsp3_min' con el valor con que corrió,
+# así que una divergencia es detectable en el dato y no queda muda.
+FSP3_MIN = 0.3
+
+# Etiqueta legible por eje.  Solo QED y SA son objetivos; Fsp3 aparece en las
+# figuras como propiedad de lo que el constraint dejó pasar, y su etiqueta lo
+# dice para que ningún panel se lea como si fuese un tercer objetivo.
 OBJECTIVE_LABELS = {
     'qed':  'QED (↑)',
     'sa':   'SA (↓)',
-    'fsp3': 'Fsp3 (↑)',
+    'fsp3': f'Fsp3 (restricción $\\geq$ {FSP3_MIN:g})',
 }
+
+# Los objetivos, en el orden de las columnas de la matriz F.  Es el único lugar
+# donde se declara cuáles son: _df_to_F arma F con ellos y las cargas comprueban
+# que estén antes de calcular nada.
+OBJECTIVES = ['qed', 'sa']
 
 
 def get_color(key, idx=0):
@@ -108,7 +126,7 @@ def get_color(key, idx=0):
     (NSGA2) y también el de presentación (NSGA-II): las figuras que agrupan por
     nombre legible —el frente conjunto del pool— tienen que salir con el mismo
     color que el algoritmo lleva en el resto del documento, no con el del ciclo
-    por defecto, que le asignaría a NSGA-III el rojo de MOPSO."""
+    por defecto, que le asignaría a NSGA-III el rojo de CMOPSO."""
     if key in COLORS:
         return COLORS[key]
     corto = _ALG_POR_DISPLAY.get(key)
@@ -260,20 +278,31 @@ PANELES_MO = [
     ('epsilon',  'ε+ Aditivo (↓)', 'Convergencia ε+ Aditivo (↓)',       5),
 ]
 
+# Factibilidad va con las químicas y no con los indicadores MO: mide qué
+# fracción de lo generado cumple el constraint, que es una propiedad de las
+# moléculas, no del frente.  Es la métrica nueva de esta etapa —antes Fsp3 era
+# objetivo y no había nada que cumplir— y la que dice si el algoritmo aprendió a
+# quedarse del lado admisible o si sigue gastando evaluaciones fuera.
 PANELES_QUIM = [
-    ('validity',   'Tasa de Validez',  'Convergencia de Validez',  20),
-    ('uniqueness', 'Tasa de Unicidad', 'Convergencia de Unicidad', 20),
-    ('novelty',    'Tasa de Novedad',  'Convergencia de Novedad',  20),
-] + [(col, f'Promedio de {OBJECTIVE_LABELS[col]}',
-      f'Convergencia de {OBJECTIVE_LABELS[col]}', 20)
-     for col in ('qed', 'sa', 'fsp3')]
+    ('validity',    'Tasa de Validez',       'Convergencia de Validez',       20),
+    ('feasibility', 'Tasa de Factibilidad',  'Convergencia de Factibilidad',  20),
+    ('uniqueness',  'Tasa de Unicidad',      'Convergencia de Unicidad',      20),
+    ('novelty',     'Tasa de Novedad',       'Convergencia de Novedad',       20),
+    ('qed',         'Promedio de QED (↑)',   'Convergencia de QED (↑)',       20),
+    ('sa',          'Promedio de SA (↓)',    'Convergencia de SA (↓)',        20),
+    # Fsp3 ya no es objetivo, pero su curva es justamente lo que hay que mirar:
+    # nada la empuja hacia arriba, así que debería caer hasta apoyarse en el
+    # umbral y quedarse ahí.  El panel muestra ese descenso, no una mejora.
+    ('fsp3',        f'Promedio de Fsp3 (restr. $\\geq$ {FSP3_MIN:g})',
+     'Convergencia de Fsp3 (restricción)', 20),
+]
 
 
 def _mapa_evaluaciones(series):
     """{label: Series(gen → evaluaciones acumuladas)}, promediado sobre las runs.
 
     Sale de la columna n_eval de convergence.csv y no de gen × pop_size: no
-    siempre coinciden —MOPSO evalúa 200 en una generación y 100 en el resto— y
+    siempre coinciden —CMOPSO evalúa 200 en una generación y 100 en el resto— y
     acá el eje tiene que ser el gasto real."""
     mapas = {}
     for s in series:
@@ -336,27 +365,29 @@ def escribir_curvas_csv(series, curvas, mapas, output_dir, pop_size):
     print(f"  ✓ convergence_curves_pop{pop_size}.csv  ({len(filas)} filas)")
 
 
-def _plot_convergence_grid(series, output_dir, specs, curvas, fname, suptitle,
-                           mapas=None):
+def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
+                           suptitle):
     """Dibuja una grilla de paneles de convergencia (3 por fila).
 
     specs: lista de (col, ylabel, title, ventana) — ver PANELES_MO / PANELES_QUIM.
     curvas: {col: {label: (gens, vals crudos)}}.
-    mapas: con el mapa de evaluaciones, el eje pasa de generación a evaluaciones;
-           sin él, queda en generación."""
-    eje_eval = mapas is not None
+    mapas: mapa de evaluaciones acumuladas por serie (ver _mapa_evaluaciones).
+
+    El eje x son SIEMPRE evaluaciones, nunca generaciones: es el único donde la
+    comparación es a igual presupuesto, porque conviven repartos de 200×500 y
+    100×1000 y en la generación 500 un algoritmo ya gastó las 100.000
+    evaluaciones y el otro va por la mitad."""
     panels = []
     for col, ylabel, title, ventana in specs:
         c = curvas.get(col) or {}
         c = {lab: (x, _smooth(v, ventana)) for lab, (x, v) in c.items()}
-        if eje_eval:
-            c = _a_evaluaciones(c, mapas)
+        c = _a_evaluaciones(c, mapas)
         if c:
             panels.append((ylabel, title, c))
     if not panels:
         print(f"  ⚠ {fname}: sin datos de convergencia")
         return
-    xlabel = 'Evaluaciones (miles)' if eje_eval else 'Generación'
+    xlabel = 'Evaluaciones (miles)'
 
     n_plots = len(panels)
     ncols = min(3, n_plots)
@@ -408,13 +439,17 @@ BOXPLOT_MO_CONFIGS = [
     ('epsilon',     'ε+ Aditivo (↓)',    False),
     ('n_pareto',    'Tamaño de Pareto',  True),
 ]
+# Fsp3 va sin flecha: no se optimiza, se reporta.  Marcarla con (↑) haría leer
+# como derrota que un algoritmo se quede cerca del umbral, que es exactamente lo
+# que se espera cuando el constraint reemplaza al objetivo.
 BOXPLOT_CHEM_CONFIGS = [
-    ('mean_qed',      'QED (↑)',         True),
-    ('mean_sa',       'SA (↓)',          False),
-    ('mean_fsp3', 'Fsp3 (↑)',    True),
-    ('validity',      'Tasa de Validez', True),
-    ('uniqueness',    'Unicidad (↑)',    True),
-    ('novelty',       'Novedad (↑)',     True),
+    ('mean_qed',    'QED (↑)',              True),
+    ('mean_sa',     'SA (↓)',               False),
+    ('feasibility', 'Factibilidad (↑)',     True),
+    ('mean_fsp3',   f'Fsp3 (restr. $\\geq$ {FSP3_MIN:g})', True),
+    ('validity',    'Tasa de Validez',      True),
+    ('uniqueness',  'Unicidad (↑)',         True),
+    ('novelty',     'Novedad (↑)',          True),
 ]
 
 
@@ -492,14 +527,24 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
 
 
 def _df_to_F(df):
-    """Convierte DataFrame con qed, sa, fsp3 a matriz F de minimización."""
-    return np.array([[-r['qed'], r['sa'], -r['fsp3']] for _, r in df.iterrows()])
+    """Convierte DataFrame con qed y sa a matriz F de minimización [-QED, SA].
+
+    Fsp3 no entra: es constraint, no objetivo.  Meterlo como tercera columna
+    —como hacía la etapa anterior— cambiaría quién domina a quién: una molécula
+    peor en los dos objetivos sobreviviría por tener más Fsp3, cuando el
+    constraint solo distingue entre admisible y no admisible."""
+    return np.column_stack([-df['qed'].to_numpy(dtype=float),
+                            df['sa'].to_numpy(dtype=float)])   # ver OBJECTIVES
 
 
 def _compute_non_dominated(df):
-    """Recalcula el frente no-dominado de un DataFrame con qed, sa, fsp3."""
-    required = {'qed', 'sa', 'fsp3'}
-    if not required.issubset(df.columns) or df.empty:
+    """Recalcula el frente no-dominado de un DataFrame con qed y sa.
+
+    Las filas que llegan acá ya pasaron el constraint: molecules.csv publica
+    únicamente el frente factible (ver utils_mo.build_pareto), así que no hay
+    que volver a filtrar por Fsp3.  La excepción es el frente por generación de
+    all_molecules.csv.gz, que sí trae infactibles y se filtra en el origen."""
+    if not set(OBJECTIVES).issubset(df.columns) or df.empty:
         return df
     F = _df_to_F(df)
     front_idx = NonDominatedSorting().do(F, only_non_dominated_front=True)
@@ -510,7 +555,7 @@ def _front_bounds(pf_F):
     """Ideal (mínimos) y escala (nadir − ideal) del frente de referencia.
 
     Se usan para normalizar los objetivos a [0,1] antes de IGD+ y ε+, de modo
-    que los tres objetivos pesen por igual (sin esto, SA domina por su rango
+    que los dos objetivos pesen por igual (sin esto, SA domina por su rango
     mayor).  Las dimensiones constantes (escala 0) se fijan a 1 para no dividir
     por cero: tras normalizar quedan en 0 y no afectan las distancias."""
     ideal = pf_F.min(axis=0)
@@ -592,8 +637,7 @@ def compute_indicators_per_run(series, pf_F):
             if not os.path.exists(mol_path):
                 continue
             df = pd.read_csv(mol_path)
-            required = {'qed', 'sa', 'fsp3'}
-            if df.empty or not required.issubset(df.columns):
+            if df.empty or not set(OBJECTIVES).issubset(df.columns):
                 continue
             F_run = _normalize_F(_df_to_F(df), ideal, scale)
             rows.append({
@@ -619,10 +663,18 @@ def _pie_marker(ax, x, y, colors, size):
                    linewidths=0.3, zorder=5)
 
 
-# Los tres planos del espacio de objetivos, en el orden en que se encadenan
-# mejor: los dos primeros comparten el eje QED y los dos últimos el eje Fsp3,
-# así cada panel comparte un eje con el que tiene al lado.
-PARETO_PLANES = [('qed', 'sa'), ('qed', 'fsp3'), ('sa', 'fsp3')]
+# El espacio de objetivos es un plano: con dos objetivos el frente es una curva
+# en QED-SA y no hay más proyecciones que mirar.  La etapa anterior dibujaba tres
+# paneles porque Fsp3 era el tercer objetivo; ahora es constraint y su lugar está
+# en PLANOS_FRENTE, no acá.
+PARETO_PLANES = [('qed', 'sa')]
+
+# Los paneles del frente conjunto: el espacio de objetivos más un diagnóstico del
+# constraint.  El segundo panel no es una proyección del frente —Fsp3 no ordena
+# nada— sino la respuesta a dónde se paró la búsqueda respecto del umbral: como
+# ya nada empuja Fsp3 hacia arriba, se espera que las soluciones se estacionen en
+# el borde, y conviene verlo en vez de suponerlo.
+PLANOS_FRENTE = [('qed', 'sa'), ('qed', 'fsp3')]
 
 
 def _pad_lim(values, frac=0.08):
@@ -725,13 +777,14 @@ def _combined_pareto_fronts(series):
 #   grueso de sus soluciones esté dominado.  Para separar las dos cosas se junta
 #   lo que produjeron todos los combos, se recalcula la no-dominancia global y
 #   se mira quién aportó los supervivientes.  Es dominancia de Pareto pura sobre
-#   los tres objetivos: no hay umbrales ni ponderaciones de por medio.
+#   los dos objetivos: no hay umbrales ni ponderaciones de por medio (el único
+#   umbral del experimento, Fsp3, ya filtró antes qué entra a competir).
 
 # Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
-# MOPSO entra acá porque en el frente conjunto de candidatos convive con las dos
+# CMOPSO entra acá porque en el frente conjunto de candidatos convive con las dos
 # familias de cruce sin pertenecer a ninguna: no tiene operadores.  Su rojo va
 # oscurecido para que no se confunda con el naranja de PCX.
-CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'MOPSO': '#B01818'}
+CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'CMOPSO': '#B01818'}
 COMPARTIDA_COLOR = '#7F7F7F'
 
 
@@ -790,15 +843,22 @@ def atribuir_frente(series, pf_df, grupo_de=_familia):
     return out
 
 
+# Ancho de la banda que cuenta como «apoyado en el umbral».  Con Fsp3 fuera de
+# los objetivos nada la empuja hacia arriba, así que la pregunta útil dejó de ser
+# cuántas moléculas llegan alto (con el constraint casi ninguna: el máximo del
+# grid ronda 0.64) y pasó a ser cuántas se estacionan justo sobre el borde.
+FSP3_BORDE = 0.05
+
+
 def _perfil(df):
     """Descriptores del subconjunto que aporta un operador al frente conjunto:
     dónde cae y qué calidad tiene lo que aporta."""
     if df.empty:
-        return {'n': 0, 'fsp3': np.nan, 'fsp3_alto': np.nan,
+        return {'n': 0, 'fsp3': np.nan, 'fsp3_borde': np.nan,
                 'qed': np.nan, 'qed_bajo': np.nan, 'sa': np.nan}
     return {'n': len(df),
             'fsp3': float(df.fsp3.mean()),
-            'fsp3_alto': float((df.fsp3 > 0.9).mean()),
+            'fsp3_borde': float((df.fsp3 < FSP3_MIN + FSP3_BORDE).mean()),
             'qed': float(df.qed.mean()),
             'qed_bajo': float((df.qed < 0.60).mean()),
             'sa': float(df.sa.mean())}
@@ -894,10 +954,10 @@ def _atribucion_por_origen(series, pf_df, grupo_de):
     """Prepara el frente conjunto para dibujarlo: lo atribuye, arma la paleta y
     cuenta cuántas moléculas puso cada grupo en exclusiva.
 
-    Lo comparten las dos figuras del frente conjunto —la de los tres planos y la
-    3D—, que difieren solo en la geometría: si cada una armara su paleta por su
-    cuenta, un cambio de color entraría en una y no en la otra y los dos paneles
-    del documento dejarían de ser el mismo objeto.
+    La separa de la figura porque la atribución es lo caro —relee molecules.csv
+    de todas las series— y porque la paleta tiene que salir de un solo lugar: es
+    la misma que usa la tabla de contribución, y armarla dos veces dejaría el
+    cuadro y el gráfico del documento contando lo mismo con colores distintos.
 
     Devuelve None cuando la atribución no aplica (sin la columna 'origen' no hay
     nada que colorear, que es el caso de una sola serie)."""
@@ -922,7 +982,8 @@ def _atribucion_por_origen(series, pf_df, grupo_de):
 
 def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
     """Leyenda de grupos y título de las figuras del frente conjunto.  Las dos
-    coordenadas verticales son lo único que cambia entre la versión 2D y la 3D.
+    coordenadas verticales se pasan por parámetro porque dependen de cuántos
+    paneles lleve la figura.
 
     'solo X' y no 'X' a secas: estas cuentas son exclusivas, mientras que la
     columna «Aporta» de la tabla incluye las compartidas."""
@@ -941,10 +1002,24 @@ def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
                  fontsize=14, fontweight='bold', y=titulo_y)
 
 
+def _linea_constraint(ax, eje):
+    """Marca el umbral del constraint sobre el eje que lleva Fsp3.
+
+    Sin la línea el panel no se puede leer: la nube arranca en 0.3 y parece un
+    borde de los datos, cuando es el umbral que la búsqueda tenía prohibido
+    cruzar.  Es lo que separa «se paró en el borde» de «no llegó más abajo»."""
+    trazo = ax.axvline if eje == 'x' else ax.axhline
+    trazo(FSP3_MIN, color='#444444', linestyle=':', linewidth=1.4, zorder=2,
+          label=f'Fsp3 = {FSP3_MIN:g}')
+
+
 def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia):
-    """El frente no dominado conjunto en los tres planos, cada molécula pintada
-    según quién la aportó (familia de cruce al comparar operadores, algoritmo al
-    comparar algoritmos).
+    """El frente no dominado conjunto, cada molécula pintada según quién la
+    aportó (familia de cruce al comparar operadores, algoritmo al comparar
+    algoritmos).
+
+    Dos paneles: el espacio de objetivos —donde vive el frente— y el diagnóstico
+    del constraint, con el umbral dibujado (ver PLANOS_FRENTE).
 
     Todos los puntos van en un único scatter con un array de colores: si se
     dibujara un grupo después de otro, el último taparía a los anteriores en la
@@ -955,18 +1030,24 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
         return
     at, colores = atr['at'], atr['colores']
 
-    n = len(PARETO_PLANES)
-    fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8))
-    for ax, (xcol, ycol) in zip(np.atleast_1d(axes), PARETO_PLANES):
+    planos = [(x, y) for x, y in PLANOS_FRENTE
+              if x in at.columns and y in at.columns]
+    if not planos:
+        return
+    n = len(planos)
+    fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8), squeeze=False)
+    for ax, (xcol, ycol) in zip(axes[0], planos):
         ax.scatter(at[xcol], at[ycol], c=colores, marker=PARETO_MARKER,
                    s=MARCADOR_NORMAL, alpha=0.55, edgecolors='none',
                    linewidths=0, zorder=3)
         ax.set_xlabel(OBJECTIVE_LABELS.get(xcol, xcol))
         ax.set_ylabel(OBJECTIVE_LABELS.get(ycol, ycol))
-        ax.set_title(f'{OBJECTIVE_LABELS.get(xcol, xcol)} vs '
-                     f'{OBJECTIVE_LABELS.get(ycol, ycol)}')
+        ax.set_title('Espacio de objetivos' if (xcol, ycol) in PARETO_PLANES
+                     else 'Restricción de saturación')
         ax.set_xlim(*_pad_lim(at[xcol].values))
         ax.set_ylim(*_pad_lim(at[ycol].values))
+        if 'fsp3' in (xcol, ycol):
+            _linea_constraint(ax, 'x' if xcol == 'fsp3' else 'y')
 
     _leyenda_y_titulo_origen(fig, atr, output_dir, 0.01, 1.0)
     plt.tight_layout(rect=[0, 0.09, 1, 0.97])
@@ -976,69 +1057,10 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     print(f"  ✓ {fname}")
 
 
-# Elevación de la proyección isométrica: arctan(1/√2).  Con proyección
-# ortográfica y azimut múltiplo impar de 45° los tres ejes quedan igual de
-# escorzados, así que ninguno se lee privilegiado sobre los otros.
-ISO_ELEV = math.degrees(math.atan(1 / math.sqrt(2)))
-
-# Azimuts separados 90°: se leen como una rotación del mismo objeto.  Medidos
-# sobre el frente conjunto, -45° es el de mayor dispersión proyectada y +135° el
-# de menor oclusión entre puntos.
-VISTAS_3D = [-45, 45, 135]
-
-
-def plot_frente_conjunto_3d(series, pop_size, output_dir, pf_df,
-                            grupo_de=_familia, vistas=VISTAS_3D):
-    """El frente no dominado conjunto en 3D, desde varios azimuts.
-
-    Complementa a los planos 2D: las proyecciones muestran bien los pares de
-    objetivos pero aplastan la superficie, y acá lo que interesa es su forma.
-
-    Proyección ortográfica en todas las vistas: con la perspectiva por defecto
-    cada panel parece estar a una distancia distinta y los tamaños dejan de ser
-    comparables entre sí.
-    """
-    atr = _atribucion_por_origen(series, pf_df, grupo_de)
-    if atr is None:
-        return
-    at, colores = atr['at'], atr['colores']
-
-    ncols = len(vistas)
-    fig = plt.figure(figsize=(6.2 * ncols, 6.0))
-    for i, azim in enumerate(vistas, start=1):
-        ax = fig.add_subplot(1, ncols, i, projection='3d')
-        ax.set_proj_type('ortho')
-        # Un único scatter: matplotlib ordena por profundidad dentro de la
-        # llamada, así que la superposición refleja la geometría y no el orden
-        # en que se dibujaron los grupos.
-        # Marcador más chico que en 2D y no MARCADOR_NORMAL: la nube proyectada
-        # ocupa una fracción del panel y los puntos se tapan además en
-        # profundidad, así que acá el solape aparece antes.
-        ax.scatter(at['qed'], at['sa'], at['fsp3'], c=colores,
-                   marker=PARETO_MARKER, s=9, depthshade=False, alpha=0.75,
-                   edgecolors='none', linewidths=0)
-        ax.view_init(elev=ISO_ELEV, azim=azim)
-        # La caja ortográfica deja aire alrededor de la nube, pero el zoom saca
-        # las etiquetas del eje z fuera de su panel: por encima de ~1.05 se
-        # montan sobre el panel vecino y la del último se sale del lienzo.
-        ax.set_box_aspect(None, zoom=1.05)
-        ax.set_xlabel(OBJECTIVE_LABELS.get('qed', 'qed'), labelpad=8)
-        ax.set_ylabel(OBJECTIVE_LABELS.get('sa', 'sa'), labelpad=8)
-        ax.set_zlabel(OBJECTIVE_LABELS.get('fsp3', 'fsp3'), labelpad=8)
-        ax.tick_params(labelsize=8.5, pad=1)
-        ax.grid(True)
-
-    _leyenda_y_titulo_origen(fig, atr, output_dir, 0.015, 0.98)
-    # Separación amplia entre paneles: las etiquetas del eje z de uno se meten
-    # sobre el panel vecino si se dejan pegados.
-    fig.subplots_adjust(left=0.03, right=0.95, bottom=0.11, top=0.92,
-                        wspace=1.25 / ncols)
-    fname = f"frente_conjunto_3d_pop{pop_size}.png"
-    # Sin bbox_inches='tight': los ejes 3D dibujan sus etiquetas por su cuenta y
-    # el recorte automático las deja fuera.  Los márgenes se fijan arriba.
-    plt.savefig(os.path.join(output_dir, fname), dpi=180)
-    plt.close(fig)
-    print(f"  ✓ {fname}")
+# La figura 3D del frente conjunto se eliminó al pasar a dos objetivos: existía
+# para mostrar la forma de una superficie en QED-SA-Fsp3, y con Fsp3 fuera de la
+# dominancia esa superficie no existe — el frente es una curva y proyectarla en
+# tres ejes sugeriría un compromiso que ya no se optimiza.
 
 
 def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
@@ -1135,9 +1157,9 @@ def generate_statistical_table(series, pop_size, output_dir,
         print("  ⚠ Se necesitan ≥2 series para tabla estadística")
         return
 
-    cols = ['hypervolume', 'spacing', 'validity', 'novelty',
+    cols = ['hypervolume', 'spacing', 'validity', 'feasibility', 'novelty',
             'igd_plus', 'epsilon',
-            'best_qed', 'best_sa', 'n_pareto', 'time_sec']
+            'best_qed', 'best_sa', 'mean_fsp3', 'n_pareto', 'time_sec']
     cols = [c for c in cols if all(c in df.columns for df in all_metrics.values())]
 
     # Generar CSV resumen
@@ -1253,17 +1275,24 @@ def _write_latex_comparison_table(series, col_values, metrics_cfg,
                 means[(s.label, col)] = float(np.mean(vals))
                 stds[(s.label, col)] = float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
 
-    # Mejor serie por columna (según dirección de optimización)
+    # Mejor serie por columna (según dirección de optimización).  Con
+    # higher_better=None la columna se reporta sin competir —es el caso de Fsp3,
+    # que dejó de ser objetivo— así que no lleva ni flecha ni negrita: marcar una
+    # ganadora afirmaría un criterio que el experimento no optimiza.
     best = {}
     for _, col, _, hb in cols:
+        if hb is None:
+            continue
         cand = [(s.label, means[(s.label, col)]) for s in series
                 if (s.label, col) in means]
         if cand:
             best[col] = (max if hb else min)(cand, key=lambda t: t[1])[0]
 
-    arrow = lambda hb: r'$\uparrow$' if hb else r'$\downarrow$'
+    arrow = lambda hb: '' if hb is None else (r'$\uparrow$' if hb
+                                              else r'$\downarrow$')
     col_spec = 'l' + 'c' * len(cols)
-    header_cells = ['Algoritmo'] + [f'{h} {arrow(hb)}' for h, _, _, hb in cols]
+    header_cells = ['Algoritmo'] + [f'{h} {arrow(hb)}'.strip()
+                                    for h, _, _, hb in cols]
 
     # pop_size llega como etiqueta del reporte (el algoritmo al comparar
     # operadores, 'final' al comparar algoritmos), no siempre como tamaño de
@@ -1346,13 +1375,17 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
         ('Tamaño de Pareto', 'n_pareto',    '.1f', True),
         ('Tiempo (s)',       'time_sec',    '.1f', False),
     ]
+    # Fsp3 entra con higher_better=None: se reporta pero no se compite por ella,
+    # así que la tabla no debe poner en negrita a «la mejor».  El resto de las
+    # columnas sí tienen dirección y la conservan.
     chem_cfg = [
-        ('QED',      'mean_qed',      '.4f', True),
-        ('SA',       'mean_sa',       '.2f', False),
-        ('Fsp3', 'mean_fsp3', '.4f', True),
-        ('Validez',  'validity',      '.4f', True),
-        ('Unicidad', 'uniqueness',    '.4f', True),
-        ('Novedad',  'novelty',       '.4f', True),
+        ('QED',           'mean_qed',    '.4f', True),
+        ('SA',            'mean_sa',     '.2f', False),
+        ('Factibilidad',  'feasibility', '.4f', True),
+        ('Fsp3',          'mean_fsp3',   '.4f', None),
+        ('Validez',       'validity',    '.4f', True),
+        ('Unicidad',      'uniqueness',  '.4f', True),
+        ('Novedad',       'novelty',     '.4f', True),
     ]
 
     # El contexto sale de pop_size, que es la etiqueta del reporte: el nombre
@@ -1371,15 +1404,19 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
         f'Comparación de indicadores multiobjetivo{cap_ctx}',
         f'tab:comparison_multiobjective{lab_ctx}_pop{pop_size}',
         output_dir, f'comparison_multiobjective_pop{pop_size}.tex', pop_size)
-    # El alcance no es el mismo en las seis columnas y conviene decirlo: QED, SA
-    # y Fsp3 son del frente acumulado, validez y novedad de todas las
-    # evaluaciones, y unicidad solo de la última generación.
+    # El alcance no es el mismo en todas las columnas y conviene decirlo: QED, SA
+    # y Fsp3 son del frente acumulado, validez, factibilidad y novedad de todas
+    # las evaluaciones, y unicidad solo de la última generación.
     _write_latex_comparison_table(
         series, col_values, chem_cfg,
         f'Comparación de indicadores químicos{cap_ctx}.  QED, SA y Fsp3 son la '
         f'media del frente no dominado acumulado sobre la corrida completa; '
-        f'validez y novedad se calculan sobre las evaluaciones de toda la '
-        f'corrida; unicidad corresponde a la población de la última generación',
+        f'validez, factibilidad y novedad se calculan sobre las evaluaciones de '
+        f'toda la corrida (factibilidad como fracción de las válidas que cumplen '
+        f'Fsp3 $\\geq$ {FSP3_MIN:g}); unicidad corresponde a la población de la '
+        f'última generación.  Fsp3 se informa sin dirección de optimización: es '
+        f'la restricción, no un objetivo, y su valor dice dónde se estacionó la '
+        f'búsqueda respecto del umbral',
         f'tab:comparison_chemical{lab_ctx}_pop{pop_size}',
         output_dir, f'comparison_chemical_pop{pop_size}.tex', pop_size)
 
@@ -1406,7 +1443,7 @@ def _cmap_recortada(nombre, hasta):
 # Variantes de color del grid QED vs SA.  Los dos paneles comparten geometría y
 # responden preguntas distintas, así que se generan como archivos separados:
 #   nruns → ¿el hallazgo se repite entre semillas, o lo vio una sola?
-#   fsp3  → ¿dónde cae el tercer objetivo sobre el compromiso QED-SA?
+#   fsp3  → ¿qué margen sobre el umbral tiene cada punto del compromiso QED-SA?
 # El sufijo va en el nombre del archivo para que no se confundan.
 #
 # El valor va solo en el color: todos los marcadores miden lo mismo, así que la
@@ -1417,7 +1454,8 @@ def _cmap_recortada(nombre, hasta):
 GRID_COLOR_MODES = {
     'nruns': dict(col='n_runs_appeared', cmap=_cmap_recortada('plasma', 0.72),
                   label='Nº de ejecuciones en que aparece', entero=True),
-    'fsp3':  dict(col='fsp3', cmap='viridis', label='Fsp3 (↑)'),
+    'fsp3':  dict(col='fsp3', cmap='viridis',
+                  label=f'Fsp3 (restricción $\\geq$ {FSP3_MIN:g})'),
 }
 
 
@@ -1459,10 +1497,15 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         return
 
     if color_by == 'fsp3':
-        # Escala absoluta: Fsp3 está acotado a [0,1] por definición, y fijarla
-        # hace comparables los paneles entre sí.  Con una escala por-datos, un
-        # panel sin extremos se vería igual de "caliente" que uno lleno.
-        norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
+        # Escala absoluta para que los paneles se comparen entre sí, pero
+        # arrancando en el umbral y no en 0: el frente publicado es factible por
+        # construcción, así que el tramo [0, FSP3_MIN) de la rampa no puede
+        # recibir ningún punto y gastarlo aplanaría todo el frente en un mismo
+        # tono.  El tope sale de los datos —con Fsp3 fuera de los objetivos nadie
+        # llega cerca de 1— acotado por abajo para que la banda nunca degenere.
+        fsp3_max = max((p['fsp3'].max() for _, p, _ in paretos), default=1.0)
+        norm = mcolors.Normalize(vmin=FSP3_MIN,
+                                 vmax=max(float(fsp3_max), FSP3_MIN + 0.1))
     else:
         # 1 run → violeta, max_runs → amarillo
         global_max_runs = max(nr for _, _, nr in paretos)
@@ -1534,6 +1577,13 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
     los indicadores contra el frente de referencia combinado pf_F.
     Promedia sobre todas las runs de cada serie y guarda las curvas en CSV.
 
+    Solo compiten las moléculas FACTIBLES, igual que en el frente final que
+    publica utils_mo.build_pareto.  El log crudo sí trae las infactibles, y
+    dejarlas entrar mediría la curva contra un frente por generación que incluye
+    soluciones que violan el umbral, mientras el frente de referencia se armó
+    solo con factibles: los indicadores quedarían comparando dos poblaciones
+    distintas y la curva bajaría por admitir lo inadmisible.
+
     gen_stride submuestrea generaciones (1 = todas) para acelerar el cómputo.
 
     Devuelve {col: {label: (gens, vals_suavizadas)}} para 'igd_plus' y 'epsilon'.
@@ -1552,11 +1602,20 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
             if not os.path.exists(gz_path):
                 continue
             try:
-                df = pd.read_csv(gz_path,
-                                 usecols=['gen', 'qed', 'sa', 'fsp3', 'valid'])
+                df = pd.read_csv(gz_path, usecols=lambda c: c in {
+                    'gen', 'qed', 'sa', 'fsp3', 'valid', 'feasible'})
             except Exception:
                 continue
-            df = df[df['valid'].astype(bool)].dropna(subset=['qed', 'sa', 'fsp3'])
+            if not {'gen', 'qed', 'sa', 'valid'}.issubset(df.columns):
+                continue
+            df = df[df['valid'].astype(bool)].dropna(subset=['qed', 'sa'])
+            # 'feasible' lo escribe el eval_log de esta etapa; si el log viniera
+            # de una corrida sin constraint se cae a Fsp3 ≥ umbral, que es la
+            # misma condición calculada desde la propiedad.
+            if 'feasible' in df.columns:
+                df = df[df['feasible'].astype(bool)]
+            elif 'fsp3' in df.columns:
+                df = df[df['fsp3'] >= FSP3_MIN]
             if df.empty:
                 continue
 
@@ -1655,34 +1714,34 @@ def _generate_report(series, pop_size, output_dir, report_label):
     #    all_molecules.csv.gz de todas las runs y es la parte cara.
     print("📈 Curvas de convergencia (MO y químicas)...")
     curvas = {
-        'hv':         _conv_csv_curves(series, 'hv'),
-        'igd_plus':   ind_curves['igd_plus'],
-        'epsilon':    ind_curves['epsilon'],
-        'validity':   _conv_csv_curves(series, 'validity'),
-        'uniqueness': _conv_csv_curves(series, 'uniqueness'),
-        'novelty':    _conv_csv_curves(series, 'novelty'),
-        'qed':        _objective_curves(series, 'qed'),
-        'sa':         _objective_curves(series, 'sa'),
-        'fsp3':       _objective_curves(series, 'fsp3'),
+        'hv':          _conv_csv_curves(series, 'hv'),
+        'igd_plus':    ind_curves['igd_plus'],
+        'epsilon':     ind_curves['epsilon'],
+        'validity':    _conv_csv_curves(series, 'validity'),
+        'feasibility': _conv_csv_curves(series, 'feasibility'),
+        'uniqueness':  _conv_csv_curves(series, 'uniqueness'),
+        'novelty':     _conv_csv_curves(series, 'novelty'),
+        'qed':         _objective_curves(series, 'qed'),
+        'sa':          _objective_curves(series, 'sa'),
+        'fsp3':        _objective_curves(series, 'fsp3'),
     }
 
-    # 3. Cada juego de paneles se dibuja dos veces.  Por generación se ve la
-    #    dinámica propia de cada algoritmo; por evaluaciones es el único eje donde
-    #    la comparación entre los cinco es a igual presupuesto, porque conviven
-    #    repartos de 200×500 y 100×1000 y en la generación 500 uno ya gastó las
-    #    100.000 evaluaciones y el otro la mitad.
+    # 3. Las curvas van SOLO contra evaluaciones.  La versión por generación se
+    #    eliminó: con repartos distintos de pob×gen la generación no es un eje
+    #    comparable entre series, así que las dos figuras invitaban a leer a
+    #    igual generación una diferencia que era de presupuesto.  El CSV sigue
+    #    publicando las dos columnas (gen y evaluaciones) para citar números.
     mapas_eval = _mapa_evaluaciones(series)
-    for specs, base, titulo in [
-            (PANELES_MO, 'mo', 'Convergencia de Indicadores Multiobjetivo'),
-            (PANELES_QUIM, 'chemical', 'Convergencia de Indicadores Químicos')]:
-        _plot_convergence_grid(series, output_dir, specs, curvas,
-                               f"convergence_{base}_pop{pop_size}.png", titulo)
-        if mapas_eval:
+    if not mapas_eval:
+        print("  ⚠ sin n_eval en convergence.csv: se omiten las curvas de "
+              "convergencia (el eje de evaluaciones sale de ahí)")
+    else:
+        for specs, base, titulo in [
+                (PANELES_MO, 'mo', 'Convergencia de Indicadores Multiobjetivo'),
+                (PANELES_QUIM, 'chemical', 'Convergencia de Indicadores Químicos')]:
             _plot_convergence_grid(
-                series, output_dir, specs, curvas,
-                f"convergence_{base}_evals_pop{pop_size}.png", titulo,
-                mapas=mapas_eval)
-    if mapas_eval:
+                series, output_dir, specs, curvas, mapas_eval,
+                f"convergence_{base}_evals_pop{pop_size}.png", titulo)
         escribir_curvas_csv(series, curvas, mapas_eval, output_dir, pop_size)
 
     # 5. Boxplots + tablas (requiere ≥2 series).  Comparten un único getter
@@ -1694,7 +1753,8 @@ def _generate_report(series, pop_size, output_dir, report_label):
         plot_boxplots(series, output_dir, get_values, BOXPLOT_MO_CONFIGS,
                       f"boxplots_mo_pop{pop_size}.png",
                       "Distribución de Indicadores Multiobjetivo")
-        print("📊 Boxplots químicos (QED, SA, Fsp3, Validez, Unicidad, Novedad)...")
+        print("📊 Boxplots químicos (QED, SA, Factibilidad, Fsp3, Validez, "
+              "Unicidad, Novedad)...")
         plot_boxplots(series, output_dir, get_values, BOXPLOT_CHEM_CONFIGS,
                       f"boxplots_chemical_pop{pop_size}.png",
                       "Distribución de Indicadores Químicos")
@@ -1714,7 +1774,7 @@ def _generate_report(series, pop_size, output_dir, report_label):
 
 
     # 9. Grid QED vs SA: los N algoritmos separados en una sola imagen, en sus
-    #    dos variantes de color (reproducibilidad entre semillas y tercer objetivo).
+    #    dos variantes de color (reproducibilidad entre semillas y la restricción).
     print("🧩 Grid QED vs SA por algoritmo (una imagen por variante de color)...")
     for modo in GRID_COLOR_MODES:
         plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by=modo)

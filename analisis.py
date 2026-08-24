@@ -3,6 +3,14 @@ Análisis de los experimentos: las cuatro etapas de la comparación, más la fig
 de moléculas representativas.  Cada etapa lee lo que produjo la anterior y deja
 sus tablas y figuras bajo plots/.
 
+Objetivos de esta campaña: QED (↑) y SA (↓).  Fsp3 dejó de ser objetivo y entra
+como restricción (Fsp3 ≥ 0.3), así que el frente es bidimensional y aparece una
+métrica nueva —la factibilidad— que mide qué fracción de lo generado es
+admisible.  El algoritmo de enjambre es CMOPSO, que maneja el constraint de
+forma nativa, en lugar del MOPSO_CD de la campaña anterior.  Los números NO son
+comparables con los de la etapa a 3 objetivos: el hipervolumen se mide sobre 2
+ejes (máximo 1.21 en vez de 1.331).
+
   etapa1     resultados/grid/all_metrics.csv          →  plots/hiperparametros/
   etapa2     resultados/winners/                      →  plots/operadores/
   etapa3     resultados/finalistas/                   →  plots/comparacion_final/
@@ -16,7 +24,7 @@ Wilcoxon de rangos con signo corregidas por Holm.  El resultado se resume en
 grupos homogéneos: dentro de una llave el post-hoc no separa, entre llaves sí.
 
 Uso:
-    python analisis.py etapa1 [--algorithms NSGA2 MOPSO] [--metric spacing]
+    python analisis.py etapa1 [--algorithms NSGA2 CMOPSO] [--metric spacing]
     python analisis.py etapa2 [--algorithms NSGA2 MOEAD] [--metric igd_plus]
     python analisis.py etapa3 [--finalistas otra_carpeta]
     python analisis.py etapa4 [--metric igd_plus]
@@ -80,9 +88,15 @@ OUT_FRENTE     = os.path.join(PLOTS_DIR, "frente_conjunto")
 
 # Nombres para el documento (los directorios usan la forma corta).
 DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
-           'AGEMOEA': 'AGE-MOEA', 'MOPSO': 'MOPSO',
+           'AGEMOEA': 'AGE-MOEA', 'CMOPSO': 'CMOPSO',
            'RANDOM': 'Aleatorio', 'WEIGHTED_GA': 'GA ponderado',
            'SCREENING': 'Cribado MOSES', 'HILL_CLIMBER': 'Escalador'}
+
+# El algoritmo de enjambre de esta etapa.  Se nombra una sola vez: es el que no
+# tiene operadores de cruce/mutación y por eso queda fuera de la comparación de
+# operadores, del pool por familias y de los factores GA.  CMOPSO reemplazó al
+# MOPSO_CD anterior porque maneja el constraint de forma nativa.
+PSO_ALG = 'CMOPSO'
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -223,7 +237,7 @@ def _write_tex(lines, path, msg=None):
 #   Etapa 1 — selección de hiperparámetros
 #
 #   De las 513 configuraciones del grid elige 17: la mejor de cada combinación
-#   de operadores en los 4 GA, más la mejor global de MOPSO.  Gana la de menor
+#   de operadores en los 4 GA, más la mejor global de CMOPSO.  Gana la de menor
 #   rango medio de hipervolumen, rankeando dentro de cada una de las 20 semillas
 #   (que están pareadas: la población inicial se muestrea con random_state=run_id).
 #
@@ -235,8 +249,10 @@ def _write_tex(lines, path, msg=None):
 #   run_experiments.py) y .tex.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# MOPSO no tiene operadores; se colorea por inercia, que es su factor dominante.
-W_COLORS = {0.4: '#9ECAE1', 0.6: '#4292C6', 0.9: '#08519C'}
+# CMOPSO no tiene operadores; se colorea por tamaño del archivo de elites, que es
+# la perilla propia de su mecanismo de selección de líderes (reemplaza a la
+# inercia w del MOPSO anterior, que en CMOPSO no existe).
+ELITE_COLORS = {5: '#9ECAE1', 10: '#4292C6', 25: '#08519C'}
 
 # columna: (etiqueta, higher_better)
 HP_METRICS = {
@@ -244,6 +260,10 @@ HP_METRICS = {
     'spacing':     ('Espaciamiento', False),
     'n_pareto':    ('Tamaño de Pareto', True),
     'validity':    ('Validez', True),
+    # Fracción de las moléculas válidas que cumplen el constraint de saturación.
+    # Es la métrica nueva de esta etapa: mide cuánto del presupuesto se gasta
+    # fuera de la región admisible, algo que no existía con Fsp3 como objetivo.
+    'feasibility': ('Factibilidad', True),
     'novelty':     ('Novedad', True),
     'best_sa':     ('Mejor SA', False),
     'time_sec':    ('Tiempo (s)', False),
@@ -252,7 +272,11 @@ HP_METRICS = {
 # 'budget' agrupa pop_size×n_gen: están acoplados por el presupuesto fijo de 100k
 # evaluaciones.
 FACTORS_GA = ['budget', 'crossover', 'mutation', 'cx_prob', 'mut_prob']
-FACTORS_PSO = ['budget', 'w', 'c1', 'c2']
+# Las perillas de CMOPSO no son las del MOPSO anterior: su ecuación de velocidad
+# usa coeficientes aleatorios por dimensión y no hay pbest, así que w/c1/c2
+# desaparecen y en su lugar se barren el archivo de elites, la mutación por-gen y
+# el tope de velocidad (ver run_experiments.py).
+FACTORS_PSO = ['budget', 'elite_size', 'mut_prob', 'vel_rate']
 
 COMBO_FACTORS = ['crossover', 'mutation']
 SUB_FACTORS_GA = ['budget', 'cx_prob', 'mut_prob']
@@ -268,7 +292,7 @@ OPERATOR_COLORS = {
 HP_COMBOS = ['pcx/pm', 'pcx/gauss', 'sbx/pm', 'sbx/gauss']
 
 def factors_for(alg):
-    return FACTORS_PSO if alg == 'MOPSO' else FACTORS_GA
+    return FACTORS_PSO if alg == PSO_ALG else FACTORS_GA
 
 
 # ─── Carga y selección ───────────────────────────────────────────────────────
@@ -300,8 +324,16 @@ def select_config(M, higher_better):
     return ranks.idxmin(), ranks
 
 
+# Nombre corto de cada perilla en las etiquetas de configuración.  Las de CMOPSO
+# aparecen acá porque su nombre de columna es largo y la etiqueta va a la tabla
+# del documento: 'elite_size=10' ocuparía una columna entera.
+FACTOR_ABBR = {'cx_prob': 'cx', 'mut_prob': 'mut',
+               'elite_size': 'elite', 'vel_rate': 'vel'}
+
+
 def config_label(cfg, factors):
-    """Etiqueta compacta, p. ej. '400×250 pcx/pm cx=1 mut=0.031'."""
+    """Etiqueta compacta, p. ej. '400×250 pcx/pm cx=1 mut=0.031' o, en CMOPSO,
+    '400×250 elite=10 mut=0.031 vel=0.2'."""
     cfg = cfg if isinstance(cfg, tuple) else (cfg,)
     parts, cx, mu = [], None, None
     for f, v in zip(factors, cfg):
@@ -311,12 +343,8 @@ def config_label(cfg, factors):
             cx = v
         elif f == 'mutation':
             mu = v
-        elif f == 'cx_prob':
-            parts.append(f'cx={v:g}')
-        elif f == 'mut_prob':
-            parts.append(f'mut={v:g}')
         else:
-            parts.append(f'{f}={v:g}')
+            parts.append(f'{FACTOR_ABBR.get(f, f)}={v:g}')
     if cx is not None:
         parts.insert(1, f'{cx}/{mu}' if mu is not None else cx)
     return ' '.join(parts)
@@ -328,7 +356,7 @@ def _panel_seleccion(ax, g, alg, metric, chosen, sub_factors, por_combo):
     """Un algoritmo: cada configuración del grid como un punto (validez contra
     la métrica de selección, ambas medianas sobre las 20 semillas) y la elegida
     de cada bloque resaltada.  El color separa las combinaciones de operadores;
-    en MOPSO, que no tiene operadores, la inercia."""
+    en CMOPSO, que no tiene operadores, el tamaño del archivo de elites."""
     fs = [f for f in factors_for(alg) if g[f].notna().any()]
     m = g.groupby(fs, observed=True)[[metric, 'validity']].median()
 
@@ -337,8 +365,14 @@ def _panel_seleccion(ax, g, alg, metric, chosen, sub_factors, por_combo):
                + m.index.get_level_values('mutation').astype(str))
         groups = [(c, OPERATOR_COLORS[c]) for c in HP_COMBOS if c in set(key)]
     else:
-        key = m.index.get_level_values('w')
-        groups = [(w, c) for w, c in sorted(W_COLORS.items()) if w in set(key)]
+        # elite_size llega del CSV como float (la columna trae NaN en las filas
+        # de los GA y pandas la promueve), así que la clave del mapa de colores
+        # se busca por su valor entero.
+        key = m.index.get_level_values('elite_size')
+        presentes = {int(v) for v in set(key)}
+        groups = [(e, c) for e, c in sorted(ELITE_COLORS.items())
+                  if e in presentes]
+        key = pd.Index([int(v) for v in key])
 
     for name, color in groups:
         sel = key == name
@@ -352,7 +386,7 @@ def _panel_seleccion(ax, g, alg, metric, chosen, sub_factors, por_combo):
             lv['crossover'], lv['mutation'] = name.split('/')
         r = m.loc[tuple(lv[f] for f in fs)]
         color = (OPERATOR_COLORS[name] if por_combo
-                 else W_COLORS.get(lv.get('w'), '#333333'))
+                 else ELITE_COLORS.get(int(lv.get('elite_size', -1)), '#333333'))
         ax.scatter(r['validity'], r[metric], s=170, color=color,
                    edgecolors='black', linewidths=1.6, zorder=4)
 
@@ -371,9 +405,9 @@ def _celda_leyenda(ax, con_operadores, con_pso):
         bloques.append(('Operadores (algoritmos genéticos)',
                         [punto(OPERATOR_COLORS[c], label=c) for c in HP_COMBOS]))
     if con_pso:
-        bloques.append(('MOPSO: inercia $w$',
-                        [punto(c, label=f'$w$ = {w:g}')
-                         for w, c in sorted(W_COLORS.items())]))
+        bloques.append((f'{PSO_ALG}: archivo de elites',
+                        [punto(c, label=f'elite = {e:g}')
+                         for e, c in sorted(ELITE_COLORS.items())]))
     bloques.append((None, [plt.Line2D([], [], marker='o', linestyle='none',
                                       markersize=13, markerfacecolor='#bbbbbb',
                                       markeredgecolor='black',
@@ -449,15 +483,18 @@ def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
 EFECTO_COMBOS = [('pcx', 'pm'), ('pcx', 'gauss'), ('sbx', 'pm'), ('sbx', 'gauss')]
 EFECTO_TRAMA = {'pm': None, 'gauss': '///'}
 # Naranja y azul de Okabe-Ito (los mismos con que plot_comparison separa PCX de
-# SBX) y el rojo de MOPSO oscurecido: el rojo puro queda cerca del naranja en
+# SBX) y el rojo de CMOPSO oscurecido: el rojo puro queda cerca del naranja en
 # pantallas de gama amplia, y bajar la luminosidad los separa igual.
 EFECTO_COLOR = {'pcx': '#D55E00', 'sbx': '#0072B2', 'pso': '#B01818'}
 
 # Perillas de cada familia de algoritmo: (columna, etiqueta corta).
 EFECTO_F_GA = [('budget', 'pob$\\times$gen'), ('cx_prob', '$P$(cruce)'),
                ('mut_prob', '$P$(mut.)')]
-EFECTO_F_PSO = [('budget', 'pob$\\times$gen'), ('w', '$w$'),
-                ('c1', '$c_1$'), ('c2', '$c_2$')]
+# CMOPSO comparte con los GA la mutación por-gen —se barre con los mismos tres
+# valores justamente para que el efecto sea comparable entre familias— y suma dos
+# perillas propias: el archivo de elites y el tope de velocidad.
+EFECTO_F_PSO = [('budget', 'pob$\\times$gen'), ('elite_size', 'elites'),
+                ('mut_prob', '$P$(mut.)'), ('vel_rate', '$v_{\\max}$')]
 
 
 def _efecto_factor(g, factor, metric):
@@ -479,7 +516,7 @@ def plot_efectos_hp(df, metric, out_dir):
     eje vertical es común para que las alturas sean comparables entre paneles."""
     label, _ = HP_METRICS[metric]
     algs = [a for a in GA_ALGS if a in set(df['algorithm'])]
-    con_pso = 'MOPSO' in set(df['algorithm'])
+    con_pso = PSO_ALG in set(df['algorithm'])
     if not algs:
         return
 
@@ -504,14 +541,14 @@ def plot_efectos_hp(df, metric, out_dir):
 
     if con_pso:
         ax = axes[len(algs)]
-        g = df[df['algorithm'] == 'MOPSO']
+        g = df[df['algorithm'] == PSO_ALG]
         x = np.arange(len(EFECTO_F_PSO))
         ax.bar(x, [_efecto_factor(g, f, metric) for f, _ in EFECTO_F_PSO], 0.62,
                color=EFECTO_COLOR['pso'], edgecolor='white', linewidth=0.6,
                zorder=3)
         ax.set_xticks(x)
         ax.set_xticklabels([e for _, e in EFECTO_F_PSO], fontsize=9)
-        ax.set_title(DISPLAY.get('MOPSO', 'MOPSO'), fontsize=11,
+        ax.set_title(DISPLAY.get(PSO_ALG, PSO_ALG), fontsize=11,
                      fontweight='bold', pad=8)
 
     for ax in axes:
@@ -528,7 +565,7 @@ def plot_efectos_hp(df, metric, out_dir):
              for cx, mu in EFECTO_COMBOS]
     if con_pso:
         manos.append(plt.Rectangle((0, 0), 1, 1, facecolor=EFECTO_COLOR['pso']))
-        etiqs.append('MOPSO (sin operadores)')
+        etiqs.append(f'{PSO_ALG} (sin operadores)')
     fig.legend(manos, etiqs, loc='lower center', ncol=len(etiqs), frameon=False,
                fontsize=9.5, bbox_to_anchor=(0.5, -0.13))
 
@@ -561,7 +598,7 @@ def write_selection_summary(per_alg, metric, out_dir):
                    'mean': b['mean'], 'std': b['std'],
                    'n_configs': b['n_configs']}
             for f in ('crossover', 'mutation', 'cx_prob', 'mut_prob',
-                      'w', 'c1', 'c2'):
+                      'elite_size', 'vel_rate'):
                 if f in lv:
                     row[f] = lv[f]
             rows.append(row)
@@ -573,7 +610,8 @@ def write_selection_summary(per_alg, metric, out_dir):
     lines = [
         r'\begin{table}[htbp]', r'\centering', r'\small',
         f'\\caption{{Configuraciones seleccionadas: la mejor de cada combinación '
-        f'de operadores en los algoritmos genéticos, y la mejor global en MOPSO. '
+        f'de operadores en los algoritmos genéticos, y la mejor global en '
+        f'{_latex_escape(DISPLAY.get(PSO_ALG, PSO_ALG))}. '
         f'Gana la de menor rango medio de {_latex_escape(label)}, rankeando las '
         f'configuraciones dentro de cada una de las 20 semillas.}}',
         r'\label{tab:hp_seleccionadas}',
@@ -605,7 +643,7 @@ def write_selection_summary(per_alg, metric, out_dir):
 
 def analyze_algorithm(g, alg, metric):
     """Elige la mejor configuración de cada combinación de operadores (la mejor
-    global en MOPSO, que no tiene operadores)."""
+    global en CMOPSO, que no tiene operadores)."""
     factors = [f for f in factors_for(alg) if g[f].notna().any()]
     _, higher = HP_METRICS[metric]
     por_combo = set(COMBO_FACTORS).issubset(factors)
@@ -704,7 +742,8 @@ GA_ALGS = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA']
 # Los combos como nombres de directorio bajo winners/ (con guion bajo).
 COMBO_DIRS = ['pcx_pm', 'pcx_gauss', 'sbx_pm', 'sbx_gauss']
 
-# (columna, etiqueta, mayor_es_mejor)
+# (columna, etiqueta, mayor_es_mejor).  Decide el hipervolumen; el resto está
+# para poder rehacer la etapa con otro criterio desde --metric.
 OP_INDICATORS = [
     ('hypervolume', 'Hipervolumen',      True),
     ('igd_plus',    'IGD$^+$',           False),
@@ -712,6 +751,7 @@ OP_INDICATORS = [
     ('spacing',     'Espaciamiento',     False),
     ('n_pareto',    'Tamaño de Pareto',  True),
     ('validity',    'Validez',           True),
+    ('feasibility', 'Factibilidad',      True),
     ('uniqueness',  'Unicidad',          True),
 ]
 
@@ -844,7 +884,7 @@ def _test_aporte(por_grupo, runs):
 
 def _partir_etiqueta(nombre):
     """'NSGA-II (PCX)' → ('NSGA-II', 'PCX').  Sin paréntesis, el segundo campo
-    queda vacío: es el caso de MOPSO, que no tiene operadores."""
+    queda vacío: es el caso de CMOPSO, que no tiene operadores."""
     if nombre.endswith(')') and '(' in nombre:
         alg, cruce = nombre.rsplit('(', 1)
         return alg.strip(), cruce[:-1].strip()
@@ -858,8 +898,10 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
     Complementa al test sobre el hipervolumen, que mide la extensión del frente
     y no la calidad de lo que contiene.  Acá se junta lo producido por todas las
     series, se recalcula la no-dominancia global y se mira quién aportó los
-    supervivientes: es dominancia de Pareto sobre los tres objetivos, sin
-    umbrales.
+    supervivientes: es dominancia de Pareto sobre los dos objetivos, sin
+    ponderaciones.  Fsp3 no participa de la dominancia —es el constraint— pero se
+    reporta como columna: junto a QED y SA describe qué clase de molécula pone
+    cada serie en el frente, y en particular cuánto margen le deja al umbral.
 
     Las etiquetas del tipo 'NSGA-II (PCX)' se parten en dos columnas, con el
     algoritmo en \\multirow: repetirlo en cada fila haría creer que son
@@ -884,12 +926,14 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         f'cuenta toda molécula del frente hallada por esa serie, por lo que las '
         f'compartidas suman en cada fila que las encontró; «exclusivas» solo '
         f'las que no halló ninguna otra.  Las tres últimas columnas son la media '
-        f'de los objetivos sobre lo que cada serie aporta, y describen no cuánto '
-        f'sino qué aporta.{nota}}}',
+        f'sobre lo que cada serie aporta, y describen no cuánto sino qué aporta: '
+        f'QED y SA son los objetivos, y Fsp3 va sin flecha porque es la '
+        f'restricción ($\\geq$ {_num(pc.FSP3_MIN, 2)}) y no algo que se '
+        f'optimice.{nota}}}',
         f'\\label{{tab:contribucion_{nombre.lower()}}}',
         r'\begin{tabular}{llrrrrrr}', r'\toprule',
         f'{etiqueta} & Operadores & Aporta & Exclusivas & \\% & QED $\\uparrow$ & '
-        f'SA $\\downarrow$ & Fsp3 $\\uparrow$ \\\\',
+        f'SA $\\downarrow$ & Fsp3 \\\\',
         r'\midrule',
     ]
     for i, (f, (alg, cruce)) in enumerate(zip(filas, partidas)):
@@ -922,7 +966,7 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         print(f"  aporte {f['nombre']:>8s}: {f['aporta']:4d}/{total} "
               f"({100*f['frac']:4.1f}%)  excl. {f['exclusiva']:4d}  "
               f"QED<0.60 {100*f['qed_bajo']:4.1f}%  "
-              f"Fsp3>0.9 {100*f['fsp3_alto']:4.1f}%")
+              f"Fsp3 en el borde {100*f['fsp3_borde']:4.1f}%")
     if por_grupo:
         detalle_txt = '   '.join(
             f'{g} {v.mean():.1f}%±{v.std(ddof=1):.1f}' for g, v in por_grupo.items())
@@ -1116,7 +1160,7 @@ def etapa3(args):
 #   las DOS familias de cruce de cada algoritmo, que es el material que llega a
 #   la fase de afinidad, y se mira qué sobrevive al enfrentarlas y de dónde sale.
 #
-#   Como cada AG aporta dos configuraciones y MOPSO una, los presupuestos no son
+#   Como cada AG aporta dos configuraciones y CMOPSO una, los presupuestos no son
 #   comparables: esto caracteriza el pool, no ordena algoritmos.
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1143,7 +1187,7 @@ def combos_pool(alg, winners_dir, alpha=0.05):
     Devuelve [(familia, combo)] en el orden de POOL_FAMILIAS."""
     series = pc.build_operator_series_winners(alg, winners_dir, COMBO_DIRS)
     if not series:
-        return []          # MOPSO: sin operadores no hay ramas que elegir
+        return []          # CMOPSO: sin operadores no hay ramas que elegir
     hv = {s.label: pc.load_metrics(s.pop_dir).sort_values('run')['hypervolume'].values
           for s in series}
     res = compare_indicator(lambda lab, _col: hv[lab], list(hv), None)
@@ -1164,7 +1208,7 @@ def combos_pool(alg, winners_dir, alpha=0.05):
 
 
 def _series_pool(winners_dir, finalistas_dir):
-    """Las dos ramas de cruce de cada AG, más MOPSO, que no tiene operadores."""
+    """Las dos ramas de cruce de cada AG, más CMOPSO, que no tiene operadores."""
     series = []
     for alg in GA_ALGS:
         # El combo va en la etiqueta y no solo la familia: desde que la mutación
@@ -1174,9 +1218,9 @@ def _series_pool(winners_dir, finalistas_dir):
             if cfg_dir:
                 series.append(pc.Series(f'{DISPLAY.get(alg, alg)} ({combo})',
                                         cfg_dir))
-    d = os.path.join(finalistas_dir, 'MOPSO')
+    d = os.path.join(finalistas_dir, PSO_ALG)
     if pc._has_runs(d):
-        series.append(pc.Series('MOPSO', d))
+        series.append(pc.Series(PSO_ALG, d))
     return series
 
 
@@ -1212,7 +1256,7 @@ def _nota_pool(winners_dir):
 
 def _algoritmo_pool(label):
     """Agrupa por algoritmo: las dos ramas de cruce de un AG caen en el mismo
-    grupo ('NSGA-II (PCX)' → 'NSGA-II'), y MOPSO, que no tiene operadores, queda
+    grupo ('NSGA-II (PCX)' → 'NSGA-II'), y CMOPSO, que no tiene operadores, queda
     como el suyo.
 
     Es la agrupación de las figuras del frente conjunto.  Antes agrupaban por
@@ -1247,16 +1291,19 @@ def analisis_frente_conjunto(args):
     print(f"  ✓ frente_pool.csv  ({len(at)} moléculas)")
 
     # La tabla desglosa por configuración —es la pregunta de cuánto aporta cada
-    # rama—; las figuras agrupan por algoritmo, porque nueve colores serían
+    # rama—; la figura agrupa por algoritmo, porque nueve colores serían
     # ilegibles y las dos ramas de un mismo AG no son entidades distintas.
+    #
+    # Ya no hay versión 3D: existía para mostrar la superficie del frente en
+    # QED-SA-Fsp3, y con Fsp3 como constraint el frente es una curva.  Su lugar
+    # lo ocupa el segundo panel de plot_frente_conjunto, que muestra dónde quedó
+    # cada molécula respecto del umbral.
     write_contribucion_table(
         series, pf_df, 'pool', args.out_frente,
         grupo_de=pc._por_serie, etiqueta='Configuración',
         nota=_nota_pool(args.winners))
     pc.plot_frente_conjunto(series, 'pool', args.out_frente, pf_df,
                             grupo_de=_algoritmo_pool)
-    pc.plot_frente_conjunto_3d(series, 'pool', args.out_frente, pf_df,
-                               grupo_de=_algoritmo_pool)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1403,16 +1450,19 @@ MOLECULAS_OUT = os.path.join(OUT_FRENTE, "moleculas_representativas.png")
 
 N_MOLECULAS = 5      # por algoritmo
 
-# Ventana de interés farmacológico, la misma con la que se caracteriza el aporte
-# al frente conjunto en las etapas 2 y 3.
+# Ventana de interés farmacológico.  Ya no lleva banda de Fsp3: el constraint la
+# garantiza por construcción —molecules.csv solo publica moléculas factibles— y
+# fijar un rango por encima del umbral seleccionaría a mano justo la cola que la
+# búsqueda no tenía por qué producir, porque nada empuja Fsp3 más allá de 0.3.
+# Queda el corte de SA, que sí desempata entre las decenas de moléculas
+# empatadas en el QED máximo.
 SA_MAX = 3.0
-FSP3_RANGO = (0.40, 0.60)
 
 
 def load_front(alg, winners_dir, finalistas_dir):
     """Frente no dominado de un algoritmo sobre las configuraciones del pool.
 
-    Para los AG son sus dos ramas de cruce juntas; MOPSO no tiene operadores y
+    Para los AG son sus dos ramas de cruce juntas; CMOPSO no tiene operadores y
     va con su única configuración."""
     dfs = []
     for _, combo in combos_pool(alg, winners_dir):
@@ -1430,20 +1480,20 @@ def load_front(alg, winners_dir, finalistas_dir):
 
 
 def pick(front, n=N_MOLECULAS):
-    """Las n moléculas de mayor QED dentro de la ventana de interés: SA por
-    debajo de SA_MAX y Fsp3 en FSP3_RANGO.
+    """Las n moléculas de mayor QED con SA por debajo de SA_MAX.
 
     Ordenar solo por QED no sirve acá: en el frente hay decenas de moléculas
-    empatadas en QED ≈ 0.948, así que manda el desempate.  Con el desempate por
-    menor SA salían aromáticos planos —Fsp3 ≈ 0.17 contra 0.59 del frente, y
-    alguna en 0.0—, es decir lo contrario del tercer objetivo.  Restringir a la
-    ventana conserva el mismo QED máximo y deja Fsp3 en el rango buscado.
+    empatadas en QED ≈ 0.948, así que manda el desempate.  El corte por SA se
+    queda con las sintetizables de ese empate.
 
-    Si la ventana quedara vacía se cae al frente completo, para que la figura se
-    genere igual con un frente que no la alcance.
+    La banda de Fsp3 que llevaba la etapa a 3 objetivos se retiró: ahí filtraba
+    aromáticos planos que el frente sí contenía, y acá el constraint ya los dejó
+    afuera antes de que llegaran a molecules.csv.
+
+    Si el corte dejara el frente vacío se cae al frente completo, para que la
+    figura se genere igual.
     """
-    lo, hi = FSP3_RANGO
-    dentro = front[(front['sa'] < SA_MAX) & front['fsp3'].between(lo, hi)]
+    dentro = front[front['sa'] < SA_MAX]
     if dentro.empty:
         dentro = front
     return dentro.nlargest(n, 'qed').reset_index(drop=True)
@@ -1493,7 +1543,8 @@ def moleculas(args):
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
-            # Los tres objetivos, no dos: Fsp3 es el que define la ventana.
+            # Los dos objetivos más Fsp3: no seleccionó nada, pero deja ver con
+            # cuánto margen sobre el umbral quedó cada estructura dibujada.
             ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
                           f"·  Fsp3 {m['fsp3']:.2f}",
                           fontsize=9, labelpad=3)
@@ -1501,10 +1552,9 @@ def moleculas(args):
                 ax.set_ylabel(DISPLAY.get(alg, alg), fontsize=13,
                               fontweight='bold', labelpad=10)
 
-    lo, hi = FSP3_RANGO
     fig.suptitle(f'Las {N_MOLECULAS} moléculas de mayor QED del frente de cada '
-                 f'algoritmo, con SA $<$ {SA_MAX:g} y Fsp3 entre {lo:g} y {hi:g}'
-                 .replace('$<$', '<'),
+                 f'algoritmo, con SA < {SA_MAX:g} '
+                 f'(todas cumplen Fsp3 ≥ {pc.FSP3_MIN:g})',
                  fontsize=14, fontweight='bold', y=0.995)
     plt.tight_layout(rect=[0, 0, 1, 0.985])
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
