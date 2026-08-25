@@ -64,7 +64,7 @@ data/ref_dirs_*.npy
 results/
 results_*/
 # lo que se baja del cluster al PC para analizar: grid, winners, finalistas,
-# baselines (ver la cabecera de analisis.py)
+# baselines (ver la cabecera de postproceso/datos.py)
 resultados/
 plots/
 

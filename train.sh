@@ -11,10 +11,9 @@
 #SBATCH --time=12:00:00          # límite de la partición GPU (12 h); relanzar para continuar
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Wrapper SLURM: solo pide GPU + entorno y delega TODO en run_experiments.py.
-#  Ese script arma el grid (4 GA × 4 operadores × N_RUNS + MOPSO × N_RUNS), corre
-#  en paralelo, reanuda por molecules.csv, muestra ETA y genera los resúmenes.
-#  Nada de lógica de experimentos vive aquí: el .py es la única fuente de verdad.
+#  Wrapper SLURM: pide GPU y entorno, y delega en run_experiments.py, que arma el
+#  grid (513 configuraciones × N_RUNS semillas), corre en paralelo, reanuda por
+#  molecules.csv, muestra ETA y consolida los resultados.
 # ══════════════════════════════════════════════════════════════════════════════
 
 source /etc/profile
@@ -36,7 +35,7 @@ N_RUNS=${N_RUNS:-20}                                # smoke test: N_RUNS=1 sbatc
 mkdir -p logs
 
 # ─── Preflight: si pedimos GPU, verificar que torch REALMENTE la ve ───────────
-# Falla en segundos en vez de desperdiciar el job (o correr 3 días en CPU sin querer).
+# Falla en segundos en vez de gastar el job entero corriendo en CPU.
 if [ "$DEVICE" = "cuda" ]; then
     "$PYTHON" -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" \
         || { echo "ERROR: torch no ve CUDA en $(hostname). Revisa --gres, el env ($PYTHON) o 'module load cuda'." >&2; exit 1; }
@@ -49,7 +48,6 @@ echo "  Nodo         : $(hostname)   cores: $(nproc)   device: $DEVICE"
 echo "  Concurrencia : $PARALLEL runs   n_runs: $N_RUNS"
 echo "======================================================"
 
-# ─── Todo lo demás (grid, paralelismo, reanudación, ETA, consolidación) vive aquí ──
 exec "$PYTHON" run_experiments.py \
     --device "$DEVICE" \
     --parallel "$PARALLEL" \
