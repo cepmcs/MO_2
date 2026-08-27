@@ -9,7 +9,13 @@ Operadores configurables:
   - Crossover: SBX (default) o PCX
   - Mutation:  PM (default) o Gaussian
 
-Cada configuración guarda en results/<ALG>/<cruce>_<mutacion>/<config>/run_XX/.
+Cada combinación guarda en results/<crossover>_<mutation>/
+(sbx_pm es el combo base de la comparación entre algoritmos).
+
+Uso:
+    python experimento_nsga3.py --pop_size 300 --run_id 0
+    python experimento_nsga3.py --pop_size 300 --run_id 0 --crossover pcx --mutation gauss
+    python experimento_nsga3.py --pop_size 300 --crossover pcx --mutation gauss --generate_summary
 """
 
 import os, time, argparse
@@ -43,7 +49,7 @@ def main():
                         help="Dispositivo para el VAE (default: auto → GPU si hay CUDA).")
     args = parser.parse_args()
 
-    # Dispositivo de cómputo
+    # Dispositivo de cómputo: 'auto' respeta el default del módulo (GPU si hay CUDA).
     if args.device != 'auto':
         set_device(args.device)
 
@@ -58,7 +64,8 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.run_id)
 
-    # Direcciones de referencia: exactamente pop_size, repartidas con Riesz s-energy.
+    # Direcciones de referencia: exactamente pop_size, bien repartidas (Riesz s-energy).
+    # Cacheadas en disco por pop_size: deterministas, se calculan una vez y se reutilizan.
     ref_dirs = get_ref_dirs(args.pop_size)
 
     # Cargar modelo y datos
@@ -92,7 +99,7 @@ def main():
                    seed=args.run_id, verbose=False, callback=tracker)
     elapsed = time.time() - t0
 
-    # Post-procesamiento
+    # Post-procesamiento (los hiperparámetros barridos van como columnas de metrics.csv)
     hp = {'crossover': args.crossover, 'mutation': args.mutation,
           'cx_prob': args.cx_prob, 'mut_prob': round(mut_prob, 6)}
     metrics, pareto, hv, spacing, validity = postprocess_run(

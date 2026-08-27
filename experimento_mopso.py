@@ -1,6 +1,10 @@
 """
 Experimento MOPSO — Optimización multi-objetivo del espacio latente VAE.
 Objetivos: QED (↑), SA (↓), Lipinski (↑)
+
+Uso:
+    python experimento_mopso.py --pop_size 300 --run_id 0
+    python experimento_mopso.py --pop_size 300 --generate_summary
 """
 
 import os, time, argparse
@@ -31,7 +35,7 @@ def main():
                         help="Dispositivo para el VAE (default: auto → GPU si hay CUDA).")
     args = parser.parse_args()
 
-    # Dispositivo de cómputo
+    # Dispositivo de cómputo: 'auto' respeta el default del módulo (GPU si hay CUDA).
     if args.device != 'auto':
         set_device(args.device)
 
@@ -72,7 +76,7 @@ def main():
                    seed=args.run_id, verbose=False, callback=tracker)
     elapsed = time.time() - t0
 
-    # Post-procesamiento
+    # Post-procesamiento (los hiperparámetros barridos van como columnas de metrics.csv)
     hp = {'w': args.w, 'c1': args.c1, 'c2': args.c2}
     metrics, pareto, hv, spacing, validity = postprocess_run(
         ALG_NAME, args.pop_size, args.n_gen, args.run_id,

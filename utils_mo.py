@@ -49,12 +49,11 @@ SMILES_REGEX = re.compile(
 
 
 # ─── Operadores genéticos ────────────────────────────────────────────────────
-# Solo se barren las probabilidades de cruce y mutación; el resto queda en el
-# default de pymoo: SBX eta=15 prob_var=0.5 · PCX eta=zeta=0.1 · PM eta=20.
-# SBX cruza además solo la mitad de las variables (su prob_var), así que cx_prob
-# no controla toda la intensidad del cruce.
-# La mutación se barre por-gen (prob_var) con prob=1.0, para que el número de
-# genes mutados dependa solo de prob_var y PM y Gauss sean comparables.
+# Sensibilidad de hiperparámetros: SOLO se barren las PROBABILIDADES (cruce y
+# mutación). Todo lo demás queda en el default de pymoo:
+#   SBX eta=15 · PCX eta=zeta=0.1 · PM eta=20 · Gauss sigma=0.1
+# La mutación se barre por-gen (prob_var); prob=1.0 (siempre se intenta mutar),
+# así el nº de genes mutados lo controla solo prob_var y PM/Gauss son comparables.
 
 CROSSOVERS = {
     'sbx': lambda cx_prob: SBX(prob=cx_prob),
@@ -80,9 +79,9 @@ def _slug(x):
 def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
                pop_size, n_gen, run_id, results_dir=None):
     """Directorio de una run GA: results/<ALG>/<cruce_mut>/<config>/run_k.
-
-    El slug de configuración codifica las probabilidades y el reparto pob×gen, así
-    que cada celda del grid tiene su propia carpeta."""
+    Se agrupa por combo de operadores; el slug de config codifica las probabilidades
+    y el reparto pob×gen → cada celda del grid tiene su carpeta y no se pisan.
+    Única fuente de verdad del path (la usa el script y el orquestador)."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     combo = f"{crossover}_{mutation}"
     cfg   = f"cx{_slug(cx_prob)}_mut{_slug(mut_prob)}_pop{pop_size}_gen{n_gen}"
@@ -97,8 +96,9 @@ def mopso_run_dir(pop_size, n_gen, w, c1, c2, run_id, results_dir=None):
 
 
 def get_ref_dirs(n_points, seed=1):
-    """Direcciones de referencia para NSGA-III / MOEA-D, cacheadas en disco por
-    (n_points, seed)."""
+    """Direcciones de referencia para NSGA-III / MOEA-D.
+    Deterministas (seed fijo) pero caras (~6 s). Se cachean en disco y se reutilizan
+    entre todas las runs, en vez de recalcularlas idénticas en cada proceso."""
     cache = os.path.join(ROOT_DIR, "data", f"ref_dirs_energy_3obj_p{n_points}_s{seed}.npy")
     if os.path.exists(cache):
         return np.load(cache)
@@ -219,8 +219,9 @@ def _build_moses_train_smiles():
 
 @functools.lru_cache(maxsize=1)
 def _load_moses_train_smiles():
-    """SMILES de train de MOSES como Series, cacheada en MOSES_TRAIN_CACHE.
-    Se reconstruye si el cache no existe o si moses.csv es más nuevo."""
+    """SMILES de train de MOSES (~1.6M) como Series, cacheada en MOSES_TRAIN_CACHE
+    (pickle gzip). Se reconstruye si el cache no existe o si moses.csv es más nuevo.
+    Escritura atómica (tmp + os.replace) para no dejar un cache a medias si se interrumpe."""
     cache = MOSES_TRAIN_CACHE
     if (os.path.exists(cache)
             and os.path.getmtime(cache) >= os.path.getmtime(MOSES_CSV)):
@@ -271,7 +272,10 @@ def lipinski_score(mol):
 
 @functools.lru_cache(maxsize=100_000)
 def calc_properties(smi):
-    """Propiedades de un SMILES, o None si es inválido. Cacheado por SMILES."""
+    """Calcula propiedades de un SMILES. Retorna dict o None si inválido.
+
+    Cacheado por SMILES (LRU acotado): la población converge y muchos latentes
+    decodifican al mismo SMILES, reusando el cálculo RDKit."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
@@ -412,12 +416,13 @@ class GenerationTracker(Callback):
 # ─── Métricas: Pareto, HV, Spacing ──────────────────────────────────────────
 
 def _non_dominated_front(F):
-    """Índices del frente no dominado (minimización), exacto.
+    """Índices del frente no-dominado (minimización), exacto.
 
-    Filtro estilo Kung: ordena lexicográficamente y guarda solo los no dominados
-    vistos, con memoria O(tamaño del frente).  NonDominatedSorting de pymoo no
-    sirve acá: su matriz de dominación O(n²) no entra en RAM con las ~100k
-    moléculas de una run exploradora."""
+    Sustituye a NonDominatedSorting de pymoo, que construye una matriz de
+    dominación O(n²) en RAM: con las ~100k moléculas únicas que acumula una run
+    exploradora (p. ej. PCX) eso son ~14 GB → OOM. Este filtro estilo Kung usa
+    memoria O(tamaño del frente): ordena lexicográficamente (todo dominador de un
+    punto aparece antes) y mantiene solo los puntos no-dominados vistos."""
     n = len(F)
     if n == 0:
         return np.empty(0, dtype=int)
@@ -506,14 +511,15 @@ def build_pareto(eval_log):
 # ─── I/O ─────────────────────────────────────────────────────────────────────
 
 def save_metrics(path, row):
-    """Escribe la fila de métricas de una run en su propio CSV.
-    consolidate_all las junta después en all_metrics.csv."""
+    """Escribe la fila de métricas de UNA run en su propio CSV (overwrite).
+    generate_summary los consolida en alg_dir/metrics.csv al final."""
     pd.DataFrame([row]).to_csv(path, index=False)
 
 
 def save_molecules(pareto, run_dir):
-    """Guarda el frente de Pareto en molecules.csv, aunque esté vacío:
-    run_experiments.py usa este archivo como señal de run completa."""
+    """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
+    Escribe aunque el frente esté vacío: el orquestador (run_experiments.py) usa la
+    existencia de este archivo como señal de run completa."""
     cols = ['smiles', 'qed', 'sa', 'lipinski', 'mw', 'logp', 'hbd', 'hba']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
@@ -535,10 +541,11 @@ def save_tracking(tracker, run_dir):
 
 
 def consolidate_all(results_dir=None):
-    """Junta los run_*/metrics.csv del grid en <results>/all_metrics.csv.
+    """Junta TODOS los run_*/metrics.csv del grid en <results>/all_metrics.csv.
 
-    Una fila por run, con sus hiperparámetros como columnas: es lo que lee la
-    etapa 1 del post-procesamiento."""
+    Cada fila = una run, con sus hiperparámetros (operadores, probabilidades, pob,
+    gen / w, c1, c2) como columnas. Es el único artefacto que necesita el análisis
+    de sensibilidad: un solo CSV largo, listo para agrupar por perilla."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     files = sorted(glob.glob(os.path.join(base, "**", "run_*", "metrics.csv"),
                              recursive=True))
@@ -578,6 +585,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'time_sec': round(elapsed, 1),
     }
 
+    # molecules.csv se escribe AL FINAL: run_experiments.py lo usa como señal de run completa.
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_tracking(tracker, run_dir)
     save_molecules(pareto, run_dir)

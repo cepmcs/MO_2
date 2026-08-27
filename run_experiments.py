@@ -13,6 +13,13 @@ Total: 4·108 + 81 = 513 configuraciones × N_RUNS semillas.
 
 Cada perilla barrida queda codificada en el path (results/<ALG>/<slug>/run_k) y
 como columna de metrics.csv; al final se consolida todo en results/all_metrics.csv.
+
+Uso:
+    python run_experiments.py                       # default: GPU, 4 en paralelo, 20 runs
+    python run_experiments.py --parallel 8          # más workers (ojo con la VRAM)
+    python run_experiments.py --device cpu -p 11    # máximo throughput en CPU
+    python run_experiments.py --n-runs 1            # smoke test (513 runs, 1 semilla)
+    python run_experiments.py --summary-only        # solo regenerar all_metrics.csv
 """
 
 import os
@@ -25,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils_mo import ga_run_dir, mopso_run_dir, consolidate_all
 
 ROOT   = os.path.dirname(os.path.abspath(__file__))
-PYTHON = sys.executable
+PYTHON = sys.executable   # el python del entorno actual (nada de rutas hardcodeadas)
 
 # ─── Espacio de hiperparámetros ───────────────────────────────────────────────
 # 3 repartos de población×generación, todos = 100.000 evaluaciones.
@@ -75,7 +82,7 @@ def build_tasks(n_runs):
 
 
 def run_dir_of(t):
-    """Path de la run, con las mismas funciones que usan los scripts."""
+    """Path de la run — misma fuente de verdad que usan los scripts (utils_mo)."""
     if t['kind'] == 'mopso':
         return mopso_run_dir(t['pop'], t['gen'], t['w'], t['c1'], t['c2'], t['run'])
     return ga_run_dir(t['alg'], t['cx'], t['mut'], t['cxp'], t['mutp'],
@@ -146,14 +153,17 @@ def resolve_device(name):
 
 
 def default_parallel(device):
-    """Runs concurrentes por defecto: 4 en GPU, casi todos los núcleos en CPU."""
+    """Default sensato para esta máquina.
+    GPU: acotado por VRAM (~0.5 GB/proceso en 4 GB, dejando margen al escritorio).
+    CPU: casi todos los núcleos (el cuello es RDKit, que paraleliza entre runs)."""
     ncpu = os.cpu_count() or 2
     return 4 if device == "cuda" else max(1, min(ncpu - 1, 11))
 
 
 def prewarm_caches():
-    """Construye los caches compartidos antes de lanzar los workers: los SMILES de
-    train de MOSES y las direcciones de referencia de cada población del grid."""
+    """Pre-calcula los caches deterministas UNA sola vez (evita que los N workers los
+    reconstruyan en paralelo): SMILES de train de MOSES y las direcciones de referencia
+    de NSGA-III/MOEA-D para CADA población del grid (~6 s c/u). Idempotente."""
     pops = sorted({p for p, _ in POP_GEN})
     code = ("import utils_mo; "
             "print('  MOSES:', len(utils_mo._load_moses_train_smiles()), 'SMILES'); "
