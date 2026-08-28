@@ -45,6 +45,10 @@ env/
 # Large model files
 *.pth
 *.pt
+# Excepción: el checkpoint del VAE que usa todo el proyecto SI se versiona.
+# Son 8 MB y hacen que clonar en el cluster alcance para correr: el repo trae
+# modelo + dataset + cache. Cualquier otro checkpoint que entrenes sigue ignorado.
+!SMILES_LSTM_2_256_300_lr1e4_b64.pth
 *.pkl
 *.pklz
 *.h5
