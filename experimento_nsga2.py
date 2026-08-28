@@ -8,7 +8,7 @@ Operadores configurables:
   - Crossover: SBX (default) o PCX
   - Mutation:  PM (default) o Gaussian
 
-Cada combinación guarda en results/<crossover>_<mutation>/
+Cada combinación guarda en results/<ALG>/<crossover>_<mutation>/<config>/run_k/
 
 Uso:
     python experimento_nsga2.py --pop_size 300 --run_id 0

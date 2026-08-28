@@ -5,13 +5,13 @@ El constraint lo maneja pymoo de forma nativa (dominancia de factibilidad);
 este algoritmo no necesita ningún cambio más allá del problema.
 
 NSGA-III usa vectores de referencia; se generan exactamente pop_size
-direcciones bien repartidas con el método Riesz s-energy.
+direcciones equiespaciadas con Das-Dennis uniforme (ver utils_mo.get_ref_dirs).
 
 Operadores configurables:
   - Crossover: SBX (default) o PCX
   - Mutation:  PM (default) o Gaussian
 
-Cada combinación guarda en results/<crossover>_<mutation>/
+Cada combinación guarda en results/<ALG>/<crossover>_<mutation>/<config>/run_k/
 (sbx_pm es el combo base de la comparación entre algoritmos).
 
 Uso:
@@ -67,8 +67,8 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.run_id)
 
-    # Direcciones de referencia: exactamente pop_size, bien repartidas (Riesz s-energy).
-    # Cacheadas en disco por pop_size: deterministas, se calculan una vez y se reutilizan.
+    # Direcciones de referencia: exactamente pop_size, equiespaciadas sobre el símplex
+    # (Das-Dennis uniforme, exacto con 2 objetivos).  No se cachean: cuestan ~1 ms.
     ref_dirs = get_ref_dirs(args.pop_size)
 
     # Cargar modelo y datos

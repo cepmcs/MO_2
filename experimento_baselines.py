@@ -2,8 +2,13 @@
 Baselines "no tan modernos" — cribado de MOSES, muestreo aleatorio, escalador
 y GA de suma ponderada.
 Sirven de piso de comparación frente a los MOEAs (NSGA2/NSGA3/MOEAD/AGEMOEA/
-MOPSO): ninguno hace búsqueda multi-objetivo real de Pareto.
-Objetivos: QED (↑), SA (↓), Fsp3 (↑)  (mismos que el resto del proyecto)
+CMOPSO): ninguno hace búsqueda multi-objetivo real de Pareto.
+Objetivos: QED (↑), SA (↓).  Constraint: Fsp3 ≥ FSP3_MIN  (igual que el resto
+del proyecto).
+
+OJO: este archivo quedó en la versión de 3 objetivos y NO corre con el utils_mo
+actual (2 objetivos).  Falla al normalizar F y al asignar INVALID_F, y sus
+frentes tampoco filtran por el constraint.  Hay que migrarlo antes de la etapa 4.
 
 Guardan en results_baselines/ (NO en results/), para no mezclarse con el grid
 de sensibilidad de hiperparámetros de los MOEAs.

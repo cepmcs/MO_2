@@ -1,8 +1,13 @@
-# Dependencias del proyecto MO_prueba
+# Dependencias del proyecto MO_2
 # Instalar: pip install -r requirements.txt
+
+# Experimentos (utils_mo, experimento_*, run_*)
 torch
 pymoo
 rdkit
 pandas
 numpy
-scipy
+
+# Análisis y gráficas (analisis.py, plot_comparison.py)
+scipy          # tests de Friedman y Wilcoxon; también cdist en algoritmos_mo
+matplotlib     # todas las figuras

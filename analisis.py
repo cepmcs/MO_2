@@ -14,8 +14,9 @@ ejes (máximo 1.21 en vez de 1.331).
   etapa1     resultados/grid/all_metrics.csv          →  plots/hiperparametros/
   etapa2     resultados/winners/                      →  plots/operadores/
   etapa3     resultados/finalistas/                   →  plots/comparacion_final/
+                                                      +  plots/frente_conjunto/
   etapa4     resultados/finalistas/ + .../baselines/  →  plots/baselines/
-  moleculas  resultados/finalistas/                   →  plots/comparacion_final/
+  moleculas  resultados/finalistas/                   →  plots/frente_conjunto/
 
 Las 20 semillas están pareadas en todas las etapas (mismo run_id → misma
 población inicial), así que los tests toman la semilla como bloque: Friedman
@@ -245,8 +246,9 @@ def _write_tex(lines, path, msg=None):
 #   comparación es la etapa 2, ya con la configuración de cada combo afinada.
 #
 #   Deja tres archivos, todos a nivel de plots/hiperparametros/: la figura de
-#   selección con los cinco algoritmos, y selected_configs en .csv (lo lee
-#   run_experiments.py) y .tex.
+#   selección con los cinco algoritmos, y selected_configs en .csv y .tex.  Los
+#   dos son para leer a mano: quién arma winners/ a partir de ellos sos vos, no
+#   hay ningún script que los consuma.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # CMOPSO no tiene operadores; se colorea por tamaño del archivo de elites, que es
@@ -1319,7 +1321,7 @@ BASELINE_KEYS = ['WEIGHTED_GA', 'HILL_CLIMBER', 'RANDOM', 'SCREENING']
 
 
 def _series_baselines(finalistas, baselines):
-    """Los cinco MOEAs y las tres baselines como series comparables."""
+    """Los cinco MOEAs y las cuatro baselines como series comparables."""
     series = []
     for alg in pc.ALGORITHM_ORDER:
         d = os.path.join(finalistas, alg)

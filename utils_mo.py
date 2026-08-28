@@ -286,9 +286,10 @@ def load_seed_mus(model, stoi, n_samples, run_id):
 def calc_properties(smi):
     """Calcula propiedades de un SMILES. Retorna dict o None si inválido.
 
-    Objetivos: QED (↑), SA (↓), Fsp3 (↑). QED es la druglikeness agregada de RDKit
-    (∈[0,1]); Fsp3 es la fracción de carbonos sp3 (∈[0,1], CalcFractionCSP3, devuelve
-    0 si la molécula no tiene carbonos); SA es la accesibilidad sintética (∈[1,10]).
+    Objetivos: QED (↑) y SA (↓).  Fsp3 (↑) NO es objetivo: entra como constraint
+    (Fsp3 ≥ FSP3_MIN).  QED es la druglikeness agregada de RDKit (∈[0,1]); Fsp3 es
+    la fracción de carbonos sp3 (∈[0,1], CalcFractionCSP3, devuelve 0 si la molécula
+    no tiene carbonos); SA es la accesibilidad sintética (∈[1,10]).
 
     Cacheado por SMILES (LRU acotado): la población converge y muchos latentes
     decodifican al mismo SMILES, reusando el cálculo RDKit."""
@@ -300,7 +301,7 @@ def calc_properties(smi):
         'smiles': smi,
         'qed':   QED_module.qed(mol, qedProperties=qp),   # objetivo (↑), ∈[0,1]
         'sa':    sascorer.calculateScore(mol),            # objetivo (↓), ∈[1,10]
-        'fsp3':  rdMolDescriptors.CalcFractionCSP3(mol),  # objetivo (↑), ∈[0,1]
+        'fsp3':  rdMolDescriptors.CalcFractionCSP3(mol),  # constraint (↑), ∈[0,1]
         'alogp': qp.ALOGP,   # ALOGP crudo (Crippen MolLogP) — reporte
         'hbd':   qp.HBD,     # HBD crudo (CalcNumHBD) — reporte
         'mw':    qp.MW,

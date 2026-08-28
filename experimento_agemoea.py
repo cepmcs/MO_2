@@ -11,7 +11,7 @@ Operadores configurables:
   - Crossover: SBX (default) o PCX
   - Mutation:  PM (default) o Gaussian
 
-Cada combinación guarda en results/<crossover>_<mutation>/
+Cada combinación guarda en results/<ALG>/<crossover>_<mutation>/<config>/run_k/
 (sbx_pm es el combo base de la comparación entre algoritmos).
 
 Uso:

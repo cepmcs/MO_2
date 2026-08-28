@@ -1,15 +1,17 @@
 """
 Experimento MOEA/D — Optimización multi-objetivo del espacio latente VAE.
-Objetivos: QED (↑), SA (↓), Fsp3 (↑)
+Objetivos: QED (↑), SA (↓).  Constraint: Fsp3 ≥ FSP3_MIN.
+MOEA/D es el único que necesita subclase para el constraint: el de pymoo aborta
+con un assert.  Ver algoritmos_mo.MOEADConstr.
 
 MOEA/D usa vectores de referencia; se generan exactamente pop_size
-direcciones bien repartidas con el método Riesz s-energy.
+direcciones equiespaciadas con Das-Dennis uniforme (ver utils_mo.get_ref_dirs).
 
 Operadores configurables:
   - Crossover: SBX (default) o PCX
   - Mutation:  PM (default) o Gaussian
 
-Cada combinación guarda en results/<crossover>_<mutation>/
+Cada combinación guarda en results/<ALG>/<crossover>_<mutation>/<config>/run_k/
 
 Uso:
     python experimento_moead.py --pop_size 300 --run_id 0
@@ -64,8 +66,8 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.run_id)
 
-    # Direcciones de referencia: exactamente pop_size, bien repartidas (Riesz s-energy).
-    # Cacheadas en disco por pop_size: deterministas, se calculan una vez y se reutilizan.
+    # Direcciones de referencia: exactamente pop_size, equiespaciadas sobre el símplex
+    # (Das-Dennis uniforme, exacto con 2 objetivos).  No se cachean: cuestan ~1 ms.
     ref_dirs = get_ref_dirs(args.pop_size)
 
     # Cargar modelo y datos
