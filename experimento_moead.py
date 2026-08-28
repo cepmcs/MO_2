@@ -10,7 +10,6 @@ Operadores configurables:
   - Mutation:  PM (default) o Gaussian
 
 Cada combinación guarda en results/<crossover>_<mutation>/
-(sbx_pm es el combo base de la comparación entre algoritmos).
 
 Uso:
     python experimento_moead.py --pop_size 300 --run_id 0
