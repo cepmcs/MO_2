@@ -832,7 +832,7 @@ def write_tabla_operadores(res, groups, labels, alg, out_dir, get_values, col):
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, f'operadores_{alg}.tex'))
 
-    print(f"  grupos: " + ' > '.join('{' + ', '.join(g) + '}' for g in groups))
+    print("  grupos: " + ' > '.join('{' + ', '.join(g) + '}' for g in groups))
     print(f"  campeón: {campeon}")
     for p in res['pairs']:
         r = rank_biserial(vals[p['a']], vals[p['b']])

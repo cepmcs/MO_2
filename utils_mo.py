@@ -119,7 +119,7 @@ def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
     return os.path.join(base, "CMOPSO", cfg, f"run_{run_id + 1:02d}")
 
 
-def get_ref_dirs(n_points, seed=1):
+def get_ref_dirs(n_points):
     """Direcciones de referencia (Das-Dennis uniforme, 2 objetivos) para NSGA-III /
     MOEA-D: exactamente n_points, equiespaciadas sobre el símplex.
 
@@ -133,10 +133,7 @@ def get_ref_dirs(n_points, seed=1):
     ref_dirs): dos direcciones idénticas son un slot de población desperdiciado.
 
     Es determinista y cuesta ~1 ms, así que no se cachea en disco (el cache anterior
-    llevaba el nº de objetivos en el nombre y era una fuente de errores silenciosos:
-    los .npy de 3 objetivos siguen en data/ y no los toca nadie).
-
-    seed se acepta por compatibilidad de firma; Das-Dennis no lo usa."""
+    llevaba el nº de objetivos en el nombre y era una fuente de errores silenciosos)."""
     from pymoo.util.ref_dirs import get_reference_directions
     return get_reference_directions("uniform", 2, n_partitions=n_points - 1)
 

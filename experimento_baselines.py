@@ -204,7 +204,6 @@ def run_hill_climber(problem, mus, tracker, pop_size, n_gen, run_id, sigma=0.5):
         if f[i] < best:                 # solo acepta mejoras
             best, x = f[i], X[i].copy()
         tracker.update(gen)
-    return sigma
 
 
 def run_weighted_ga(problem, mus, pop_size, n_gen, run_id, tracker):
