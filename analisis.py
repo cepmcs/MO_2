@@ -61,7 +61,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Entradas de cada etapa, todas bajo resultados/.  Los experimentos escriben en
 # el cluster a results/ y results_baselines/ (ver utils_mo.RESULTS_DIR y
-# experimento_baselines.BASELINE_RESULTS_DIR); lo que baja al PC vive acá:
+# baselines.BASELINE_RESULTS_DIR); lo que baja al PC vive acá:
 #
 #   grid/        copia ligera de results/ del cluster (sin convergence.csv ni
 #                all_molecules.csv.gz), con el all_metrics.csv del grid completo
