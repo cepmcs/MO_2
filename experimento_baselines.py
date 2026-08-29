@@ -310,7 +310,7 @@ def main():
 
     print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Valid={validity:.0%}  "
           f"n={len(pareto)}  QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
-          f"Fsp3={metrics['best_fsp3']}  t={metrics['time_sec']}s", flush=True)
+          f"Fsp3={metrics['mean_fsp3']}  t={metrics['time_sec']}s", flush=True)
 
 
 if __name__ == "__main__":

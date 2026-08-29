@@ -12,8 +12,8 @@ import torch
 import numpy as np
 import pandas as pd
 
-from rdkit import Chem, DataStructs, RDLogger
-from rdkit.Chem import QED as QED_module, rdFingerprintGenerator, rdMolDescriptors
+from rdkit import Chem, RDLogger
+from rdkit.Chem import QED as QED_module, rdMolDescriptors
 from pymoo.core.problem import Problem
 from pymoo.core.sampling import Sampling
 from pymoo.core.callback import Callback
@@ -293,7 +293,10 @@ def calc_properties(smi):
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
-    qp = QED_module.properties(mol)   # ALOGP, HBD, MW, HBA... (crudos, solo para reporte)
+    # QED.properties calcula de una los descriptores que usa el QED; alogp/hbd/mw/hba
+    # salen gratis de ahí.  Ya NO se escriben a molecules.csv (nadie los leía); quedan
+    # en el dict por si hacen falta a mano, y se recalculan desde el SMILES.
+    qp = QED_module.properties(mol)
     return {
         'smiles': smi,
         'qed':   QED_module.qed(mol, qedProperties=qp),   # objetivo (↑), ∈[0,1]
@@ -519,30 +522,6 @@ def compute_spacing(pareto):
     return round(float(np.std(dmin) / mu), 6) if mu > 0 else 0.0
 
 
-# Generador de fingerprints Morgan (ECFP4: radio 2, 2048 bits) para diversidad.
-_MORGAN_GEN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
-
-
-def compute_diversity(pareto):
-    """Diversidad interna (IntDiv): 1 − similitud de Tanimoto MEDIA por pares sobre
-    fingerprints de Morgan (ECFP4). Mide diversidad ESTRUCTURAL del frente:
-    alta (→1) = moléculas químicamente distintas entre sí; baja (→0) = mismo esqueleto
-    repetido. Complementa a spacing (que mide dispersión en el espacio de objetivos).
-    Métrica estándar tipo MOSES."""
-    if len(pareto) < 2:
-        return 0.0
-    fps = [_MORGAN_GEN.GetFingerprint(mol)
-           for mol in (Chem.MolFromSmiles(m['smiles']) for m in pareto)
-           if mol is not None]
-    if len(fps) < 2:
-        return 0.0
-    # Similitud media sobre todos los pares no ordenados (i<j): fps[i] vs los previos.
-    sims = []
-    for i in range(1, len(fps)):
-        sims.extend(DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i]))
-    return round(1.0 - float(np.mean(sims)), 6)
-
-
 def build_pareto(eval_log):
     """Construye frente de Pareto desde el log completo.
     Retorna (pareto, validity, feasibility).
@@ -570,12 +549,6 @@ def build_pareto(eval_log):
     feasibility = round(n_feasible / n_valid, 4) if n_valid else 0.0
     pareto = non_dominated(list(seen.values()))
 
-    # Agregar propiedades extendidas (mw, logp, hbd, hba) para el CSV
-    for m in pareto:
-        props = calc_properties(m['smiles'])
-        if props:
-            m.update(props)
-
     return pareto, validity, feasibility
 
 
@@ -591,7 +564,7 @@ def save_molecules(pareto, run_dir):
     """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
     Escribe aunque el frente esté vacío: el orquestador (run_experiments.py) usa la
     existencia de este archivo como señal de run completa."""
-    cols = ['smiles', 'qed', 'sa', 'fsp3', 'alogp', 'hbd', 'mw', 'hba']
+    cols = ['smiles', 'qed', 'sa', 'fsp3']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
     if not pareto:
@@ -603,12 +576,17 @@ def save_molecules(pareto, run_dir):
 
 
 def save_tracking(tracker, run_dir):
-    """Guarda convergencia por generación y log completo de evaluaciones."""
+    """Guarda convergencia por generación y log completo de evaluaciones.
+
+    El log va con qed/sa/fsp3 a 4 decimales: es la misma precisión que guarda
+    metrics.csv y la que muestran las figuras, y achica el .gz a la mitad.
+    float_format toca solo las columnas float; smiles, valid/feasible y gen
+    quedan intactos, y las inválidas siguen saliendo vacías."""
     pd.DataFrame(tracker.history).to_csv(
         os.path.join(run_dir, "convergence.csv"), index=False)
     pd.DataFrame(tracker.problem.eval_log).to_csv(
         os.path.join(run_dir, "all_molecules.csv.gz"),
-        index=False, compression='gzip')
+        index=False, compression='gzip', float_format='%.4f')
 
 
 def consolidate_all(results_dir=None):
@@ -636,9 +614,8 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
     """Calcula métricas, guarda resultados y CSVs de una run.
     hp: dict con los hiperparámetros barridos (se agregan como columnas a metrics.csv)."""
     pareto, validity, feasibility = build_pareto(problem.eval_log)
-    hv        = compute_hv(pareto)
-    spacing   = compute_spacing(pareto)
-    diversity = compute_diversity(pareto)
+    hv      = compute_hv(pareto)
+    spacing = compute_spacing(pareto)
 
     # Novelty: fracción de moléculas válidas no presentes en el training set
     valid_smiles = [e['smiles'] for e in problem.eval_log if e['valid']]
@@ -649,14 +626,14 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'algorithm': alg_name, 'pop_size': pop_size, 'n_gen': n_gen,
         **(hp or {}),                       # hiperparámetros barridos como columnas
         'run': run_id + 1, 'n_pareto': len(pareto),
-        'hypervolume': round(hv, 6), 'spacing': spacing, 'diversity': diversity,
+        'hypervolume': round(hv, 6), 'spacing': spacing,
         'validity': validity, 'feasibility': feasibility, 'novelty': novelty,
         'best_qed': round(max((r['qed'] for r in pareto), default=float('nan')), 4),
         'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
         # Fsp3 ya no es objetivo: el frente es factible por construcción, así que
         # 'mean_fsp3' (dónde se paró respecto del umbral) informa más que el máximo.
+        # El análisis la recalcula desde molecules.csv; acá va para el log de la run.
         'mean_fsp3': round(float(np.mean([r['fsp3'] for r in pareto])), 4) if pareto else float('nan'),
-        'best_fsp3': round(max((r['fsp3'] for r in pareto), default=float('nan')), 4),
         'time_sec': round(elapsed, 1),
     }
 
