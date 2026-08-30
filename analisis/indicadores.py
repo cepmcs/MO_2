@@ -322,8 +322,7 @@ def contribucion_por_semilla(series, grupo_de=_familia):
 
 
 def _atribucion_por_origen(series, pf_df, grupo_de):
-    """Prepara el frente conjunto para dibujarlo: lo atribuye, arma la paleta y
-    cuenta las exclusivas de cada grupo.
+    """Prepara el frente conjunto para dibujarlo: lo atribuye y arma la paleta.
 
     Va aparte de la figura porque la atribución es lo caro (relee molecules.csv de
     todas las series) y porque la paleta la comparte con la tabla de contribución.
@@ -341,10 +340,7 @@ def _atribucion_por_origen(series, pf_df, grupo_de):
               else {g: get_color(g, i) for i, g in enumerate(grupos)})
     paleta[compartida] = COMPARTIDA_COLOR
 
-    orden = [g for g in list(grupos) + [compartida] if (at['origen'] == g).any()]
-    return {'at': at, 'paleta': paleta, 'compartida': compartida, 'orden': orden,
-            'cuentas': {g: int((at['origen'] == g).sum()) for g in orden},
-            'colores': at['origen'].map(paleta).values,
+    return {'at': at, 'paleta': paleta, 'compartida': compartida,
             'por': 'familia de cruce' if por_cruce else 'algoritmo'}
 
 

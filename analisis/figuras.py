@@ -103,22 +103,12 @@ PANELES_MO = [
 ]
 
 
-# Factibilidad va con las químicas y no con los indicadores MO: mide qué
-# fracción de lo generado cumple el constraint, que es una propiedad de las
-# moléculas, no del frente.  Es la métrica nueva de esta etapa —antes Fsp3 era
-# objetivo y no había nada que cumplir— y la que dice si el algoritmo aprendió a
-# quedarse del lado admisible o si sigue gastando evaluaciones fuera.
 PANELES_QUIM = [
     ('validity',    'Tasa de Validez',       'Convergencia de Validez',       20),
-    ('feasibility', 'Tasa de Factibilidad',  'Convergencia de Factibilidad',  20),
     ('uniqueness',  'Tasa de Unicidad',      'Convergencia de Unicidad',      20),
     ('novelty',     'Tasa de Novedad',       'Convergencia de Novedad',       20),
     ('qed',         'Promedio de QED (↑)',   'Convergencia de QED (↑)',       20),
     ('sa',          'Promedio de SA (↓)',    'Convergencia de SA (↓)',        20),
-    # Nada empuja el Fsp3 hacia arriba: la curva debería caer hasta apoyarse en
-    # el umbral y quedarse ahí.  El panel muestra ese descenso, no una mejora.
-    ('fsp3',        f'Promedio de Fsp3 (restr. $\\geq$ {FSP3_MIN:g})',
-     'Convergencia de Fsp3 (restricción)', 20),
 ]
 
 
@@ -270,7 +260,6 @@ BOXPLOT_MO_CONFIGS = [
 BOXPLOT_CHEM_CONFIGS = [
     ('mean_qed',    'QED (↑)',              True),
     ('mean_sa',     'SA (↓)',               False),
-    ('feasibility', 'Factibilidad (↑)',     True),
     ('mean_fsp3',   f'Fsp3 (restr. $\\geq$ {FSP3_MIN:g})', True),
     ('validity',    'Tasa de Validez',      True),
     ('uniqueness',  'Unicidad (↑)',         True),
@@ -365,17 +354,13 @@ def _pie_marker(ax, x, y, colors, size):
 
 
 
-# El frente es una curva en QED-SA: no hay más proyecciones que mirar.  El Fsp3
-# va en PLANOS_FRENTE, no acá.
+# El frente es una curva en QED-SA: no hay más proyecciones que mirar.
 PARETO_PLANES = [('qed', 'sa')]
 
 
-# Los paneles del frente conjunto: el espacio de objetivos más un diagnóstico del
-# constraint.  El segundo panel no es una proyección del frente —Fsp3 no ordena
-# nada— sino la respuesta a dónde se paró la búsqueda respecto del umbral: como
-# ya nada empuja Fsp3 hacia arriba, se espera que las soluciones se estacionen en
-# el borde, y conviene verlo en vez de suponerlo.
-PLANOS_FRENTE = [('qed', 'sa'), ('qed', 'fsp3')]
+# Mismo plano que PARETO_PLANES: el frente conjunto solo dibuja el espacio de
+# objetivos.
+PLANOS_FRENTE = [('qed', 'sa')]
 
 
 
@@ -480,16 +465,22 @@ def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
     """Leyenda de grupos y título de las figuras del frente conjunto.  Las dos
     coordenadas verticales dependen de cuántos paneles lleve la figura.
 
-    Dice 'solo X': estas cuentas son exclusivas, a diferencia de la columna
-    «Aporta» de la tabla."""
-    compartida = atr['compartida']
+    Un patch por grupo con su color y cuánto aportó en total (exclusivas +
+    compartidas), igual que las series en plot_pareto_comparison: así todo
+    color que aparece en el plano —punto propio o sector de un marcador
+    pastel— tiene su clave acá.  Sin entrada para 'compartida': lo compartido
+    se ve mezclando los colores ya listados (ver _pie_marker), no como un
+    color propio."""
+    at, paleta, compartida = atr['at'], atr['paleta'], atr['compartida']
+    grupos = [g for g in paleta if g != compartida]
     handles = [mpatches.Patch(
-        facecolor=atr['paleta'][g], edgecolor='white',
-        label=f'{g if g == compartida else "solo " + str(g)} ({atr["cuentas"][g]})')
-        for g in atr['orden']]
-    fig.legend(handles=handles, loc='lower center', ncol=len(handles),
-               framealpha=0.9, edgecolor='#cccccc', fontsize=11,
-               bbox_to_anchor=(0.5, leyenda_y))
+        facecolor=paleta[g], edgecolor='white',
+        label=f'{g} ({int(at[f"en_{g}"].sum())})')
+        for g in grupos]
+    if handles:
+        fig.legend(handles=handles, loc='lower center', ncol=len(handles),
+                   framealpha=0.9, edgecolor='#cccccc', fontsize=11,
+                   bbox_to_anchor=(0.5, leyenda_y))
 
     alg = _alg_from_output_dir(output_dir)
     fig.suptitle(f'Frente no dominado conjunto por {atr["por"]}'
@@ -498,29 +489,16 @@ def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
 
 
 
-def _linea_constraint(ax, eje):
-    """Marca el umbral del constraint sobre el eje que lleva Fsp3.
-
-    Sin la línea el panel no se puede leer: la nube arranca en 0.3 y parece un
-    borde de los datos, cuando es el umbral que la búsqueda tenía prohibido
-    cruzar.  Es lo que separa «se paró en el borde» de «no llegó más abajo»."""
-    trazo = ax.axvline if eje == 'x' else ax.axhline
-    trazo(FSP3_MIN, color='#444444', linestyle=':', linewidth=1.4, zorder=2,
-          label=f'Fsp3 = {FSP3_MIN:g}')
-
-
-
 def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia):
-    """El frente no dominado conjunto, cada molécula pintada según quién la
-    aportó.  Dos paneles: el espacio de objetivos y el diagnóstico del
-    constraint, con el umbral dibujado (ver PLANOS_FRENTE).
-
-    Un único scatter con array de colores: dibujar grupo por grupo haría que el
-    último tape a los otros en la zona densa."""
+    """El frente no dominado conjunto en el espacio de objetivos (ver
+    PLANOS_FRENTE): un scatter por grupo en su color, con un marcador
+    'pastel' donde una misma molécula la aportaron dos o más grupos —igual
+    que plot_pareto_comparison (ver _pie_marker)."""
     atr = _atribucion_por_origen(series, pf_df, grupo_de)
     if atr is None:
         return
-    at, colores = atr['at'], atr['colores']
+    at, paleta, compartida = atr['at'], atr['paleta'], atr['compartida']
+    grupos = [g for g in paleta if g != compartida]
 
     planos = [(x, y) for x, y in PLANOS_FRENTE
               if x in at.columns and y in at.columns]
@@ -529,17 +507,19 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     n = len(planos)
     fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8), squeeze=False)
     for ax, (xcol, ycol) in zip(axes[0], planos):
-        ax.scatter(at[xcol], at[ycol], c=colores, marker=PARETO_MARKER,
-                   s=MARCADOR_NORMAL, alpha=0.55, edgecolors='none',
-                   linewidths=0, zorder=3)
+        for g in grupos:
+            df_g = at[at[f'en_{g}']]
+            ax.scatter(df_g[xcol], df_g[ycol], c=paleta[g], marker=PARETO_MARKER,
+                       s=MARCADOR_DENSO, alpha=0.55, edgecolors='none',
+                       linewidths=0, zorder=3)
+        for _, row in at[at['origen'] == compartida].iterrows():
+            cols = [paleta[g] for g in grupos if row[f'en_{g}']]
+            _pie_marker(ax, row[xcol], row[ycol], cols, size=18)
         ax.set_xlabel(OBJECTIVE_LABELS.get(xcol, xcol))
         ax.set_ylabel(OBJECTIVE_LABELS.get(ycol, ycol))
-        ax.set_title('Espacio de objetivos' if (xcol, ycol) in PARETO_PLANES
-                     else 'Restricción de saturación')
+        ax.set_title('Espacio de objetivos')
         ax.set_xlim(*_pad_lim(at[xcol].values))
         ax.set_ylim(*_pad_lim(at[ycol].values))
-        if 'fsp3' in (xcol, ycol):
-            _linea_constraint(ax, 'x' if xcol == 'fsp3' else 'y')
 
     _leyenda_y_titulo_origen(fig, atr, output_dir, 0.01, 1.0)
     plt.tight_layout(rect=[0, 0.09, 1, 0.97])
@@ -809,12 +789,10 @@ def _generate_report(series, pop_size, output_dir, report_label):
         'igd_plus':    ind_curves['igd_plus'],
         'epsilon':     ind_curves['epsilon'],
         'validity':    _conv_csv_curves(series, 'validity'),
-        'feasibility': _conv_csv_curves(series, 'feasibility'),
         'uniqueness':  _conv_csv_curves(series, 'uniqueness'),
         'novelty':     _conv_csv_curves(series, 'novelty'),
         'qed':         _objective_curves(series, 'qed'),
         'sa':          _objective_curves(series, 'sa'),
-        'fsp3':        _objective_curves(series, 'fsp3'),
     }
 
     # 3. Las curvas van SOLO contra evaluaciones.  La versión por generación se
@@ -844,7 +822,7 @@ def _generate_report(series, pop_size, output_dir, report_label):
         plot_boxplots(series, output_dir, get_values, BOXPLOT_MO_CONFIGS,
                       f"boxplots_mo_pop{pop_size}.png",
                       "Distribución de Indicadores Multiobjetivo")
-        print("📊 Boxplots químicos (QED, SA, Factibilidad, Fsp3, Validez, "
+        print("📊 Boxplots químicos (QED, SA, Fsp3, Validez, "
               "Unicidad, Novedad)...")
         plot_boxplots(series, output_dir, get_values, BOXPLOT_CHEM_CONFIGS,
                       f"boxplots_chemical_pop{pop_size}.png",
