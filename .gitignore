@@ -67,8 +67,10 @@ data/ref_dirs_*.npy
 # salida cruda de los experimentos (se genera en el cluster)
 results/
 results_*/
-# lo que se baja del cluster al PC para analizar: grid, winners, finalistas,
-# baselines (ver la cabecera de analisis.py)
+# el tar que arma train.sh en el cluster para bajar al PC (derivado de results/)
+MO2_analisis.tar
+# lo que se baja del cluster al PC para analizar: grid, winners, finalistas.
+# baselines/ NO viene del cluster: se corre y se analiza acá.
 resultados/
 # tablas y figuras que produce analisis.py
 plots/

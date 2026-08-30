@@ -567,11 +567,16 @@ def build_operator_series_winners(alg, winners_dir, combos=None):
     return series
 
 
-# Lo que baja del cluster (que escribe en results/ y results_baselines/):
-#   grid/        copia ligera de results/, con el all_metrics.csv del grid
-#   winners/     las 17 configuraciones que ganaron su bloque en la etapa 1
-#   finalistas/  symlinks a la ganadora de cada algoritmo en winners/
-#   baselines/   copia de results_baselines/
+# El cluster baja UN tar (lo arma train.sh) y se extrae en la
+# raíz del repo; cada cosa cae ya en su lugar:
+#   grid/        SOLO all_metrics.csv, que es lo único que lee la etapa 1.  El
+#                árbol del grid (10.260 runs) no lo consume nadie y no viaja.
+#   winners/     las 17 configuraciones que ganaron su bloque en la etapa 1, con
+#                sus runs completas (incluido all_molecules.csv.gz).
+#   finalistas/  symlinks a la ganadora de cada algoritmo en winners/.  Lo armás
+#                vos en el PC, después de la etapa 2.
+#   baselines/   NO viene del cluster: las baselines se corren y se analizan acá
+#                (baselines.py escribe en results_baselines/).
 RESULTADOS_DIR = os.path.join(ROOT_DIR, "resultados")
 
 METRICS_CSV    = os.path.join(RESULTADOS_DIR, "grid", "all_metrics.csv")

@@ -7,8 +7,9 @@ medio de hipervolumen, rankeando dentro de cada semilla.
 
 Los operadores no se testean acá; esa es la etapa 2.
 
-Deja la figura de selección y selected_configs en .csv y .tex, para leer a mano:
-winners/ lo armás vos, ningún script lo consume.
+Deja la figura de selección y selected_configs en .csv y .tex.  El CSV no es
+solo para leer: train.sh lo parsea en el cluster para saber qué 17 directorios
+meter en el tar que baja al PC, así que sus nombres de columna son contrato.
 """
 
 import math
@@ -42,8 +43,8 @@ from .comun import (
 #
 #   Los operadores no se testean acá; esa es la etapa 2.
 #
-#   Deja la figura de selección y selected_configs en .csv y .tex.  Los dos son
-#   para leer a mano: winners/ lo armás vos, ningún script lo consume.
+#   Deja la figura de selección y selected_configs en .csv y .tex.  El CSV lo
+#   parsea train.sh para armar winners/ en el cluster (ver su paso 2).
 # ═══════════════════════════════════════════════════════════════════════════
 
 # CMOPSO no tiene operadores; se colorea por tamaño del archivo de elites, que es
