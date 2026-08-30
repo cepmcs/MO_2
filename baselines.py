@@ -58,7 +58,7 @@ PYTHON = sys.executable      # el python del entorno actual, sin rutas hardcodea
 Z_LOW, Z_HIGH = -5.0, 5.0    # mismos bounds que MolecularLatentProblem (utils_mo)
 
 POP_SIZE, N_GEN = 400, 250   # 100.000 evaluaciones, igual que los MOEAs
-# Los mismos cuatro que analiza analisis.py (BASELINE_KEYS).
+# Los mismos cuatro que analiza analisis/etapa4.py (BASELINE_KEYS).
 METHODS = ['screening', 'random', 'hill_climber', 'weighted_ga']
 # Un peso por objetivo ([-QED, SA]).  Fsp3 no se pondera: es constraint.
 DEFAULT_WEIGHTS = (0.5, 0.5)

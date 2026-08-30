@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # convergence.csv se excluye solo del grid (513 configs x 20 semillas).  Las
-# baselines lo necesitan: analisis.py detecta una serie por ese archivo.
+# baselines lo necesitan: el análisis detecta una serie por ese archivo.
 EXCLUDES_GRID=(--exclude='all_molecules.csv.gz' --exclude='convergence.csv')
 EXCLUDES_BASE=(--exclude='all_molecules.csv.gz')
 
