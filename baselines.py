@@ -6,10 +6,14 @@ CMOPSO): ninguno hace búsqueda multi-objetivo real de Pareto.
 Objetivos: QED (↑), SA (↓).  Constraint: Fsp3 ≥ FSP3_MIN  (igual que el resto
 del proyecto).
 
-OJO: el cuerpo de los métodos quedó en la versión de 3 objetivos y NO corre con
-el utils_mo actual (2 objetivos).  Falla al normalizar F y al asignar INVALID_F,
-y sus frentes tampoco filtran por el constraint.  Hay que migrarlo antes de la
-etapa 4.
+El constraint entra distinto en cada método, según lo que cada uno seleccione:
+  screening / random   no seleccionan nada, así que el umbral no puede guiarlos;
+                       se registra la factibilidad y el frente publicado la filtra.
+  hill_climber         acepta con la regla de Deb (ver run_hill_climber).
+  weighted_ga          lo declara como n_ieq_constr y pymoo hace la dominancia
+                       de factibilidad sola (selección por CV y supervivencia
+                       lexicográfica); no necesita subclase, a diferencia de
+                       MOEA/D (ver algoritmos_mo.MOEADConstr).
 
 Este archivo tiene TODO lo de baselines: los cuatro métodos y el orquestador que
 los corre en paralelo.  El orquestador se relanza a sí mismo como subproceso (una
@@ -30,7 +34,7 @@ Uso:
     python baselines.py todas --methods random screening
     python baselines.py todas --n-runs 5 --parallel 2
     python baselines.py una --method random --pop_size 400 --n_gen 250 --run_id 0
-    python baselines.py una --method weighted_ga --weights 0.5,0.3,0.2 --pop_size 400 --run_id 0
+    python baselines.py una --method weighted_ga --weights 0.6,0.4 --pop_size 400 --run_id 0
     python baselines.py resumen
 """
 
@@ -49,7 +53,7 @@ from utils_mo import (
     load_model, load_seed_mus, load_train_smiles, set_device,
     MolecularLatentProblem, LatentSampling, get_operators,
     decode_z_batch, calc_properties, postprocess_run, consolidate_all,
-    F_MIN, F_RANGE, HV_REF, INVALID_F,
+    F_MIN, F_RANGE, HV_REF, INVALID_F, INVALID_G, FSP3_MIN,
 )
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +64,9 @@ Z_LOW, Z_HIGH = -5.0, 5.0    # mismos bounds que MolecularLatentProblem (utils_m
 POP_SIZE, N_GEN = 400, 250   # 100.000 evaluaciones, igual que los MOEAs
 # Los mismos cuatro que analiza analisis.py (BASELINE_KEYS).
 METHODS = ['screening', 'random', 'hill_climber', 'weighted_ga']
-DEFAULT_WEIGHTS = (1 / 3, 1 / 3, 1 / 3)
+# Pesos de la suma ponderada, uno por OBJETIVO ([-QED, SA]).  Fsp3 no está: dejó
+# de ser objetivo y entra como constraint, así que no se pondera, se cumple o no.
+DEFAULT_WEIGHTS = (0.5, 0.5)
 
 
 # ─── Rutas de las corridas ───────────────────────────────────────────────────
@@ -75,7 +81,7 @@ def tag_de_pesos(method, weights):
     así que vive en un solo lugar y no pueden divergir."""
     if method != 'weighted_ga':
         return None
-    return f"w{_fmt(weights[0])}_{_fmt(weights[1])}_{_fmt(weights[2])}"
+    return f"w{_fmt(weights[0])}_{_fmt(weights[1])}"
 
 
 def baseline_run_dir(method, pop_size, n_gen, run_id, tag=None):
@@ -115,8 +121,13 @@ class BaselineTracker:
             e['gen'] = gen
 
         valid = [e for e in new if e['valid']]
-        if valid:
-            F = np.array([[-e['qed'], e['sa'], -e['fsp3']] for e in valid])
+        # El HV va solo sobre las FACTIBLES del lote, igual que el de
+        # GenerationTracker (utils_mo) sobre la población: el HV final se calcula
+        # sobre el frente factible y la curva tiene que medir lo mismo que su
+        # propio punto de llegada.
+        feasible = [e for e in valid if e['feasible']]
+        if feasible:
+            F = np.array([[-e['qed'], e['sa']] for e in feasible])
             Fn = (F - F_MIN) / F_RANGE
             try:
                 hv = float(HV(ref_point=HV_REF)(Fn))
@@ -128,8 +139,11 @@ class BaselineTracker:
         smis = [e['smiles'] for e in valid]
         n_valid = len(smis)
         n_novel = sum(1 for s in smis if s not in self.train_smiles)
+        # Mismas columnas y mismo orden que convergence.csv de los MOEAs.
         self.history.append({
-            'gen': gen, 'hv': round(hv, 6), 'n_eval': len(new), 'n_valid': n_valid,
+            'gen': gen, 'hv': round(hv, 6), 'n_feasible': len(feasible),
+            'feasibility': round(len(feasible) / n_valid, 4) if n_valid else 0.0,
+            'n_eval': len(new), 'n_valid': n_valid,
             'validity': round(n_valid / len(new), 4) if new else 0.0,
             'uniqueness': round(len(set(smis)) / n_valid, 4) if n_valid else 0.0,
             'novelty': round(n_novel / n_valid, 4) if n_valid else 0.0,
@@ -150,35 +164,52 @@ class TrackerCallback(Callback):
 # ─── Problema para el GA de suma ponderada (single-objective) ────────────────
 
 class WeightedSumLatentProblem(Problem):
-    """Mismo espacio/objetivos que MolecularLatentProblem, pero out['F'] es UN
-    escalar (suma ponderada de [-QED, SA, -Fsp3] normalizados a [0,1]) para que
-    el GA single-objective de pymoo lo use como fitness. eval_log guarda los 3
-    valores crudos igual que en los experimentos multi-objetivo, así se reusa
-    postprocess_run (Pareto/HV/spacing) sin cambios."""
+    """Mismo espacio y mismos objetivos que MolecularLatentProblem, pero out['F']
+    es UN escalar —la suma ponderada de [-QED, SA] normalizados a [0,1]— para que
+    el GA single-objective de pymoo lo use como fitness.  Es justamente lo que se
+    quiere medir: qué se pierde al colapsar el compromiso en un solo número
+    elegido de antemano, en vez de buscar el frente.
+
+    El constraint NO entra en la suma: va como G, igual que en el problema
+    multi-objetivo.  Con n_ieq_constr declarado, el GA de pymoo hace la
+    dominancia de factibilidad solo, sin subclase — su selección compara por CV
+    antes que por fitness (comp_by_cv_and_fitness) y su supervivencia ordena por
+    lexsort([F, cv]).  Ponderar Fsp3 en cambio lo volvería negociable: una
+    molécula podría comprar violación del umbral con QED.
+
+    eval_log guarda los valores crudos y la factibilidad igual que en los
+    experimentos multi-objetivo, así se reusa postprocess_run sin cambios."""
 
     def __init__(self, model, stoi, itos, latent_dim, weights):
         self.model, self.stoi, self.itos = model, stoi, itos
         self.weights = np.asarray(weights, dtype=float)
         self.weights = self.weights / self.weights.sum()
         self.eval_log = []
-        super().__init__(n_var=latent_dim, n_obj=1, xl=Z_LOW, xu=Z_HIGH)
+        super().__init__(n_var=latent_dim, n_obj=1, n_ieq_constr=1,
+                         xl=Z_LOW, xu=Z_HIGH)
 
     def _evaluate(self, x, out, *args, **kwargs):
         smiles = decode_z_batch(self.model, x, self.stoi, self.itos)
-        F3 = np.empty((len(smiles), 3), dtype=float)
+        F = np.empty((len(smiles), 2), dtype=float)
+        G = np.empty((len(smiles), 1), dtype=float)
         for i, smi in enumerate(smiles):
             props = calc_properties(smi)
             if props is None:
-                F3[i] = INVALID_F
+                F[i] = INVALID_F
+                G[i] = INVALID_G
                 self.eval_log.append({'smiles': None, 'qed': None, 'sa': None,
-                                      'fsp3': None, 'valid': False})
+                                      'fsp3': None, 'valid': False,
+                                      'feasible': False})
             else:
-                F3[i] = (-props['qed'], props['sa'], -props['fsp3'])
+                F[i] = (-props['qed'], props['sa'])
+                G[i] = FSP3_MIN - props['fsp3']
                 self.eval_log.append({'smiles': props['smiles'], 'qed': props['qed'],
                                       'sa': props['sa'], 'fsp3': props['fsp3'],
-                                      'valid': True})
-        F3_norm = (F3 - F_MIN) / F_RANGE
-        out["F"] = (F3_norm * self.weights).sum(axis=1, keepdims=True)
+                                      'valid': True,
+                                      'feasible': bool(props['fsp3'] >= FSP3_MIN)})
+        F_norm = (F - F_MIN) / F_RANGE
+        out["F"] = (F_norm * self.weights).sum(axis=1, keepdims=True)
+        out["G"] = G
 
 
 # ─── Muestreo aleatorio: barrido manual, sin optimizador ─────────────────────
@@ -188,7 +219,13 @@ def run_random(problem, tracker, pop_size, n_gen, run_id):
     entrenó el decodificador.  Muestrear uniforme en [-5,5]^256 caería a norma
     ~46 en vez de ~16 y hundiría la validez al 59%, con lo que la diferencia
     frente a los MOEAs mediría el fallo del decoder fuera de la variedad de
-    datos y no la ausencia de búsqueda."""
+    datos y no la ausencia de búsqueda.
+
+    El constraint no puede guiar nada acá: no hay selección, cada lote se
+    muestrea de cero.  Se evalúa y se registra como en el resto (el problema es
+    MolecularLatentProblem, el mismo de los MOEAs), y filtra recién al publicar
+    el frente.  La factibilidad que salga es entonces la del prior del VAE, que
+    es el piso contra el que se lee la de los algoritmos."""
     rng = np.random.default_rng(run_id)
     for gen in range(1, n_gen + 1):
         X = rng.normal(0.0, 1.0, size=(pop_size, problem.n_var))
@@ -198,7 +235,11 @@ def run_random(problem, tracker, pop_size, n_gen, run_id):
 
 class ScreeningProblem:
     """Cribado virtual: no hay espacio latente ni decodificación, solo se evalúan
-    moléculas tomadas de MOSES.  Expone eval_log para reusar postprocess_run."""
+    moléculas tomadas de MOSES.  Expone eval_log para reusar postprocess_run.
+
+    No hay F ni G porque no hay nada que optimizar: se registran las propiedades
+    y la factibilidad, y el frente se arma al final como en cualquier otra
+    corrida."""
 
     def __init__(self):
         self.eval_log = []
@@ -209,16 +250,24 @@ class ScreeningProblem:
             props = calc_properties(smi)
             if props is None:
                 self.eval_log.append({'smiles': None, 'qed': None, 'sa': None,
-                                      'fsp3': None, 'valid': False})
+                                      'fsp3': None, 'valid': False,
+                                      'feasible': False})
             else:
                 self.eval_log.append({'smiles': props['smiles'], 'qed': props['qed'],
                                       'sa': props['sa'], 'fsp3': props['fsp3'],
-                                      'valid': True})
+                                      'valid': True,
+                                      'feasible': bool(props['fsp3'] >= FSP3_MIN)})
 
 
 def run_screening(problem, tracker, pop_size, n_gen, run_id, train_smiles_series):
     """Toma pop_size*n_gen moléculas de MOSES al azar y las evalúa.  Sin generar
-    nada: mide qué se consigue cribando una biblioteca existente."""
+    nada: mide qué se consigue cribando una biblioteca existente.
+
+    El pool sale de MOSES entero, SIN prefiltrar por Fsp3.  Prefiltrar le
+    regalaría el constraint: los MOEAs gastan parte de sus 100.000 evaluaciones
+    en la zona infactible y el cribado no, con lo que el presupuesto dejaría de
+    significar lo mismo para todos.  Así la factibilidad de MOSES (~56% cumple
+    el umbral) queda medida como resultado y no asumida."""
     n_total = pop_size * n_gen
     pool = train_smiles_series.sample(n_total, replace=False,
                                       random_state=run_id).tolist()
@@ -230,19 +279,30 @@ def run_screening(problem, tracker, pop_size, n_gen, run_id, train_smiles_series
 def run_hill_climber(problem, mus, tracker, pop_size, n_gen, run_id, sigma=0.5):
     """Escalador (1+λ): un único candidato que en cada paso genera pop_size
     mutaciones gaussianas y se mueve solo si la mejor supera a la actual.  Sin
-    población ni cruce: aísla cuánto aporta la búsqueda poblacional."""
+    población ni cruce: aísla cuánto aporta la búsqueda poblacional.
+
+    Es el único método que no pasa por pymoo, así que la dominancia de
+    factibilidad se escribe acá.  Se ordena por (violación, fitness): una
+    factible le gana a cualquier infactible, entre infactibles gana la de menor
+    violación y entre factibles gana el mejor fitness.  Es la regla de Deb
+    (2002), la misma que aplican los MOEAs y el GA ponderado, y por eso la única
+    diferencia que queda con este último es la ausencia de población."""
     rng = np.random.default_rng(run_id)
     x = mus[0].copy()
-    best = np.inf
+    best = None                          # (violación, fitness) del candidato actual
     for gen in range(1, n_gen + 1):
         X = np.clip(x + rng.normal(0, sigma, size=(pop_size, problem.n_var)),
                     Z_LOW, Z_HIGH)
         out = {}
         problem._evaluate(X, out)
         f = np.asarray(out["F"]).ravel()
-        i = int(np.argmin(f))
-        if f[i] < best:                 # solo acepta mejoras
-            best, x = f[i], X[i].copy()
+        cv = np.maximum(np.asarray(out["G"]).ravel(), 0.0)   # 0 si es factible
+        # lexsort toma la ÚLTIMA clave como principal: primero violación, después
+        # fitness.  El mejor del lote queda en la posición 0.
+        i = int(np.lexsort((f, cv))[0])
+        cand = (cv[i], f[i])
+        if best is None or cand < best:  # la tupla compara violación y luego fitness
+            best, x = cand, X[i].copy()
         tracker.update(gen)
 
 
@@ -288,7 +348,9 @@ def correr_una(args):
     label = f"{args.method.upper()}/pop{args.pop_size}xgen{args.n_gen}/run_{args.run_id + 1:02d}"
     print(f"[{label}] Iniciando...", flush=True)
 
-    hp = {}
+    # fsp3_min queda en todas: es la columna con que los MOEAs registran el
+    # umbral con que corrieron, y all_metrics.csv junta ambas familias.
+    hp = {'fsp3_min': FSP3_MIN}
     t0 = time.time()
     if args.method == 'screening':
         from utils_mo import _load_moses_train_smiles
@@ -302,8 +364,8 @@ def correr_una(args):
         tracker = BaselineTracker(problem, train_smiles)
         run_hill_climber(problem, mus, tracker, args.pop_size, args.n_gen,
                          args.run_id, sigma=args.sigma)
-        hp = {'sigma': args.sigma, 'w_qed': round(weights[0], 4),
-              'w_sa': round(weights[1], 4), 'w_fsp3': round(weights[2], 4)}
+        hp |= {'sigma': args.sigma, 'w_qed': round(weights[0], 4),
+               'w_sa': round(weights[1], 4)}
     elif args.method == 'random':
         problem = MolecularLatentProblem(model, stoi, itos, latent_dim)
         tracker = BaselineTracker(problem, train_smiles)
@@ -314,18 +376,18 @@ def correr_una(args):
         tracker = BaselineTracker(problem, train_smiles)
         cx_prob, mut_prob = run_weighted_ga(problem, mus, args.pop_size, args.n_gen,
                                             args.run_id, tracker)
-        hp = {'crossover': 'sbx', 'mutation': 'pm', 'cx_prob': cx_prob,
-              'mut_prob': round(mut_prob, 6),
-              'w_qed': round(weights[0], 4), 'w_sa': round(weights[1], 4),
-              'w_fsp3': round(weights[2], 4)}
+        hp |= {'crossover': 'sbx', 'mutation': 'pm', 'cx_prob': cx_prob,
+               'mut_prob': round(mut_prob, 6),
+               'w_qed': round(weights[0], 4), 'w_sa': round(weights[1], 4)}
     elapsed = time.time() - t0
 
     metrics, pareto, hv, spacing, validity = postprocess_run(
         args.method.upper(), args.pop_size, args.n_gen, args.run_id,
         problem, tracker, elapsed, run_dir, hp=hp)
 
-    print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  Valid={validity:.0%}  "
-          f"n={len(pareto)}  QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
+    print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  "
+          f"Valid={validity:.0%}  Feas={metrics['feasibility']:.0%}  n={len(pareto)}  "
+          f"QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
           f"Fsp3={metrics['mean_fsp3']}  t={metrics['time_sec']}s", flush=True)
 
 
@@ -441,7 +503,8 @@ def main():
     p2.add_argument('--n_gen', type=int, default=N_GEN)
     p2.add_argument('--run_id', type=int, required=True)
     p2.add_argument('--weights', type=str, default=None,
-                    help="Solo weighted_ga: 'w_qed,w_sa,w_fsp3' (default: iguales).")
+                    help="Solo weighted_ga y hill_climber: 'w_qed,w_sa' "
+                         "(default: iguales).")
     p2.add_argument('--sigma', type=float, default=0.5,
                     help="Solo hill_climber: desvío del paso de mutación.")
     p2.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto',

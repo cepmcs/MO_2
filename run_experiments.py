@@ -31,10 +31,13 @@ import argparse
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from experimento import ALGS_GA
 from utils_mo import ga_run_dir, cmopso_run_dir, consolidate_all, FSP3_MIN
 
 ROOT   = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable   # el python del entorno actual (nada de rutas hardcodeadas)
+# Los cinco algoritmos entran por el mismo script, con --alg.
+EXPERIMENTO = "experimento.py"
 
 # ─── Espacio de hiperparámetros ───────────────────────────────────────────────
 # 3 repartos de población×generación, todos = 100.000 evaluaciones.
@@ -55,12 +58,10 @@ OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
 ELITE_SIZES = [5, 10, 25]
 VEL_RATES   = [0.1, 0.2, 0.35]
 
-GA_ALGS = [
-    ("NSGA2",   "experimento_nsga2.py"),
-    ("NSGA3",   "experimento_nsga3.py"),
-    ("MOEAD",   "experimento_moead.py"),
-    ("AGEMOEA", "experimento_agemoea.py"),
-]
+# Los cuatro genéticos salen de algoritmos_mo: son los de familia 'ga', o sea los
+# que tienen operadores de cruce y mutación que barrer.  CMOPSO va aparte porque
+# sus perillas son otras.
+GA_ALGS = ALGS_GA
 
 
 # ─── Definición de tareas ─────────────────────────────────────────────────────
@@ -68,13 +69,13 @@ GA_ALGS = [
 def build_tasks(n_runs):
     """Lista de tareas del grid. Cada tarea es un dict autocontenido."""
     tasks = []
-    for alg, script in GA_ALGS:
+    for alg in GA_ALGS:
         for pop, gen in POP_GEN:
             for cx, mut in OPERATORS:
                 for cxp in CX_PROBS:
                     for mutp in MUT_PROBS:
                         for run in range(n_runs):
-                            tasks.append(dict(kind="ga", alg=alg, script=script,
+                            tasks.append(dict(kind="ga", alg=alg,
                                               pop=pop, gen=gen, cx=cx, mut=mut,
                                               cxp=cxp, mutp=mutp, run=run))
     for pop, gen in POP_GEN:
@@ -83,7 +84,6 @@ def build_tasks(n_runs):
                 for vel in VEL_RATES:
                     for run in range(n_runs):
                         tasks.append(dict(kind="cmopso", alg="CMOPSO",
-                                          script="experimento_cmopso.py",
                                           pop=pop, gen=gen, es=es, mutp=mutp,
                                           vel=vel, run=run))
     return tasks
@@ -122,7 +122,7 @@ def run_one(t, device, threads):
     if device == "cpu":
         env["CUDA_VISIBLE_DEVICES"] = ""   # sin CUDA: evita inicializar la GPU
 
-    cmd = [PYTHON, os.path.join(ROOT, t['script']),
+    cmd = [PYTHON, os.path.join(ROOT, EXPERIMENTO), "--alg", t['alg'],
            "--pop_size", str(t['pop']), "--n_gen", str(t['gen']),
            "--run_id", str(t['run']), "--device", device]
     if t['kind'] == 'cmopso':
