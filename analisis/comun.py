@@ -575,8 +575,7 @@ def build_operator_series_winners(alg, winners_dir, combos=None):
 #                sus runs completas (incluido all_molecules.csv.gz).
 #   finalistas/  symlinks a la ganadora de cada algoritmo en winners/.  Lo armás
 #                vos en el PC, después de la etapa 2.
-#   baselines/   NO viene del cluster: las baselines se corren y se analizan acá
-#                (baselines.py escribe en results_baselines/).
+#   baselines/   NO viene del cluster: las baselines se corren y se analizan acá.
 RESULTADOS_DIR = os.path.join(ROOT_DIR, "resultados")
 
 METRICS_CSV    = os.path.join(RESULTADOS_DIR, "grid", "all_metrics.csv")
