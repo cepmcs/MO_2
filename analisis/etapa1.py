@@ -47,9 +47,8 @@ from .comun import (
 #   parsea train.sh para armar winners/ en el cluster (ver su paso 2).
 # ═══════════════════════════════════════════════════════════════════════════
 
-# CMOPSO no tiene operadores; se colorea por tamaño del archivo de elites, que es
-# la perilla propia de su mecanismo de selección de líderes (reemplaza a la
-# inercia w del MOPSO anterior, que en CMOPSO no existe).
+# CMOPSO no tiene operadores; se colorea por el tamaño del archivo de elites, la
+# perilla propia de su selección de líderes.
 ELITE_COLORS = {5: '#9ECAE1', 10: '#4292C6', 25: '#08519C'}
 
 
@@ -59,9 +58,8 @@ HP_METRICS = {
     'spacing':     ('Espaciamiento', False),
     'n_pareto':    ('Tamaño de Pareto', True),
     'validity':    ('Validez', True),
-    # Fracción de las moléculas válidas que cumplen el constraint de saturación.
-    # Es la métrica nueva de esta etapa: mide cuánto del presupuesto se gasta
-    # fuera de la región admisible, algo que no existía con Fsp3 como objetivo.
+    # Fracción de las válidas que cumplen el constraint: cuánto del presupuesto
+    # se gasta fuera de la región admisible.
     'feasibility': ('Factibilidad', True),
     'novelty':     ('Novedad', True),
     'best_sa':     ('Mejor SA', False),
@@ -73,10 +71,8 @@ HP_METRICS = {
 # evaluaciones.
 FACTORS_GA = ['budget', 'crossover', 'mutation', 'cx_prob', 'mut_prob']
 
-# Las perillas de CMOPSO no son las del MOPSO anterior: su ecuación de velocidad
-# usa coeficientes aleatorios por dimensión y no hay pbest, así que w/c1/c2
-# desaparecen y en su lugar se barren el archivo de elites, la mutación por-gen y
-# el tope de velocidad (ver run_experiments.py).
+# CMOPSO barre el archivo de elites, la mutación por-gen y el tope de velocidad
+# (ver run_experiments.py).
 FACTORS_PSO = ['budget', 'elite_size', 'mut_prob', 'vel_rate']
 
 

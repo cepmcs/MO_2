@@ -1,22 +1,10 @@
 """
-Los cinco algoritmos de la comparación y cómo se corre uno.
+Los cinco algoritmos de la comparación y el cuerpo de una corrida.
 
-Objetivos: QED (↑), SA (↓) → pymoo minimiza [-QED, SA].  Fsp3 entra como
-constraint (Fsp3 ≥ FSP3_MIN): solo MOEA/D necesita subclase, los otros cuatro
-lo manejan nativo por dominancia de factibilidad.
-
-Cuatro partes: MOEADConstr, la tabla ALGORITMOS (lo único que hay que tocar para
-agregar o cambiar un algoritmo), correr() y el CLI.
-
-Las perillas dependen de la familia; --help muestra las del --alg que pases:
+Para agregar o cambiar un algoritmo se toca la tabla ALGORITMOS.  Las perillas
+dependen de la familia; --help muestra las del --alg que pases:
   ga  (NSGA2, NSGA3, MOEAD, AGEMOEA)   --crossover --mutation --cx_prob --mut_prob
   pso (CMOPSO)                         --elite_size --mut_prob --vel_rate
-
-Uso:
-    python experimento.py --alg nsga2 --pop_size 300 --run_id 0
-    python experimento.py --alg cmopso --pop_size 100 --n_gen 1000 --run_id 0
-    python experimento.py --alg moead --help
-    python experimento.py --generate_summary
 
 Corre UNA configuración por vez; el grid lo lanza run_experiments.py.
 """
@@ -50,18 +38,15 @@ from utils_mo import (
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#   1. La subclase que le falta a pymoo
+#   1. MOEA/D con constraints
 # ═══════════════════════════════════════════════════════════════════════════
 
 class MOEADConstr(ParallelMOEAD):
-    """MOEA/D con dominancia de factibilidad (parameter-less de Deb, 2002).
+    """MOEA/D con dominancia de factibilidad.
 
-    pymoo aborta con `assert not problem.has_constraints()` en _setup, y el
-    criterio que lo resolvería está en moead.py pero comentado.  Acá se activa:
-    cada infactible vale fmax + CV en el espacio escalarizado, o sea peor que
-    cualquier factible, y entre infactibles gana el de menor violación.  Es el
-    mismo ORDEN que usan los otros cuatro, sobre los valores descompuestos.
-    """
+    El de pymoo aborta con un assert ante constraints.  Acá cada infactible vale
+    fmax + CV en el espacio escalarizado: peor que cualquier factible, y entre
+    infactibles gana el de menor violación."""
 
     def _setup(self, problem, **kwargs):
         # Igual que MOEAD._setup pero sin el assert que rechaza constraints.
@@ -100,14 +85,13 @@ class MOEADConstr(ParallelMOEAD):
 
 @dataclass(frozen=True)
 class Algoritmo:
-    """Lo que distingue a un algoritmo de los otros cuatro.
+    """Lo que distingue a un algoritmo de los otros.
 
     construir     (args, sampling, operadores, ref_dirs) → algoritmo de pymoo.
-    familia       'ga' (cruce y mutación) o 'pso' (elites y velocidad).  Decide
-                  las perillas del CLI, el run_dir y las columnas de hp.
+    familia       'ga' o 'pso'; decide las perillas del CLI y el run_dir.
     normalizado   el problema entrega F normalizado a [0,1]^2.
-    ref_dirs      necesita direcciones de referencia; se generan pop_size.
-    nota          por qué se configura así; sale en su --help.
+    ref_dirs      necesita pop_size direcciones de referencia.
+    nota          sale en su --help.
     """
     construir: Callable
     familia: str
@@ -145,8 +129,7 @@ def _moead(args, sampling, operadores, ref_dirs):
 def _cmopso(args, sampling, operadores, ref_dirs):
     algoritmo = CMOPSO(pop_size=args.pop_size, elite_size=args.elite_size,
                        max_velocity_rate=args.vel_rate, sampling=sampling)
-    # CMOPSO fija la mutación por INDIVIDUO y deja el por-gen en 1/n_var.  Se pisa
-    # para barrer la misma perilla que los GA.
+    # Se pisa la mutación para barrer la misma perilla que los GA.
     algoritmo.mutation = PM(prob=1.0, prob_var=args.mut_prob)
     return algoritmo
 
@@ -154,18 +137,17 @@ def _cmopso(args, sampling, operadores, ref_dirs):
 ALGORITMOS = {
     'NSGA2': Algoritmo(
         construir=_nsga2, familia='ga', normalizado=False, ref_dirs=False,
-        nota="Constraint nativo; no necesita nada más que el problema."),
+        nota="Constraint nativo."),
 
     'NSGA3': Algoritmo(
         construir=_nsga3, familia='ga', normalizado=False, ref_dirs=True,
-        nota="Usa vectores de referencia: pop_size direcciones Das-Dennis "
-             "(ver utils_mo.get_ref_dirs).  Constraint nativo."),
+        nota="Usa pop_size direcciones Das-Dennis.  Constraint nativo."),
 
     'MOEAD': Algoritmo(
         construir=_moead, familia='ga', normalizado=True, ref_dirs=True,
-        nota="El único que necesita subclase: el MOEA/D de pymoo aborta con un "
-             "assert ante constraints (ver MOEADConstr).  Va normalizado porque "
-             "la escala de SA domina la descomposición Tchebycheff."),
+        nota="Necesita subclase (MOEADConstr): el de pymoo no acepta constraints. "
+             "Va normalizado: la escala de SA domina la descomposición "
+             "Tchebycheff."),
 
     'AGEMOEA': Algoritmo(
         construir=_agemoea, familia='ga', normalizado=False, ref_dirs=False,
@@ -174,13 +156,11 @@ ALGORITMOS = {
 
     'CMOPSO': Algoritmo(
         construir=_cmopso, familia='pso', normalizado=True, ref_dirs=False,
-        nota="Zhang et al. (2018).  Reemplaza al MOPSO_CD anterior, que "
-             "ignoraba el constraint en silencio.  No tiene w/c1/c2: su "
-             "velocidad usa coeficientes aleatorios y no hay pbest.  Va "
-             "normalizado porque la escala de SA domina la velocidad."),
+        nota="Reemplaza al MOPSO_CD anterior, que ignoraba el constraint.  Va "
+             "normalizado: la escala de SA domina la velocidad."),
 }
 
-# Los cuatro genéticos: los que tienen operadores que barrer.  Lo usa run_experiments.
+# Los cuatro genéticos: los que tienen operadores que barrer.
 ALGS_GA = [nombre for nombre, a in ALGORITMOS.items() if a.familia == 'ga']
 
 
@@ -189,8 +169,7 @@ ALGS_GA = [nombre for nombre, a in ALGORITMOS.items() if a.familia == 'ga']
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _perillas(alg, args, latent_dim):
-    """(run_dir, label, hp, mut_prob) según la familia.  El mut_prob se resuelve
-    acá porque en 'ga' su default es 1/latent_dim, que sale del VAE."""
+    """(run_dir, label, hp, mut_prob) según la familia."""
     if ALGORITMOS[alg].familia == 'pso':
         run_dir = cmopso_run_dir(args.pop_size, args.n_gen, args.elite_size,
                                  args.mut_prob, args.vel_rate, args.run_id)
@@ -212,12 +191,11 @@ def _perillas(alg, args, latent_dim):
 
 
 def correr(alg, args):
-    """Una corrida completa de cualquiera de los cinco.  Lo que cambia entre
-    algoritmos sale de ALGORITMOS y de la familia de perillas."""
+    """Una corrida completa de cualquiera de los cinco."""
     spec = ALGORITMOS[alg]
 
-    # El run_id da la MISMA población inicial en los cinco: por eso los tests del
-    # análisis pueden tomar la semilla como bloque.
+    # El run_id da la misma población inicial en los cinco: las semillas quedan
+    # pareadas y el análisis puede tomarlas como bloque.
     np.random.seed(args.run_id)
     torch.manual_seed(args.run_id)
     if torch.cuda.is_available():
@@ -233,7 +211,6 @@ def correr(alg, args):
              f"/run_{args.run_id + 1:02d}")
     print(f"[{label}] Iniciando...", flush=True)
 
-    # Exactamente pop_size, Das-Dennis uniforme.  Cuestan ~1 ms, no se cachean.
     ref_dirs = get_ref_dirs(args.pop_size) if spec.ref_dirs else None
     operadores = (get_operators(args.crossover, args.mutation,
                                 args.cx_prob, mut_prob)
@@ -268,8 +245,8 @@ def correr(alg, args):
 def _parser(alg=None, ayuda=True):
     """Perillas comunes y, si ya se sabe el algoritmo, las de su familia.
 
-    Se construye dos veces: una sin ayuda para averiguar el --alg, otra con la
-    familia para el parseo real.  Así una perilla ajena es error, no silencio."""
+    Se construye dos veces: primero sin ayuda, para averiguar el --alg.  Así una
+    perilla ajena es error y no silencio."""
     spec = ALGORITMOS[alg] if alg else None
     ap = argparse.ArgumentParser(
         prog="experimento.py", add_help=ayuda,
@@ -311,8 +288,7 @@ def _parser(alg=None, ayuda=True):
 
 
 def main():
-    # Sin ayuda propia: así `--alg X --help` llega al parser final y muestra
-    # las perillas de X.
+    # Sin ayuda propia: así '--alg X --help' llega al parser final.
     conocidos, _ = _parser(ayuda=False).parse_known_args()
 
     if conocidos.generate_summary:
@@ -328,7 +304,7 @@ def main():
     if args.run_id is None:
         ap.error("se requiere --run_id")
 
-    # 'auto' respeta el default del módulo (GPU si hay CUDA).
+    # 'auto' respeta el default del módulo.
     if args.device != 'auto':
         set_device(args.device)
 

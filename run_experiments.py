@@ -1,27 +1,15 @@
 """
-Orquestador local del análisis de SENSIBILIDAD DE HIPERPARÁMETROS.
+Orquestador del grid de sensibilidad de hiperparámetros.
 
-Corre el grid completo en esta máquina (GPU para el decode del VAE + varios
-experimentos en paralelo; el cuello real es RDKit en CPU). Reanudable: una run
-cuenta como completa si existe su molecules.csv.
+Corre las 513 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
+de 100.000 evaluaciones cada una: 108 por cada GA (reparto pob×gen × operadores ×
+probabilidades) más 81 de CMOPSO.  Reanudable: una run cuenta como completa si
+existe su molecules.csv.
 
-Diseño (dos preguntas separadas, presupuesto fijo de 100k evaluaciones):
-  • GA (NSGA2/NSGA3/MOEAD/AGEMOEA): por cada reparto pob×gen, cada combo de
-    operadores y cada (prob_cruce, prob_mutación) → 3·4·3·3 = 108 configs c/u.
-  • CMOPSO: por cada reparto pob×gen y cada (elite_size, mut, vel) → 3·3·3·3 = 81
-    configs.  CMOPSO no tiene w/c1/c2 (su velocidad usa coeficientes aleatorios y
-    no hay pbest), así que reemplazan a esas tres perillas del grid MOPSO anterior.
-Total: 4·108 + 81 = 513 configuraciones × N_RUNS semillas.
+Cada perilla barrida queda en el path (results/<ALG>/<slug>/run_k) y como columna
+de metrics.csv; al final se consolida en results/all_metrics.csv.
 
-Cada perilla barrida queda codificada en el path (results/<ALG>/<slug>/run_k) y
-como columna de metrics.csv; al final se consolida todo en results/all_metrics.csv.
-
-Uso:
-    python run_experiments.py                       # default: GPU, 4 en paralelo, 20 runs
-    python run_experiments.py --parallel 8          # más workers (ojo con la VRAM)
-    python run_experiments.py --device cpu -p 11    # máximo throughput en CPU
-    python run_experiments.py --n-runs 1            # smoke test (513 runs, 1 semilla)
-    python run_experiments.py --summary-only        # solo regenerar all_metrics.csv
+    python run_experiments.py
 """
 
 import os
@@ -35,37 +23,30 @@ from experimento import ALGS_GA
 from utils_mo import ga_run_dir, cmopso_run_dir, consolidate_all, FSP3_MIN
 
 ROOT   = os.path.dirname(os.path.abspath(__file__))
-PYTHON = sys.executable   # el python del entorno actual (nada de rutas hardcodeadas)
+PYTHON = sys.executable   # el python del entorno actual
 # Los cinco algoritmos entran por el mismo script, con --alg.
 EXPERIMENTO = "experimento.py"
 
 # ─── Espacio de hiperparámetros ───────────────────────────────────────────────
-# 3 repartos de población×generación, todos = 100.000 evaluaciones.
-POP_GEN   = [(100, 1000), (200, 500), (400, 250)]
-# Probabilidades barridas (GA). mut = prob por-gen ≈ 1/3/8 genes en 256 dims.
+POP_GEN   = [(100, 1000), (200, 500), (400, 250)]   # los 3 = 100.000 evaluaciones
+
+# GA: probabilidad de cruce, de mutación por-gen y combos de operadores.
 CX_PROBS  = [0.7, 0.9, 1.0]
 MUT_PROBS = [0.004, 0.012, 0.031]
-# Combos de operadores GA: (crossover, mutation).
 OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
 
-# CMOPSO: sus propias perillas.  elite_size es el tamaño al que pymoo poda su archivo
-# de elites (no es exactamente el γ del paper: el archivo crece hasta pop_size y solo
-# entonces se poda, así que el conjunto real oscila).  La mutación se barre POR GEN con
-# los mismos valores que los GA, para que sea comparable entre las cinco familias:
-# CMOPSO fija prob por-individuo y deja el por-gen en 1/n_var, y el script lo pisa.
-# vel_rate no está en el paper (sus ecuaciones no acotan la velocidad); se barre como
-# salvaguarda contra el «swarm explosion» en un latente de 256 dimensiones.
+# CMOPSO: sus propias perillas.  La mutación se barre con los mismos valores que
+# los GA para que sea comparable.
 ELITE_SIZES = [5, 10, 25]
 VEL_RATES   = [0.1, 0.2, 0.35]
 
-# Los cuatro genéticos (familia 'ga'): los que tienen operadores que barrer.
 GA_ALGS = ALGS_GA
 
 
 # ─── Definición de tareas ─────────────────────────────────────────────────────
 
 def build_tasks(n_runs):
-    """Lista de tareas del grid. Cada tarea es un dict autocontenido."""
+    """Lista de tareas del grid."""
     tasks = []
     for alg in GA_ALGS:
         for pop, gen in POP_GEN:
@@ -88,7 +69,7 @@ def build_tasks(n_runs):
 
 
 def run_dir_of(t):
-    """Path de la run — misma fuente de verdad que usan los scripts (utils_mo)."""
+    """Path de la run, el mismo que arma experimento.py."""
     if t['kind'] == 'cmopso':
         return cmopso_run_dir(t['pop'], t['gen'], t['es'], t['mutp'], t['vel'], t['run'])
     return ga_run_dir(t['alg'], t['cx'], t['mut'], t['cxp'], t['mutp'],
@@ -96,7 +77,7 @@ def run_dir_of(t):
 
 
 def is_done(t):
-    """Una run está completa si existe su molecules.csv (lo escribe al final)."""
+    """Una run está completa si existe su molecules.csv."""
     return os.path.exists(os.path.join(run_dir_of(t), "molecules.csv"))
 
 
@@ -112,13 +93,13 @@ def label(t):
 def run_one(t, device, threads):
     """Lanza el script del experimento en un subproceso. Devuelve (t, ok, dt, stdout)."""
     env = dict(os.environ)
-    # 1 proceso por run; limitar hilos evita sobresuscripción entre workers paralelos.
+    # Limitar los hilos evita sobresuscripción entre workers.
     env["OMP_NUM_THREADS"]      = str(threads)
     env["MKL_NUM_THREADS"]      = str(threads)
     env["OPENBLAS_NUM_THREADS"] = str(threads)
     env["NUMEXPR_NUM_THREADS"]  = str(threads)
     if device == "cpu":
-        env["CUDA_VISIBLE_DEVICES"] = ""   # sin CUDA: evita inicializar la GPU
+        env["CUDA_VISIBLE_DEVICES"] = ""   # evita inicializar la GPU
 
     cmd = [PYTHON, os.path.join(ROOT, EXPERIMENTO), "--alg", t['alg'],
            "--pop_size", str(t['pop']), "--n_gen", str(t['gen']),
@@ -160,26 +141,17 @@ def resolve_device(name):
 
 
 def default_parallel(device):
-    """Default sensato para esta máquina.
-    GPU: acotado por VRAM (~0.5 GB/proceso en 4 GB, dejando margen al escritorio).
-    CPU: casi todos los núcleos (el cuello es RDKit, que paraleliza entre runs)."""
+    """Runs concurrentes por defecto: en GPU manda la VRAM, en CPU los núcleos."""
     ncpu = os.cpu_count() or 2
     return 4 if device == "cuda" else max(1, min(ncpu - 1, 11))
 
 
 def prewarm_caches():
-    """Pre-calcula el cache determinista UNA sola vez (evita que los N workers lo
-    reconstruyan en paralelo): los SMILES de train de MOSES.  Idempotente.
-
-    Las direcciones de referencia ya no se cachean: con 2 objetivos son Das-Dennis
-    exacto y cuestan ~1 ms, así que cada run las genera sola.  Se siguen imprimiendo
-    como verificación de que salen con la dimensión y el tamaño correctos."""
-    pops = sorted({p for p, _ in POP_GEN})
+    """Construye el cache de SMILES de MOSES una sola vez, para que no lo hagan
+    los N workers en paralelo."""
     code = ("import utils_mo; "
-            "print('  MOSES:', len(utils_mo._load_moses_train_smiles()), 'SMILES'); "
-            + "".join(f"print('  ref_dirs p{p}:', utils_mo.get_ref_dirs({p}).shape); "
-                      for p in pops))
-    print(f"[{time.strftime('%F %T')}] preparando caches (MOSES SMILES + ref_dirs)...", flush=True)
+            "print('  MOSES:', len(utils_mo._load_moses_train_smiles()), 'SMILES')")
+    print(f"[{time.strftime('%F %T')}] preparando cache de MOSES...", flush=True)
     subprocess.run([PYTHON, "-c", code], cwd=ROOT)
 
 
@@ -198,7 +170,7 @@ def main():
                     help="No corre experimentos; solo consolida results/all_metrics.csv.")
     args = ap.parse_args()
 
-    # Line-buffering: mantiene el orden de la salida del padre con la de los subprocesos.
+    # Line-buffering: mantiene el orden con la salida de los subprocesos.
     sys.stdout.reconfigure(line_buffering=True)
 
     if args.summary_only:

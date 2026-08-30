@@ -40,7 +40,7 @@ class MolecularVAE_LSTM(nn.Module):
         mu = self.fc_mu(h)
         logvar = self.fc_logvar(h)
         
-        # Prevención de overflow que produce Inf/NaN y corrompe CuDNN
+        # Evita el overflow que produce Inf/NaN y corrompe CuDNN
         logvar = torch.clamp(logvar, min=-20, max=20)
         mu = torch.clamp(mu, min=-20, max=20)
         

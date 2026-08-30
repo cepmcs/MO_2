@@ -115,9 +115,8 @@ PANELES_QUIM = [
     ('novelty',     'Tasa de Novedad',       'Convergencia de Novedad',       20),
     ('qed',         'Promedio de QED (↑)',   'Convergencia de QED (↑)',       20),
     ('sa',          'Promedio de SA (↓)',    'Convergencia de SA (↓)',        20),
-    # Fsp3 ya no es objetivo, pero su curva es justamente lo que hay que mirar:
-    # nada la empuja hacia arriba, así que debería caer hasta apoyarse en el
-    # umbral y quedarse ahí.  El panel muestra ese descenso, no una mejora.
+    # Nada empuja el Fsp3 hacia arriba: la curva debería caer hasta apoyarse en
+    # el umbral y quedarse ahí.  El panel muestra ese descenso, no una mejora.
     ('fsp3',        f'Promedio de Fsp3 (restr. $\\geq$ {FSP3_MIN:g})',
      'Convergencia de Fsp3 (restricción)', 20),
 ]
@@ -366,10 +365,8 @@ def _pie_marker(ax, x, y, colors, size):
 
 
 
-# El espacio de objetivos es un plano: con dos objetivos el frente es una curva
-# en QED-SA y no hay más proyecciones que mirar.  La etapa anterior dibujaba tres
-# paneles porque Fsp3 era el tercer objetivo; ahora es constraint y su lugar está
-# en PLANOS_FRENTE, no acá.
+# El frente es una curva en QED-SA: no hay más proyecciones que mirar.  El Fsp3
+# va en PLANOS_FRENTE, no acá.
 PARETO_PLANES = [('qed', 'sa')]
 
 
@@ -552,11 +549,6 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     print(f"  ✓ {fname}")
 
 
-
-# La figura 3D del frente conjunto se eliminó al pasar a dos objetivos: existía
-# para mostrar la forma de una superficie en QED-SA-Fsp3, y con Fsp3 fuera de la
-# dominancia esa superficie no existe — el frente es una curva y proyectarla en
-# tres ejes sugeriría un compromiso que ya no se optimiza.
 
 
 def plot_pareto_comparison(series, pop_size, output_dir, groups=None):

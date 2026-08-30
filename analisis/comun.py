@@ -608,10 +608,9 @@ DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
            'SCREENING': 'Cribado MOSES', 'HILL_CLIMBER': 'Escalador'}
 
 
-# El algoritmo de enjambre de esta etapa.  Se nombra una sola vez: es el que no
-# tiene operadores de cruce/mutación y por eso queda fuera de la comparación de
-# operadores, del pool por familias y de los factores GA.  CMOPSO reemplazó al
-# MOPSO_CD anterior porque maneja el constraint de forma nativa.
+# El algoritmo de enjambre.  Se nombra una sola vez: al no tener operadores de
+# cruce/mutación queda fuera de la comparación de operadores, del pool por
+# familias y de los factores GA.
 PSO_ALG = 'CMOPSO'
 
 

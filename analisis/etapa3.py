@@ -346,9 +346,8 @@ def pick(front, n=N_MOLECULAS):
     """Las n moléculas de mayor QED con SA por debajo de SA_MAX.
 
     Ordenar solo por QED no alcanza: hay decenas empatadas en QED ≈ 0.948, así
-    que manda el desempate por SA.  La banda de Fsp3 de la etapa a 3 objetivos se
-    retiró porque ahora el constraint ya filtró.  Si el corte deja el frente
-    vacío se cae al frente completo.
+    que manda el desempate por SA.  Si el corte deja el frente vacío se cae al
+    frente completo.
     """
     dentro = front[front['sa'] < SA_MAX]
     if dentro.empty:

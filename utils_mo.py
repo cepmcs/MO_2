@@ -1,9 +1,8 @@
 """
 Utilidades para optimización multi-objetivo de moléculas en espacio latente VAE.
 
-Objetivos: QED (↑, ∈[0,1]) y SA (↓, ∈[1,10])  →  pymoo minimiza [-QED, SA].
-Fsp3 (↑, ∈[0,1]) no es objetivo: entra como constraint (Fsp3 ≥ FSP3_MIN), así el
-frente queda en 2D y la saturación solo filtra qué es admisible.
+Objetivos: QED (↑) y SA (↓) → pymoo minimiza [-QED, SA].  Fsp3 va como
+constraint (Fsp3 ≥ FSP3_MIN).
 """
 
 import re, os, sys, glob, functools
@@ -36,26 +35,15 @@ RESULTS_DIR = os.path.join(ROOT_DIR, "results")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
-# Factible si Fsp3 ≥ FSP3_MIN  →  G = FSP3_MIN - Fsp3.  Como Fsp3 no es objetivo,
-# nada empuja por encima del umbral: las soluciones se estacionan EN el borde, así
-# que este valor es el Fsp3 que se obtiene, no un piso.  Medido en el proyecto:
-# MOSES train mediana 0.333 (56% cumple ≥ 0.3); sin optimizar 0.073; con Fsp3 como
-# objetivo 0.61-0.70.  Costo en QED medio: 0.906 en [0.25,0.35) vs 0.887 en [0.35,0.45).
+# Constraint: factible si Fsp3 ≥ FSP3_MIN.
 FSP3_MIN = 0.3
 
-# Bounds teóricos por objetivo [-QED, SA] para normalizar el HV a [0,1]^2:
-#   -QED ∈ [-1, 0],  SA ∈ [1, 10]
-F_MIN   = np.array([-1.0, 1.0])   # mejor caso por objetivo
-F_RANGE = np.array([ 1.0, 9.0])   # peor - mejor
-# Ref point HV en el espacio normalizado: 10% más allá del peor (1.0) en cada eje.
-# Los 2 objetivos pesan igual y el HV queda en [0, 1.1^2 = 1.21].
-# OJO: no comparable con el HV de los experimentos a 3 objetivos (máx 1.331).
-HV_REF    = np.array([1.1, 1.1])
-# Penalización para inválidas: fuera del hipercubo de referencia (escala cruda).
-INVALID_F = [1.0, 12.0]
-# Violación asignada a las inválidas: un SMILES que no parsea no puede ser factible,
-# si no competiría de igual a igual contra moléculas reales que sí cumplen el umbral.
-INVALID_G = 1.0
+# Bounds de [-QED, SA] para normalizar el HV a [0,1]^2.
+F_MIN     = np.array([-1.0, 1.0])
+F_RANGE   = np.array([ 1.0, 9.0])
+HV_REF    = np.array([1.1, 1.1])   # 10% más allá del peor; HV ∈ [0, 1.21]
+INVALID_F = [1.0, 12.0]            # penalización de las inválidas
+INVALID_G = 1.0                    # una inválida nunca es factible
 
 SMILES_REGEX = re.compile(
     r"(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|\=|#|-|\+|\\\\|\/|:|~|@|\?|>|<|\*|\$|%[0-9]{2}|[0-9])"
@@ -63,9 +51,8 @@ SMILES_REGEX = re.compile(
 
 
 # ─── Operadores genéticos ────────────────────────────────────────────────────
-# Solo se barren las PROBABILIDADES; el resto queda en el default de pymoo
-# (SBX eta=15 · PCX eta=zeta=0.1 · PM eta=20 · Gauss sigma=0.1).  La mutación va
-# por-gen (prob_var) con prob=1.0, así PM y Gauss son comparables.
+# Solo se barren las probabilidades; el resto queda en el default de pymoo.
+# La mutación va por-gen (prob_var) con prob=1.0, así PM y Gauss son comparables.
 
 CROSSOVERS = {
     'sbx': lambda cx_prob: SBX(prob=cx_prob),
@@ -78,22 +65,18 @@ MUTATIONS = {
 
 
 def get_operators(crossover, mutation, cx_prob, mut_prob):
-    """Instancia (crossover, mutation) de pymoo con las probabilidades barridas.
-    cx_prob = prob de cruce (por apareamiento); mut_prob = prob de mutación por-gen."""
+    """(crossover, mutation) de pymoo: cx_prob por apareamiento, mut_prob por-gen."""
     return CROSSOVERS[crossover](cx_prob), MUTATIONS[mutation](mut_prob)
 
 
 def _slug(x):
-    """Número → string compacto y estable para nombres de carpeta (0.9→'0.9', 1.0→'1')."""
+    """Número → string compacto para nombres de carpeta (1.0 → '1')."""
     return f"{x:g}" if isinstance(x, float) else str(x)
 
 
 def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
                pop_size, n_gen, run_id, results_dir=None):
-    """Directorio de una run GA: results/<ALG>/<cruce_mut>/<config>/run_k.
-    Se agrupa por combo de operadores; el slug de config codifica las probabilidades
-    y el reparto pob×gen → cada celda del grid tiene su carpeta y no se pisan.
-    Única fuente de verdad del path (la usa el script y el orquestador)."""
+    """Directorio de una run GA: results/<ALG>/<cruce_mut>/<config>/run_k."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     combo = f"{crossover}_{mutation}"
     cfg   = f"cx{_slug(cx_prob)}_mut{_slug(mut_prob)}_pop{pop_size}_gen{n_gen}"
@@ -102,10 +85,7 @@ def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
 
 def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
                    results_dir=None):
-    """Directorio de una run CMOPSO (pob, gen, elite_size, mutación por-gen, velocidad).
-
-    CMOPSO no tiene w/c1/c2: su ecuación de velocidad usa coeficientes aleatorios por
-    dimensión y no hay pbest, así que esas tres perillas del grid MOPSO desaparecen."""
+    """Directorio de una run CMOPSO: results/CMOPSO/<config>/run_k."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     cfg = (f"pop{pop_size}_gen{n_gen}_e{_slug(elite_size)}"
            f"_mut{_slug(mut_prob)}_vel{_slug(vel_rate)}")
@@ -113,14 +93,8 @@ def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
 
 
 def get_ref_dirs(n_points):
-    """Direcciones de referencia para NSGA-III / MOEA-D: exactamente n_points,
-    equiespaciadas sobre el símplex (Das-Dennis uniforme).
-
-    Con 2 objetivos Das-Dennis es EXACTO.  Riesz s-energy, que usaba la etapa a 3
-    objetivos, acá aproxima peor: con seed=1 devuelve una dirección duplicada en
-    p=200 y p=400.  En MOEA/D eso es un subproblema desperdiciado.
-
-    Determinista y ~1 ms: no se cachea en disco."""
+    """n_points direcciones Das-Dennis uniformes sobre el símplex, para NSGA-III
+    y MOEA/D.  Determinista y ~1 ms: no se cachea."""
     from pymoo.util.ref_dirs import get_reference_directions
     return get_reference_directions("uniform", 2, n_partitions=n_points - 1)
 
@@ -129,8 +103,7 @@ def get_ref_dirs(n_points):
 # ─── VAE: cargar, encodear, decodificar ──────────────────────────────────────
 
 def set_device(name):
-    """Fuerza el dispositivo de cómputo ('cpu' / 'cuda'). Llamar antes de load_model().
-    El default (a nivel módulo) ya autoselecciona GPU si hay CUDA disponible."""
+    """Fuerza el dispositivo ('cpu' / 'cuda'). Llamar antes de load_model()."""
     global DEVICE
     DEVICE = torch.device(name)
 
@@ -167,7 +140,7 @@ def _smiles_to_tensor(smi, stoi):
 
 
 def encode_smiles(model, smiles_list, stoi):
-    """Codifica lista de SMILES → vectores latentes μ (en lote). Descarta no-tokenizables."""
+    """SMILES → vectores latentes μ, en lote. Descarta los no-tokenizables."""
     tensors = [t for smi in smiles_list
                if (t := _smiles_to_tensor(smi, stoi)) is not None]
     if not tensors:
@@ -180,8 +153,7 @@ def encode_smiles(model, smiles_list, stoi):
 
 
 def decode_z_batch(model, z_np, stoi, itos):
-    """Decodifica un lote de vectores latentes z → lista de SMILES canónicos
-    (argmax greedy, batcheado). Cada entrada es None si el SMILES es inválido."""
+    """Lote de latentes z → SMILES canónicos (argmax greedy). None si es inválido."""
     z = torch.as_tensor(np.asarray(z_np, dtype=np.float32), device=DEVICE)
     if z.dim() == 1:
         z = z.unsqueeze(0)
@@ -233,9 +205,8 @@ def _build_moses_train_smiles():
 
 @functools.lru_cache(maxsize=1)
 def _load_moses_train_smiles():
-    """SMILES de train de MOSES (~1.6M) como Series, cacheada en MOSES_TRAIN_CACHE
-    (pickle gzip). Se reconstruye si el cache no existe o si moses.csv es más nuevo.
-    Escritura atómica (tmp + os.replace) para no dejar un cache a medias si se interrumpe."""
+    """SMILES de train de MOSES, cacheados en MOSES_TRAIN_CACHE. Se reconstruye si
+    el cache falta o moses.csv es más nuevo."""
     cache = MOSES_TRAIN_CACHE
     if (os.path.exists(cache)
             and os.path.getmtime(cache) >= os.path.getmtime(MOSES_CSV)):
@@ -256,8 +227,8 @@ def _load_moses_train_smiles():
 
 
 def load_seed_mus(model, stoi, n_samples, run_id):
-    """Encodea n_samples moléculas de MOSES train como población inicial.
-    Sobremuestrea 20% para compensar descartes por tokenización."""
+    """Población inicial: n_samples moléculas de MOSES encodeadas.  Sobremuestrea
+    20% para compensar los descartes por tokenización."""
     train_smi = _load_moses_train_smiles()
     pool = train_smi.sample(int(n_samples * 1.2), random_state=run_id).tolist()
     mus = encode_smiles(model, pool, stoi)
@@ -268,24 +239,20 @@ def load_seed_mus(model, stoi, n_samples, run_id):
 
 @functools.lru_cache(maxsize=100_000)
 def calc_properties(smi):
-    """Propiedades de un SMILES, o None si es inválido.
-
-    QED y SA son los objetivos; Fsp3 es el constraint.  Cacheado por SMILES: la
-    población converge y muchos latentes decodifican al mismo."""
+    """Propiedades de un SMILES, o None si es inválido.  Cacheado: la población
+    converge y muchos latentes decodifican al mismo SMILES."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
-    # QED.properties calcula de una los descriptores que usa el QED; alogp/hbd/mw/hba
-    # salen gratis de ahí.  Ya NO se escriben a molecules.csv (nadie los leía); quedan
-    # en el dict por si hacen falta a mano, y se recalculan desde el SMILES.
+    # QED.properties trae de una alogp/hbd/mw/hba, que salen gratis.
     qp = QED_module.properties(mol)
     return {
         'smiles': smi,
-        'qed':   QED_module.qed(mol, qedProperties=qp),   # objetivo (↑), ∈[0,1]
-        'sa':    sascorer.calculateScore(mol),            # objetivo (↓), ∈[1,10]
-        'fsp3':  rdMolDescriptors.CalcFractionCSP3(mol),  # constraint (↑), ∈[0,1]
-        'alogp': qp.ALOGP,   # ALOGP crudo (Crippen MolLogP) — reporte
-        'hbd':   qp.HBD,     # HBD crudo (CalcNumHBD) — reporte
+        'qed':   QED_module.qed(mol, qedProperties=qp),   # objetivo (↑)
+        'sa':    sascorer.calculateScore(mol),            # objetivo (↓)
+        'fsp3':  rdMolDescriptors.CalcFractionCSP3(mol),  # constraint (↑)
+        'alogp': qp.ALOGP,   # de acá para abajo, solo reporte
+        'hbd':   qp.HBD,
         'mw':    qp.MW,
         'hba':   qp.HBA,
     }
@@ -294,13 +261,10 @@ def calc_properties(smi):
 # ─── Problema pymoo ──────────────────────────────────────────────────────────
 
 class MolecularLatentProblem(Problem):
-    """Optimización bi-objetivo con constraint, en el espacio latente del VAE.
+    """Optimización bi-objetivo con constraint en el espacio latente del VAE.
 
-    F = [-QED, SA]            → pymoo minimiza los 2.
-    G = [FSP3_MIN - Fsp3]     → factible si ≤ 0.
-
-    El constraint no entra al frente ni al HV: los algoritmos lo manejan por
-    dominancia de factibilidad (ver experimento.py)."""
+    F = [-QED, SA]         → minimizar.
+    G = [FSP3_MIN - Fsp3]  → factible si ≤ 0."""
 
     def __init__(self, model, stoi, itos, latent_dim):
         self.model, self.stoi, self.itos = model, stoi, itos
@@ -333,15 +297,12 @@ class MolecularLatentProblem(Problem):
 
 
 class NormalizedMolecularLatentProblem(MolecularLatentProblem):
-    """MolecularLatentProblem con F normalizado a [0,1]^2 con bounds fijos.
+    """MolecularLatentProblem con F normalizado a [0,1]^2.
 
-    Para MOEA/D y CMOPSO, donde la escala cruda de SA domina la descomposición
-    Tchebycheff y la velocidad de las partículas.  G queda sin normalizar: nunca
-    se mezcla con los objetivos y crudo se lee como "cuánto Fsp3 falta".
-    eval_log guarda los valores crudos.
-    """
+    Lo usan MOEA/D y CMOPSO, donde la escala cruda de SA domina.  G y eval_log
+    quedan crudos."""
 
-    _F_MIN   = F_MIN     # bounds teóricos compartidos con el cálculo del HV
+    _F_MIN   = F_MIN
     _F_RANGE = F_RANGE
 
     def _evaluate(self, x, out, *args, **kwargs):
@@ -364,8 +325,7 @@ class LatentSampling(Sampling):
 # ─── Callback: tracking por generación ───────────────────────────────────────
 
 def load_train_smiles():
-    """Set de SMILES de train de MOSES (para novelty). Tras construir el set libera
-    la Series cacheada (cache_clear)."""
+    """Set de SMILES de train de MOSES, para novelty.  Libera la Series cacheada."""
     train_smi = _load_moses_train_smiles()
     smiles_set = set(train_smi)
     _load_moses_train_smiles.cache_clear()
@@ -390,17 +350,15 @@ class GenerationTracker(Callback):
         for e in new:
             e['gen'] = gen
 
-        # HV solo sobre los individuos FACTIBLES de la población: el HV final se
-        # calcula sobre el frente factible, y mezclar infactibles acá haría que la
-        # curva de convergencia mida algo distinto de su propio punto de llegada.
+        # Solo los factibles, igual que el HV final: si no, la curva mediría algo
+        # distinto de su propio punto de llegada.
         feas = algorithm.pop.get("FEAS")
         pop_feasible = algorithm.pop[feas.flatten()] if feas is not None else algorithm.pop
         if len(pop_feasible) == 0:
             hv = 0.0
         else:
             F = pop_feasible.get("F")
-            # HV sobre objetivos normalizados a [0,1]^2. El problema Normalized ya
-            # entrega F normalizado; el crudo ([-QED, SA]) se normaliza aquí.
+            # El problema Normalized ya entrega F normalizado; el crudo no.
             if not hasattr(self.problem, '_F_MIN'):
                 F = (F - F_MIN) / F_RANGE
             try:
@@ -430,11 +388,10 @@ class GenerationTracker(Callback):
 # ─── Métricas: Pareto, HV, Spacing ──────────────────────────────────────────
 
 def _non_dominated_front(F):
-    """Índices del frente no-dominado (minimización), exacto.
+    """Índices del frente no-dominado (minimización).
 
-    NonDominatedSorting de pymoo arma una matriz O(n²): con las ~100k moléculas de
-    una run exploradora son ~14 GB → OOM.  Este filtro estilo Kung ordena
-    lexicográficamente y usa memoria O(tamaño del frente)."""
+    Filtro estilo Kung, memoria O(frente).  El de pymoo arma una matriz O(n²) y
+    con las ~100k moléculas de una run se va a OOM."""
     n = len(F)
     if n == 0:
         return np.empty(0, dtype=int)
@@ -456,7 +413,7 @@ def _non_dominated_front(F):
 
 
 def non_dominated(results):
-    """Filtra soluciones no-dominadas (memoria O(frente); ver _non_dominated_front)."""
+    """Filtra las soluciones no-dominadas."""
     if not results:
         return []
     F = np.array([[-r['qed'], r['sa']] for r in results], dtype=float)
@@ -480,7 +437,7 @@ def compute_spacing(pareto):
     if len(pareto) < 2:
         return 0.0
     F = np.array([[-r['qed'], r['sa']] for r in pareto])
-    # Normalizar ejes para compensar escalas distintas (SA~[1,10] vs QED~[0,1])
+    # Normalizar los ejes: SA y QED tienen escalas distintas.
     ranges = F.max(axis=0) - F.min(axis=0)
     ranges[ranges == 0] = 1.0
     F_norm = F / ranges
@@ -495,10 +452,8 @@ def compute_spacing(pareto):
 
 
 def build_pareto(eval_log):
-    """Frente de Pareto desde el log completo → (pareto, validity, feasibility).
-
-    Solo compiten las FACTIBLES: molecules.csv no debe publicar soluciones que
-    violen el umbral."""
+    """Frente de Pareto del log completo → (pareto, validity, feasibility).
+    Solo compiten las factibles."""
     n_valid = 0
     n_feasible = 0
     seen = {}
@@ -525,15 +480,13 @@ def build_pareto(eval_log):
 # ─── I/O ─────────────────────────────────────────────────────────────────────
 
 def save_metrics(path, row):
-    """Escribe la fila de métricas de UNA run en su propio CSV (overwrite).
-    generate_summary los consolida en alg_dir/metrics.csv al final."""
+    """Métricas de una run en su propio CSV; consolidate_all los junta después."""
     pd.DataFrame([row]).to_csv(path, index=False)
 
 
 def save_molecules(pareto, run_dir):
-    """Guarda el frente de Pareto en molecules.csv (escritura atómica: tmp + os.replace).
-    Escribe aunque el frente esté vacío: el orquestador (run_experiments.py) usa la
-    existencia de este archivo como señal de run completa."""
+    """Frente de Pareto → molecules.csv, escritura atómica.  Se escribe aunque esté
+    vacío: su existencia es la señal de run completa."""
     cols = ['smiles', 'qed', 'sa', 'fsp3']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
@@ -546,10 +499,7 @@ def save_molecules(pareto, run_dir):
 
 
 def save_tracking(tracker, run_dir):
-    """Guarda convergencia por generación y log completo de evaluaciones.
-
-    qed/sa/fsp3 van a 4 decimales: misma precisión que metrics.csv y achica el .gz
-    a la mitad."""
+    """Convergencia por generación y log completo de evaluaciones."""
     pd.DataFrame(tracker.history).to_csv(
         os.path.join(run_dir, "convergence.csv"), index=False)
     pd.DataFrame(tracker.problem.eval_log).to_csv(
@@ -558,11 +508,8 @@ def save_tracking(tracker, run_dir):
 
 
 def consolidate_all(results_dir=None):
-    """Junta TODOS los run_*/metrics.csv del grid en <results>/all_metrics.csv.
-
-    Cada fila = una run, con sus hiperparámetros (operadores, probabilidades, pob,
-    gen / w, c1, c2) como columnas. Es el único artefacto que necesita el análisis
-    de sensibilidad: un solo CSV largo, listo para agrupar por perilla."""
+    """Junta los run_*/metrics.csv en <results>/all_metrics.csv, una fila por run
+    con sus hiperparámetros como columnas."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     files = sorted(glob.glob(os.path.join(base, "**", "run_*", "metrics.csv"),
                              recursive=True))
@@ -579,33 +526,30 @@ def consolidate_all(results_dir=None):
 # ─── Post-procesamiento ─────────────────────────────────────────────────────
 
 def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, hp=None):
-    """Calcula métricas, guarda resultados y CSVs de una run.
-    hp: dict con los hiperparámetros barridos (se agregan como columnas a metrics.csv)."""
+    """Calcula métricas y guarda los CSVs de una run.  hp: los hiperparámetros
+    barridos, que van como columnas de metrics.csv."""
     pareto, validity, feasibility = build_pareto(problem.eval_log)
     hv      = compute_hv(pareto)
     spacing = compute_spacing(pareto)
 
-    # Novelty: fracción de moléculas válidas no presentes en el training set
+    # Novelty: válidas que no están en el training set.
     valid_smiles = [e['smiles'] for e in problem.eval_log if e['valid']]
     n_novel = sum(1 for s in valid_smiles if s not in tracker.train_smiles)
     novelty = round(n_novel / len(valid_smiles), 4) if valid_smiles else 0.0
 
     metrics = {
         'algorithm': alg_name, 'pop_size': pop_size, 'n_gen': n_gen,
-        **(hp or {}),                       # hiperparámetros barridos como columnas
+        **(hp or {}),                       # los hiperparámetros barridos
         'run': run_id + 1, 'n_pareto': len(pareto),
         'hypervolume': round(hv, 6), 'spacing': spacing,
         'validity': validity, 'feasibility': feasibility, 'novelty': novelty,
         'best_qed': round(max((r['qed'] for r in pareto), default=float('nan')), 4),
         'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
-        # Fsp3 ya no es objetivo: el frente es factible por construcción, así que
-        # 'mean_fsp3' (dónde se paró respecto del umbral) informa más que el máximo.
-        # El análisis la recalcula desde molecules.csv; acá va para el log de la run.
         'mean_fsp3': round(float(np.mean([r['fsp3'] for r in pareto])), 4) if pareto else float('nan'),
         'time_sec': round(elapsed, 1),
     }
 
-    # molecules.csv se escribe AL FINAL: run_experiments.py lo usa como señal de run completa.
+    # molecules.csv al final: es la señal de run completa.
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_tracking(tracker, run_dir)
     save_molecules(pareto, run_dir)

@@ -39,9 +39,8 @@ def _df_to_F(df):
     """Convierte DataFrame con qed y sa a matriz F de minimización [-QED, SA].
 
     Fsp3 no entra: es constraint, no objetivo.  Meterlo como tercera columna
-    —como hacía la etapa anterior— cambiaría quién domina a quién: una molécula
-    peor en los dos objetivos sobreviviría por tener más Fsp3, cuando el
-    constraint solo distingue entre admisible y no admisible."""
+    cambiaría quién domina a quién: una molécula peor en los dos objetivos
+    sobreviviría por tener más Fsp3."""
     return np.column_stack([-df['qed'].to_numpy(dtype=float),
                             df['sa'].to_numpy(dtype=float)])   # ver OBJECTIVES
 

@@ -1,37 +1,12 @@
 """
-Baselines "no tan modernos" — cribado de MOSES, muestreo aleatorio, escalador
-y GA de suma ponderada.
-Sirven de piso de comparación frente a los MOEAs (NSGA2/NSGA3/MOEAD/AGEMOEA/
-CMOPSO): ninguno hace búsqueda multi-objetivo real de Pareto.
-Objetivos: QED (↑), SA (↓).  Constraint: Fsp3 ≥ FSP3_MIN  (igual que el resto
-del proyecto).
+Baselines: cribado de MOSES, muestreo aleatorio, escalador y GA de suma ponderada.
+Ninguno hace búsqueda de Pareto: son el piso de comparación de los MOEAs.
 
-El constraint entra distinto según lo que cada método seleccione:
-  screening / random   no seleccionan: solo registran la factibilidad.
-  hill_climber         acepta con la regla de Deb.
-  weighted_ga          lo declara como n_ieq_constr; pymoo hace el resto.
-
-Este archivo tiene TODO lo de baselines: los cuatro métodos y el orquestador que
-los corre en paralelo.  El orquestador se relanza a sí mismo como subproceso (una
-run por proceso), igual que hace run_experiments.py con los MOEAs: así cada run
-libera el VAE y el set de MOSES al terminar, los límites de hilos se fijan por
-run, y una que explote no se lleva puesto al resto.
-
-Guardan en results_baselines/ (NO en results/), para no mezclarse con el grid
-de sensibilidad de hiperparámetros de los MOEAs.
-
-Mismo presupuesto que los MOEAs (100.000 evaluaciones = 400 × 250) y las mismas
-20 semillas, de modo que la comparación posterior sea pareada por semilla.
-
+Mismo presupuesto (100.000 evaluaciones = 400 × 250) y las mismas 20 semillas, así
+la comparación queda pareada.  Guardan en results_baselines/, aparte del grid.
 Reanudable: una corrida cuenta como completa si existe su molecules.csv.
 
-Uso:
     python baselines.py todas
-    python baselines.py todas --methods random screening
-    python baselines.py todas --n-runs 5 --parallel 2
-    python baselines.py una --method random --pop_size 400 --n_gen 250 --run_id 0
-    python baselines.py una --method weighted_ga --weights 0.6,0.4 --pop_size 400 --run_id 0
-    python baselines.py resumen
 """
 
 import os, sys, time, argparse, subprocess
@@ -54,14 +29,12 @@ from utils_mo import (
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASELINE_RESULTS_DIR = os.path.join(ROOT_DIR, "results_baselines")
-PYTHON = sys.executable      # el python del entorno actual, sin rutas hardcodeadas
-Z_LOW, Z_HIGH = -5.0, 5.0    # mismos bounds que MolecularLatentProblem (utils_mo)
+PYTHON = sys.executable      # el python del entorno actual
+Z_LOW, Z_HIGH = -5.0, 5.0    # mismos bounds que MolecularLatentProblem
 
 POP_SIZE, N_GEN = 400, 250   # 100.000 evaluaciones, igual que los MOEAs
-# Los mismos cuatro que analiza analisis/etapa4.py (BASELINE_KEYS).
 METHODS = ['screening', 'random', 'hill_climber', 'weighted_ga']
-# Un peso por objetivo ([-QED, SA]).  Fsp3 no se pondera: es constraint.
-DEFAULT_WEIGHTS = (0.5, 0.5)
+DEFAULT_WEIGHTS = (0.5, 0.5)   # un peso por objetivo ([-QED, SA])
 
 
 # ─── Rutas de las corridas ───────────────────────────────────────────────────
@@ -71,16 +44,14 @@ def _fmt(x):
 
 
 def tag_de_pesos(method, weights):
-    """weighted_ga guarda bajo un subdirectorio con los pesos; el resto no lleva tag.
-    Lo usan el worker (al escribir) y el orquestador (al chequear si ya está hecha),
-    así que vive en un solo lugar y no pueden divergir."""
+    """weighted_ga guarda bajo un subdirectorio con los pesos; el resto no lleva tag."""
     if method != 'weighted_ga':
         return None
     return f"w{_fmt(weights[0])}_{_fmt(weights[1])}"
 
 
 def baseline_run_dir(method, pop_size, n_gen, run_id, tag=None):
-    """results_baselines/<METHOD>/[tag/]pop{P}_gen{G}/run_k — separado de results/."""
+    """results_baselines/<METHOD>/[tag/]pop{P}_gen{G}/run_k."""
     parts = [BASELINE_RESULTS_DIR, method.upper()]
     if tag:
         parts.append(tag)
@@ -89,7 +60,7 @@ def baseline_run_dir(method, pop_size, n_gen, run_id, tag=None):
 
 
 def is_done(method, run_id):
-    """Una corrida está completa si existe su molecules.csv (se escribe al final)."""
+    """Una corrida está completa si existe su molecules.csv."""
     d = baseline_run_dir(method, POP_SIZE, N_GEN, run_id,
                          tag=tag_de_pesos(method, DEFAULT_WEIGHTS))
     return os.path.exists(os.path.join(d, "molecules.csv"))
@@ -98,10 +69,8 @@ def is_done(method, run_id):
 # ─── Tracker genérico (no depende de una Population de pymoo) ────────────────
 
 class BaselineTracker:
-    """Convergencia por lote de evaluaciones ('gen'), calculada sobre los objetivos
-    crudos del propio lote. A diferencia de GenerationTracker (utils_mo), no asume
-    que exista algorithm.pop: el muestreo aleatorio no es poblacional, y weighted_ga solo
-    trae un objetivo escalar — así que el HV se recalcula aquí desde eval_log."""
+    """Convergencia por lote de evaluaciones.  A diferencia de GenerationTracker no
+    asume que haya algorithm.pop: el HV se recalcula desde eval_log."""
 
     def __init__(self, problem, train_smiles):
         self.problem = problem
@@ -116,8 +85,7 @@ class BaselineTracker:
             e['gen'] = gen
 
         valid = [e for e in new if e['valid']]
-        # Solo sobre las factibles, igual que GenerationTracker (utils_mo): el HV
-        # final se mide sobre el frente factible.
+        # Solo las factibles, igual que GenerationTracker.
         feasible = [e for e in valid if e['feasible']]
         if feasible:
             F = np.array([[-e['qed'], e['sa']] for e in feasible])
@@ -132,7 +100,7 @@ class BaselineTracker:
         smis = [e['smiles'] for e in valid]
         n_valid = len(smis)
         n_novel = sum(1 for s in smis if s not in self.train_smiles)
-        # Mismas columnas y mismo orden que convergence.csv de los MOEAs.
+        # Mismas columnas y orden que el convergence.csv de los MOEAs.
         self.history.append({
             'gen': gen, 'hv': round(hv, 6), 'n_feasible': len(feasible),
             'feasibility': round(len(feasible) / n_valid, 4) if n_valid else 0.0,
@@ -157,12 +125,9 @@ class TrackerCallback(Callback):
 # ─── Problema para el GA de suma ponderada (single-objective) ────────────────
 
 class WeightedSumLatentProblem(Problem):
-    """Como MolecularLatentProblem pero out['F'] es un escalar: la suma ponderada
-    de [-QED, SA] normalizados.  Mide qué se pierde al fijar el compromiso de
-    antemano en vez de buscar el frente.
-
-    El constraint va como G y no en la suma: ponderarlo lo haría negociable.  Con
-    n_ieq_constr, el GA de pymoo hace la dominancia de factibilidad solo."""
+    """MolecularLatentProblem con F escalar: la suma ponderada de [-QED, SA]
+    normalizados.  El constraint va como G y no en la suma: ponderarlo lo haría
+    negociable."""
 
     def __init__(self, model, stoi, itos, latent_dim, weights):
         self.model, self.stoi, self.itos = model, stoi, itos
@@ -199,14 +164,8 @@ class WeightedSumLatentProblem(Problem):
 # ─── Muestreo aleatorio: barrido manual, sin optimizador ─────────────────────
 
 def run_random(problem, tracker, pop_size, n_gen, run_id):
-    """Muestreo del prior del VAE, N(0, I): la distribución sobre la que se
-    entrenó el decodificador.  Muestrear uniforme en [-5,5]^256 caería a norma
-    ~46 en vez de ~16 y hundiría la validez al 59%, con lo que la diferencia
-    frente a los MOEAs mediría el fallo del decoder fuera de la variedad de
-    datos y no la ausencia de búsqueda.
-
-    Sin selección el constraint no guía nada: la factibilidad que salga es la del
-    prior del VAE."""
+    """Muestreo del prior del VAE, N(0, I).  Uniforme en [-5,5]^256 caería fuera de
+    la variedad de datos y mediría el fallo del decoder, no la falta de búsqueda."""
     rng = np.random.default_rng(run_id)
     for gen in range(1, n_gen + 1):
         X = rng.normal(0.0, 1.0, size=(pop_size, problem.n_var))
@@ -215,10 +174,8 @@ def run_random(problem, tracker, pop_size, n_gen, run_id):
 
 
 class ScreeningProblem:
-    """Cribado virtual: no hay espacio latente ni decodificación, solo se evalúan
-    moléculas tomadas de MOSES.  Expone eval_log para reusar postprocess_run.
-
-    No hay F ni G: no hay nada que optimizar, solo se registra."""
+    """Cribado virtual: evalúa moléculas de MOSES, sin latente ni decodificación.
+    Sin F ni G, solo registra.  Expone eval_log para reusar postprocess_run."""
 
     def __init__(self):
         self.eval_log = []
@@ -239,11 +196,8 @@ class ScreeningProblem:
 
 
 def run_screening(problem, tracker, pop_size, n_gen, run_id, train_smiles_series):
-    """Toma pop_size*n_gen moléculas de MOSES al azar y las evalúa.  Sin generar
-    nada: mide qué se consigue cribando una biblioteca existente.
-
-    Sin prefiltrar por Fsp3: prefiltrarlo le regalaría el constraint, porque los
-    MOEAs sí gastan presupuesto en la zona infactible."""
+    """pop_size*n_gen moléculas de MOSES al azar.  Sin prefiltrar por Fsp3:
+    prefiltrarlo le regalaría el constraint."""
     n_total = pop_size * n_gen
     pool = train_smiles_series.sample(n_total, replace=False,
                                       random_state=run_id).tolist()
@@ -253,12 +207,9 @@ def run_screening(problem, tracker, pop_size, n_gen, run_id, train_smiles_series
 
 
 def run_hill_climber(problem, mus, tracker, pop_size, n_gen, run_id, sigma=0.5):
-    """Escalador (1+λ): un único candidato que en cada paso genera pop_size
-    mutaciones gaussianas y se mueve solo si la mejor supera a la actual.  Sin
-    población ni cruce: aísla cuánto aporta la búsqueda poblacional.
-
-    No pasa por pymoo, así que la regla de Deb va escrita acá: ordena por
-    (violación, fitness)."""
+    """Escalador (1+λ): pop_size mutaciones gaussianas por paso, se mueve solo si
+    la mejor supera a la actual.  No pasa por pymoo, así que la regla de Deb va
+    escrita acá: ordena por (violación, fitness)."""
     rng = np.random.default_rng(run_id)
     x = mus[0].copy()
     best = None                          # (violación, fitness) del candidato actual
@@ -271,7 +222,7 @@ def run_hill_climber(problem, mus, tracker, pop_size, n_gen, run_id, sigma=0.5):
         cv = np.maximum(np.asarray(out["G"]).ravel(), 0.0)   # 0 si es factible
         i = int(np.lexsort((f, cv))[0])   # lexsort: la última clave manda (cv)
         cand = (cv[i], f[i])
-        if best is None or cand < best:   # compara violación y después fitness
+        if best is None or cand < best:
             best, x = cand, X[i].copy()
         tracker.update(gen)
 
@@ -370,7 +321,7 @@ def _lanzar(t, device, threads):
               "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         env[v] = str(threads)
     if device == "cpu":
-        env["CUDA_VISIBLE_DEVICES"] = ""      # sin CUDA: evita inicializar la GPU
+        env["CUDA_VISIBLE_DEVICES"] = ""      # evita inicializar la GPU
 
     cmd = [PYTHON, os.path.abspath(__file__), "una",
            "--method", t['method'], "--pop_size", str(POP_SIZE),

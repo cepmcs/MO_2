@@ -62,8 +62,6 @@ env/
 data/moses.csv
 # caché derivada de moses.csv (SMILES train serializados)
 data/moses_train_smiles.pkl.gz
-# caché de direcciones de referencia (NSGA-III/MOEA-D), determinista y regenerable
-data/ref_dirs_*.npy
 # salida cruda de los experimentos (se genera en el cluster)
 results/
 results_*/
