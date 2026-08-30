@@ -1,15 +1,6 @@
 """
 Análisis de los experimentos: las cuatro etapas de la comparación, más la figura
-de moléculas representativas.  Cada etapa lee lo que produjo la anterior y deja
-sus tablas y figuras bajo plots/.
-
-Objetivos de esta campaña: QED (↑) y SA (↓).  Fsp3 dejó de ser objetivo y entra
-como restricción (Fsp3 ≥ 0.3), así que el frente es bidimensional y aparece una
-métrica nueva —la factibilidad— que mide qué fracción de lo generado es
-admisible.  El algoritmo de enjambre es CMOPSO, que maneja el constraint de
-forma nativa, en lugar del MOPSO_CD de la campaña anterior.  Los números NO son
-comparables con los de la etapa a 3 objetivos: el hipervolumen se mide sobre 2
-ejes (máximo 1.21 en vez de 1.331).
+de moléculas representativas.  Cada etapa lee lo que produjo la anterior.
 
   etapa1     resultados/grid/all_metrics.csv          →  plots/hiperparametros/
   etapa2     resultados/winners/                      →  plots/operadores/
@@ -18,11 +9,13 @@ ejes (máximo 1.21 en vez de 1.331).
   etapa4     resultados/finalistas/ + .../baselines/  →  plots/baselines/
   moleculas  resultados/finalistas/                   →  plots/frente_conjunto/
 
-Las 20 semillas están pareadas en todas las etapas (mismo run_id → misma
-población inicial), así que los tests toman la semilla como bloque: Friedman
-sobre los métodos y, si resulta significativo, las comparaciones por pares con
-Wilcoxon de rangos con signo corregidas por Holm.  El resultado se resume en
-grupos homogéneos: dentro de una llave el post-hoc no separa, entre llaves sí.
+Objetivos: QED (↑) y SA (↓); Fsp3 entra como restricción (≥ 0.3), de ahí la
+métrica de factibilidad.  El HV no es comparable con el de la etapa a 3
+objetivos: se mide sobre 2 ejes (máximo 1.21 en vez de 1.331).
+
+Las 20 semillas están pareadas en todas las etapas, así que los tests las toman
+como bloque: Friedman y, si da significativo, Wilcoxon por pares con Holm.  El
+resultado se resume en grupos homogéneos.
 
 Uso:
     python analisis.py etapa1 [--algorithms NSGA2 CMOPSO] [--metric spacing]
@@ -33,7 +26,6 @@ Uso:
 
 La carga de resultados y las gráficas comunes viven en plot_comparison.py.
 """
-
 import io
 import os
 import re
@@ -59,15 +51,11 @@ import plot_comparison as pc
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Entradas de cada etapa, todas bajo resultados/.  Los experimentos escriben en
-# el cluster a results/ y results_baselines/ (ver utils_mo.RESULTS_DIR y
-# baselines.BASELINE_RESULTS_DIR); lo que baja al PC vive acá:
-#
-#   grid/        copia ligera de results/ del cluster (sin convergence.csv ni
-#                all_molecules.csv.gz), con el all_metrics.csv del grid completo
+# Lo que baja del cluster (que escribe en results/ y results_baselines/):
+#   grid/        copia ligera de results/, con el all_metrics.csv del grid
 #   winners/     las 17 configuraciones que ganaron su bloque en la etapa 1
-#   finalistas/  symlinks relativos a la ganadora de cada algoritmo en winners/
-#   baselines/   copia de results_baselines/ del cluster
+#   finalistas/  symlinks a la ganadora de cada algoritmo en winners/
+#   baselines/   copia de results_baselines/
 RESULTADOS_DIR = os.path.join(ROOT_DIR, "resultados")
 METRICS_CSV    = os.path.join(RESULTADOS_DIR, "grid", "all_metrics.csv")
 WINNERS_DIR    = os.path.join(RESULTADOS_DIR, "winners")
@@ -145,13 +133,9 @@ def holm(pvals):
 def rank_biserial(x, y):
     """Correlación rango-biserial de pares emparejados (Kerby, 2014).
 
-    Es el tamaño de efecto que acompaña al Wilcoxon de rangos con signo: sobre
-    los rangos de |x - y|, la suma de los que favorecen a x menos la de los que
-    favorecen a y, dividida por el total.  Va de -1 a +1; el signo dice quién
-    gana y el valor absoluto qué fracción de la evidencia lo respalda.
-
-    Satura en ±1 cuando todos los pares van en la misma dirección, así que dice
-    que el efecto es unánime, no cuán grande es en unidades del indicador.
+    Tamaño de efecto que acompaña al Wilcoxon: de -1 a +1, el signo dice quién
+    gana y el valor absoluto qué fracción de la evidencia lo respalda.  Satura en
+    ±1 cuando todos los pares van igual, así que mide unanimidad, no magnitud.
     Verificado contra pingouin.wilcoxon()['RBC'].
     """
     d = np.asarray(x, dtype=float) - np.asarray(y, dtype=float)
@@ -237,18 +221,14 @@ def _write_tex(lines, path, msg=None):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Etapa 1 — selección de hiperparámetros
 #
-#   De las 513 configuraciones del grid elige 17: la mejor de cada combinación
-#   de operadores en los 4 GA, más la mejor global de CMOPSO.  Gana la de menor
-#   rango medio de hipervolumen, rankeando dentro de cada una de las 20 semillas
-#   (que están pareadas: la población inicial se muestrea con random_state=run_id).
+#   De las 513 configuraciones del grid elige 17: la mejor de cada combo de
+#   operadores en los 4 GA, más la mejor global de CMOPSO.  Gana la de menor rango
+#   medio de hipervolumen, rankeando dentro de cada semilla.
 #
-#   Los operadores no se testean acá: se barren dentro de cada bloque y su
-#   comparación es la etapa 2, ya con la configuración de cada combo afinada.
+#   Los operadores no se testean acá; esa es la etapa 2.
 #
-#   Deja tres archivos, todos a nivel de plots/hiperparametros/: la figura de
-#   selección con los cinco algoritmos, y selected_configs en .csv y .tex.  Los
-#   dos son para leer a mano: quién arma winners/ a partir de ellos sos vos, no
-#   hay ningún script que los consuma.
+#   Deja la figura de selección y selected_configs en .csv y .tex.  Los dos son
+#   para leer a mano: winners/ lo armás vos, ningún script lo consume.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # CMOPSO no tiene operadores; se colorea por tamaño del archivo de elites, que es
@@ -432,14 +412,11 @@ def _celda_leyenda(ax, con_operadores, con_pso):
 
 
 def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
-    """Los cinco algoritmos en una sola imagen: un panel por algoritmo con todo
-    su grid de configuraciones y la elegida de cada bloque resaltada.
+    """Los cinco algoritmos en una imagen: un panel por algoritmo con su grid de
+    configuraciones y la elegida de cada bloque resaltada.
 
-    Es la única figura de la etapa: muestra a la vez el compromiso entre validez
-    y calidad del frente, dónde cae cada familia de operadores y qué punto se
-    llevó cada bloque.  El eje de validez es común a los cinco paneles para que
-    la posición horizontal sea comparable; el de la métrica es propio de cada
-    uno, porque los rangos difieren y compartirlo aplastaría los paneles."""
+    El eje de validez es común a los cinco paneles; el de la métrica es propio de
+    cada uno, porque los rangos difieren y compartirlo los aplastaría."""
     label, _ = HP_METRICS[metric]
     if metric == 'validity':
         return
@@ -512,10 +489,8 @@ def _efecto_factor(g, factor, metric):
 def plot_efectos_hp(df, metric, out_dir):
     """Cuánto mueve cada hiperparámetro a la métrica, un panel por algoritmo.
 
-    Responde la pregunta que deja abierta el grid —barrimos 513 configuraciones,
-    ¿cuál perilla importó?— y complementa a la figura de selección, que muestra
-    dónde cae cada configuración pero no qué factor explica la dispersión.  El
-    eje vertical es común para que las alturas sean comparables entre paneles."""
+    Responde qué perilla importó, que es lo que la figura de selección no dice.
+    El eje vertical es común para que las alturas sean comparables."""
     label, _ = HP_METRICS[metric]
     algs = [a for a in GA_ALGS if a in set(df['algorithm'])]
     con_pso = PSO_ALG in set(df['algorithm'])
@@ -761,36 +736,26 @@ OP_INDICATORS = [
 # ─── Comparación de operadores ───────────────────────────────────────────────
 #
 #   El grid es un 2×2 (cruce × mutación) y los cuatro combos se contrastan de una
-#   vez: Friedman con las 20 semillas como bloques y las seis comparaciones por
-#   pares con Wilcoxon corregidas por Holm, resumidas en grupos homogéneos.
-#   Decide UN indicador, el que llega en --metric (por defecto el hipervolumen);
-#   dentro del grupo ganador, que por definición el post-hoc no separa, se
-#   conserva la mutación estándar.
+#   vez: Friedman con las semillas como bloques y los seis pares con Wilcoxon
+#   corregidos por Holm.  Decide el indicador de --metric; dentro del grupo
+#   ganador, que el post-hoc no separa, se conserva la mutación estándar.
 #
-#   La contribución al frente conjunto se evaluó como criterio de decisión
-#   alternativo y se descartó (los ganadores quedaron por hipervolumen: pcx_pm en
-#   los cuatro AG).  De ella esta etapa emite solo la figura del frente conjunto,
-#   que muestra el mecanismo; el contraste con test propio quedó en la etapa 3,
-#   sobre el pool de candidatos.
+#   La contribución al frente conjunto se evaluó como criterio alternativo y se
+#   descartó.  Queda solo su figura; el test propio está en la etapa 3.
 
 MUT_STD = 'pm'          # la estándar; se conserva cuando el test no separa
 
 
 def write_tabla_operadores(res, groups, labels, alg, out_dir, get_values, col):
-    """La tabla de la etapa: las seis comparaciones por pares entre los cuatro
-    combos, cada una con su $p$ corregido y su tamaño de efecto.
+    """Las seis comparaciones por pares entre los cuatro combos, con su $p$
+    corregido y su tamaño de efecto.
 
-    Se listan las seis y no solo las que involucran al seleccionado: la de las
-    dos mutaciones dentro de SBX no interviene en la decisión pero sí es
-    significativa en algunos algoritmos, y omitirla dejaría ese resultado
-    únicamente insinuado por los grupos homogéneos.
-
-    El $p$ dice si hay diferencia y el $r_{rb}$ de qué tamaño; sin el segundo,
-    dos pares igualmente 'no significativos' parecen equivalentes cuando no lo
-    son.  Quién gana se resuelve en los grupos del caption, no par a par.
+    Se listan las seis y no solo las de la decisión: la de las dos mutaciones
+    dentro de SBX es significativa en algunos algoritmos.  Quién gana se resuelve
+    en los grupos del caption, no par a par.
 
     Devuelve el campeón: dentro del grupo ganador se conserva la mutación
-    estándar si está, porque el post-hoc no separa a sus miembros."""
+    estándar si está."""
     orden = sorted(labels, key=lambda l: -res['medians'][l])
     top = groups[0]
     campeon = next((l for l in top if l.endswith(f'_{MUT_STD}')),
@@ -897,17 +862,13 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
                              grupo_de=None, etiqueta='Operador', nota=''):
     """Tabla LaTeX de la contribución al frente no dominado conjunto.
 
-    Complementa al test sobre el hipervolumen, que mide la extensión del frente
-    y no la calidad de lo que contiene.  Acá se junta lo producido por todas las
-    series, se recalcula la no-dominancia global y se mira quién aportó los
-    supervivientes: es dominancia de Pareto sobre los dos objetivos, sin
-    ponderaciones.  Fsp3 no participa de la dominancia —es el constraint— pero se
-    reporta como columna: junto a QED y SA describe qué clase de molécula pone
-    cada serie en el frente, y en particular cuánto margen le deja al umbral.
+    Complementa al test sobre el hipervolumen, que mide la extensión del frente y
+    no la calidad de lo que contiene: se junta todo, se recalcula la no-dominancia
+    global y se mira quién aportó los supervivientes.  Fsp3 no participa de la
+    dominancia pero se reporta, para ver cuánto margen le deja al umbral.
 
-    Las etiquetas del tipo 'NSGA-II (PCX)' se parten en dos columnas, con el
-    algoritmo en \\multirow: repetirlo en cada fila haría creer que son
-    entidades distintas, cuando son dos ramas de la misma.
+    Las etiquetas 'NSGA-II (PCX)' se parten en dos columnas, con el algoritmo en
+    \\multirow: son dos ramas de la misma entidad, no dos entidades.
 
     Devuelve el resumen del contraste para el CSV de la etapa.
     """
@@ -1157,13 +1118,10 @@ def etapa3(args):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Frente conjunto — el pool de candidatos
 #
-#   Va aparte de la etapa 3 porque responde otra pregunta.  La etapa 3 compara
-#   algoritmos a igual presupuesto, una configuración cada uno; acá se juntan
-#   las DOS familias de cruce de cada algoritmo, que es el material que llega a
-#   la fase de afinidad, y se mira qué sobrevive al enfrentarlas y de dónde sale.
-#
-#   Como cada AG aporta dos configuraciones y CMOPSO una, los presupuestos no son
-#   comparables: esto caracteriza el pool, no ordena algoritmos.
+#   Otra pregunta que la etapa 3: acá se juntan las DOS familias de cruce de cada
+#   algoritmo —el material que llega a la fase de afinidad— y se mira qué
+#   sobrevive y de dónde sale.  Los presupuestos no son comparables (cada AG
+#   aporta dos configuraciones y CMOPSO una): caracteriza el pool, no ordena.
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Cada familia de cruce aporta una rama al pool.
@@ -1171,20 +1129,15 @@ POOL_FAMILIAS = ['pcx', 'sbx']
 
 
 def combos_pool(alg, winners_dir, alpha=0.05):
-    """Los dos combos con que un algoritmo genético entra al pool: uno por
-    familia de cruce y, dentro de cada familia, la mutación que gana.
+    """Los dos combos con que un AG entra al pool: uno por familia de cruce y,
+    dentro de cada familia, la mutación que gana.
 
-    Se aplica la misma regla con que la etapa 2 elige su campeón —la ganadora si
-    el post-hoc la separa, la estándar si no— pero por familia, y leyendo el
-    mismo $p$ corregido por Holm que publica la tabla de esa etapa, para que la
-    decisión se pueda seguir desde el cuadro.  Decide el hipervolumen, como en el
-    resto del pipeline.
+    Misma regla que el campeón de la etapa 2 —la ganadora si el post-hoc la
+    separa, la estándar si no— pero por familia, y con el mismo $p$ corregido que
+    publica esa tabla.  Decide el hipervolumen.
 
-    En la práctica esto deja la mutación polinomial en todas las ramas salvo la
-    SBX de MOEA/D y de AGE-MOEA, donde el test sí separa a las dos mutaciones
-    (p = 0.038 y 0.021) y gana la gaussiana.  Fijar pm también ahí metía al pool
-    la peor de las dos variantes SBX según el test; medido, el cambio no importa
-    la cola de bajo QED y sube el aporte de esas dos ramas.
+    En la práctica queda pm en todas las ramas salvo la SBX de MOEA/D y AGE-MOEA,
+    donde el test sí separa (p = 0.038 y 0.021) y gana la gaussiana.
 
     Devuelve [(familia, combo)] en el orden de POOL_FAMILIAS."""
     series = pc.build_operator_series_winners(alg, winners_dir, COMBO_DIRS)
@@ -1228,13 +1181,11 @@ def _series_pool(winners_dir, finalistas_dir):
 
 def _nota_pool(winners_dir):
     """Frase para el caption de la tabla del pool: con qué configuración entró
-    cada algoritmo, y a dónde ir por la justificación.
+    cada algoritmo.
 
     Las excepciones se arman con la misma regla que elige las ramas, así que la
-    frase no puede quedar diciendo una cosa mientras el pool hace otra.  El
-    detalle estadístico no se repite acá —vive en las tablas de la etapa 2— y se
-    remite a ellas por \\ref: la sección del frente conjunto describe el material,
-    no vuelve a discutir la comparación de operadores."""
+    frase no puede decir una cosa mientras el pool hace otra.  El detalle
+    estadístico vive en las tablas de la etapa 2 y se remite por \\ref."""
     excepciones = []
     for alg in GA_ALGS:
         for fam, combo in combos_pool(alg, winners_dir):
@@ -1258,13 +1209,10 @@ def _nota_pool(winners_dir):
 
 def _algoritmo_pool(label):
     """Agrupa por algoritmo: las dos ramas de cruce de un AG caen en el mismo
-    grupo ('NSGA-II (PCX)' → 'NSGA-II'), y CMOPSO, que no tiene operadores, queda
-    como el suyo.
+    grupo ('NSGA-II (PCX)' → 'NSGA-II'); CMOPSO queda solo.
 
-    Es la agrupación de las figuras del frente conjunto.  Antes agrupaban por
-    familia de cruce, que responde otra pregunta —de qué operador sale cada
-    región— y ya la contesta la figura por algoritmo de la etapa 2.  Acá lo que
-    interesa es qué algoritmo puso cada molécula del pool de candidatos."""
+    Es la agrupación de las figuras del frente conjunto: lo que interesa es qué
+    algoritmo puso cada molécula, no de qué operador salió cada región."""
     return _partir_etiqueta(label)[0]
 
 
@@ -1292,14 +1240,10 @@ def analisis_frente_conjunto(args):
     at.to_csv(os.path.join(args.out_frente, 'frente_pool.csv'), index=False)
     print(f"  ✓ frente_pool.csv  ({len(at)} moléculas)")
 
-    # La tabla desglosa por configuración —es la pregunta de cuánto aporta cada
-    # rama—; la figura agrupa por algoritmo, porque nueve colores serían
-    # ilegibles y las dos ramas de un mismo AG no son entidades distintas.
-    #
-    # Ya no hay versión 3D: existía para mostrar la superficie del frente en
-    # QED-SA-Fsp3, y con Fsp3 como constraint el frente es una curva.  Su lugar
-    # lo ocupa el segundo panel de plot_frente_conjunto, que muestra dónde quedó
-    # cada molécula respecto del umbral.
+    # La tabla desglosa por configuración; la figura agrupa por algoritmo, porque
+    # nueve colores serían ilegibles.  Ya no hay versión 3D: con Fsp3 como
+    # constraint el frente es una curva, y su lugar lo ocupa el segundo panel de
+    # plot_frente_conjunto.
     write_contribucion_table(
         series, pf_df, 'pool', args.out_frente,
         grupo_de=pc._por_serie, etiqueta='Configuración',
@@ -1439,13 +1383,10 @@ def etapa4(args):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Moléculas representativas
 #
-#   Una imagen con las moléculas de mayor QED del frente de cada algoritmo.  El
-#   frente se arma juntando las moléculas de las 20 ejecuciones de sus DOS ramas
-#   de cruce —las mismas configuraciones del pool—, deduplicando por SMILES y
-#   recalculando la dominancia global.
-#
-#   Va con el frente conjunto porque ilustra el material que llega a la fase de
-#   afinidad, no las configuraciones que se compararon en la etapa 3.
+#   Las moléculas de mayor QED del frente de cada algoritmo.  El frente junta las
+#   20 ejecuciones de sus DOS ramas de cruce (las del pool), deduplica por SMILES
+#   y recalcula la dominancia.  Va con el frente conjunto porque ilustra el
+#   material que llega a la fase de afinidad, no lo que comparó la etapa 3.
 # ═══════════════════════════════════════════════════════════════════════════
 
 MOLECULAS_OUT = os.path.join(OUT_FRENTE, "moleculas_representativas.png")
@@ -1453,10 +1394,7 @@ MOLECULAS_OUT = os.path.join(OUT_FRENTE, "moleculas_representativas.png")
 N_MOLECULAS = 5      # por algoritmo
 
 # Ventana de interés farmacológico.  Ya no lleva banda de Fsp3: el constraint la
-# garantiza por construcción —molecules.csv solo publica moléculas factibles— y
-# fijar un rango por encima del umbral seleccionaría a mano justo la cola que la
-# búsqueda no tenía por qué producir, porque nada empuja Fsp3 más allá de 0.3.
-# Queda el corte de SA, que sí desempata entre las decenas de moléculas
+# garantiza.  Queda el corte de SA, que desempata entre las decenas de moléculas
 # empatadas en el QED máximo.
 SA_MAX = 3.0
 
@@ -1484,16 +1422,10 @@ def load_front(alg, winners_dir, finalistas_dir):
 def pick(front, n=N_MOLECULAS):
     """Las n moléculas de mayor QED con SA por debajo de SA_MAX.
 
-    Ordenar solo por QED no sirve acá: en el frente hay decenas de moléculas
-    empatadas en QED ≈ 0.948, así que manda el desempate.  El corte por SA se
-    queda con las sintetizables de ese empate.
-
-    La banda de Fsp3 que llevaba la etapa a 3 objetivos se retiró: ahí filtraba
-    aromáticos planos que el frente sí contenía, y acá el constraint ya los dejó
-    afuera antes de que llegaran a molecules.csv.
-
-    Si el corte dejara el frente vacío se cae al frente completo, para que la
-    figura se genere igual.
+    Ordenar solo por QED no alcanza: hay decenas empatadas en QED ≈ 0.948, así
+    que manda el desempate por SA.  La banda de Fsp3 de la etapa a 3 objetivos se
+    retiró porque ahora el constraint ya filtró.  Si el corte deja el frente
+    vacío se cae al frente completo.
     """
     dentro = front[front['sa'] < SA_MAX]
     if dentro.empty:

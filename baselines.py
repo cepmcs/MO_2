@@ -6,14 +6,10 @@ CMOPSO): ninguno hace búsqueda multi-objetivo real de Pareto.
 Objetivos: QED (↑), SA (↓).  Constraint: Fsp3 ≥ FSP3_MIN  (igual que el resto
 del proyecto).
 
-El constraint entra distinto en cada método, según lo que cada uno seleccione:
-  screening / random   no seleccionan nada, así que el umbral no puede guiarlos;
-                       se registra la factibilidad y el frente publicado la filtra.
-  hill_climber         acepta con la regla de Deb (ver run_hill_climber).
-  weighted_ga          lo declara como n_ieq_constr y pymoo hace la dominancia
-                       de factibilidad sola (selección por CV y supervivencia
-                       lexicográfica); no necesita subclase, a diferencia de
-                       MOEA/D (ver algoritmos_mo.MOEADConstr).
+El constraint entra distinto según lo que cada método seleccione:
+  screening / random   no seleccionan: solo registran la factibilidad.
+  hill_climber         acepta con la regla de Deb.
+  weighted_ga          lo declara como n_ieq_constr; pymoo hace el resto.
 
 Este archivo tiene TODO lo de baselines: los cuatro métodos y el orquestador que
 los corre en paralelo.  El orquestador se relanza a sí mismo como subproceso (una
@@ -64,8 +60,7 @@ Z_LOW, Z_HIGH = -5.0, 5.0    # mismos bounds que MolecularLatentProblem (utils_m
 POP_SIZE, N_GEN = 400, 250   # 100.000 evaluaciones, igual que los MOEAs
 # Los mismos cuatro que analiza analisis.py (BASELINE_KEYS).
 METHODS = ['screening', 'random', 'hill_climber', 'weighted_ga']
-# Pesos de la suma ponderada, uno por OBJETIVO ([-QED, SA]).  Fsp3 no está: dejó
-# de ser objetivo y entra como constraint, así que no se pondera, se cumple o no.
+# Un peso por objetivo ([-QED, SA]).  Fsp3 no se pondera: es constraint.
 DEFAULT_WEIGHTS = (0.5, 0.5)
 
 
@@ -121,10 +116,8 @@ class BaselineTracker:
             e['gen'] = gen
 
         valid = [e for e in new if e['valid']]
-        # El HV va solo sobre las FACTIBLES del lote, igual que el de
-        # GenerationTracker (utils_mo) sobre la población: el HV final se calcula
-        # sobre el frente factible y la curva tiene que medir lo mismo que su
-        # propio punto de llegada.
+        # Solo sobre las factibles, igual que GenerationTracker (utils_mo): el HV
+        # final se mide sobre el frente factible.
         feasible = [e for e in valid if e['feasible']]
         if feasible:
             F = np.array([[-e['qed'], e['sa']] for e in feasible])
@@ -164,21 +157,12 @@ class TrackerCallback(Callback):
 # ─── Problema para el GA de suma ponderada (single-objective) ────────────────
 
 class WeightedSumLatentProblem(Problem):
-    """Mismo espacio y mismos objetivos que MolecularLatentProblem, pero out['F']
-    es UN escalar —la suma ponderada de [-QED, SA] normalizados a [0,1]— para que
-    el GA single-objective de pymoo lo use como fitness.  Es justamente lo que se
-    quiere medir: qué se pierde al colapsar el compromiso en un solo número
-    elegido de antemano, en vez de buscar el frente.
+    """Como MolecularLatentProblem pero out['F'] es un escalar: la suma ponderada
+    de [-QED, SA] normalizados.  Mide qué se pierde al fijar el compromiso de
+    antemano en vez de buscar el frente.
 
-    El constraint NO entra en la suma: va como G, igual que en el problema
-    multi-objetivo.  Con n_ieq_constr declarado, el GA de pymoo hace la
-    dominancia de factibilidad solo, sin subclase — su selección compara por CV
-    antes que por fitness (comp_by_cv_and_fitness) y su supervivencia ordena por
-    lexsort([F, cv]).  Ponderar Fsp3 en cambio lo volvería negociable: una
-    molécula podría comprar violación del umbral con QED.
-
-    eval_log guarda los valores crudos y la factibilidad igual que en los
-    experimentos multi-objetivo, así se reusa postprocess_run sin cambios."""
+    El constraint va como G y no en la suma: ponderarlo lo haría negociable.  Con
+    n_ieq_constr, el GA de pymoo hace la dominancia de factibilidad solo."""
 
     def __init__(self, model, stoi, itos, latent_dim, weights):
         self.model, self.stoi, self.itos = model, stoi, itos
@@ -221,11 +205,8 @@ def run_random(problem, tracker, pop_size, n_gen, run_id):
     frente a los MOEAs mediría el fallo del decoder fuera de la variedad de
     datos y no la ausencia de búsqueda.
 
-    El constraint no puede guiar nada acá: no hay selección, cada lote se
-    muestrea de cero.  Se evalúa y se registra como en el resto (el problema es
-    MolecularLatentProblem, el mismo de los MOEAs), y filtra recién al publicar
-    el frente.  La factibilidad que salga es entonces la del prior del VAE, que
-    es el piso contra el que se lee la de los algoritmos."""
+    Sin selección el constraint no guía nada: la factibilidad que salga es la del
+    prior del VAE."""
     rng = np.random.default_rng(run_id)
     for gen in range(1, n_gen + 1):
         X = rng.normal(0.0, 1.0, size=(pop_size, problem.n_var))
@@ -237,9 +218,7 @@ class ScreeningProblem:
     """Cribado virtual: no hay espacio latente ni decodificación, solo se evalúan
     moléculas tomadas de MOSES.  Expone eval_log para reusar postprocess_run.
 
-    No hay F ni G porque no hay nada que optimizar: se registran las propiedades
-    y la factibilidad, y el frente se arma al final como en cualquier otra
-    corrida."""
+    No hay F ni G: no hay nada que optimizar, solo se registra."""
 
     def __init__(self):
         self.eval_log = []
@@ -263,11 +242,8 @@ def run_screening(problem, tracker, pop_size, n_gen, run_id, train_smiles_series
     """Toma pop_size*n_gen moléculas de MOSES al azar y las evalúa.  Sin generar
     nada: mide qué se consigue cribando una biblioteca existente.
 
-    El pool sale de MOSES entero, SIN prefiltrar por Fsp3.  Prefiltrar le
-    regalaría el constraint: los MOEAs gastan parte de sus 100.000 evaluaciones
-    en la zona infactible y el cribado no, con lo que el presupuesto dejaría de
-    significar lo mismo para todos.  Así la factibilidad de MOSES (~56% cumple
-    el umbral) queda medida como resultado y no asumida."""
+    Sin prefiltrar por Fsp3: prefiltrarlo le regalaría el constraint, porque los
+    MOEAs sí gastan presupuesto en la zona infactible."""
     n_total = pop_size * n_gen
     pool = train_smiles_series.sample(n_total, replace=False,
                                       random_state=run_id).tolist()
@@ -281,12 +257,8 @@ def run_hill_climber(problem, mus, tracker, pop_size, n_gen, run_id, sigma=0.5):
     mutaciones gaussianas y se mueve solo si la mejor supera a la actual.  Sin
     población ni cruce: aísla cuánto aporta la búsqueda poblacional.
 
-    Es el único método que no pasa por pymoo, así que la dominancia de
-    factibilidad se escribe acá.  Se ordena por (violación, fitness): una
-    factible le gana a cualquier infactible, entre infactibles gana la de menor
-    violación y entre factibles gana el mejor fitness.  Es la regla de Deb
-    (2002), la misma que aplican los MOEAs y el GA ponderado, y por eso la única
-    diferencia que queda con este último es la ausencia de población."""
+    No pasa por pymoo, así que la regla de Deb va escrita acá: ordena por
+    (violación, fitness)."""
     rng = np.random.default_rng(run_id)
     x = mus[0].copy()
     best = None                          # (violación, fitness) del candidato actual
@@ -297,11 +269,9 @@ def run_hill_climber(problem, mus, tracker, pop_size, n_gen, run_id, sigma=0.5):
         problem._evaluate(X, out)
         f = np.asarray(out["F"]).ravel()
         cv = np.maximum(np.asarray(out["G"]).ravel(), 0.0)   # 0 si es factible
-        # lexsort toma la ÚLTIMA clave como principal: primero violación, después
-        # fitness.  El mejor del lote queda en la posición 0.
-        i = int(np.lexsort((f, cv))[0])
+        i = int(np.lexsort((f, cv))[0])   # lexsort: la última clave manda (cv)
         cand = (cv[i], f[i])
-        if best is None or cand < best:  # la tupla compara violación y luego fitness
+        if best is None or cand < best:   # compara violación y después fitness
             best, x = cand, X[i].copy()
         tracker.update(gen)
 
@@ -348,8 +318,7 @@ def correr_una(args):
     label = f"{args.method.upper()}/pop{args.pop_size}xgen{args.n_gen}/run_{args.run_id + 1:02d}"
     print(f"[{label}] Iniciando...", flush=True)
 
-    # fsp3_min queda en todas: es la columna con que los MOEAs registran el
-    # umbral con que corrieron, y all_metrics.csv junta ambas familias.
+    # fsp3_min en todas: all_metrics.csv junta baselines y MOEAs.
     hp = {'fsp3_min': FSP3_MIN}
     t0 = time.time()
     if args.method == 'screening':

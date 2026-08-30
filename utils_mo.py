@@ -1,10 +1,9 @@
 """
 Utilidades para optimización multi-objetivo de moléculas en espacio latente VAE.
-Objetivos: QED (↑), SA (↓)  →  pymoo minimiza [-QED, SA].
-Fsp3 (↑) NO es objetivo: entra como CONSTRAINT de desigualdad (Fsp3 ≥ FSP3_MIN),
-así el frente de Pareto queda en 2D y la saturación solo filtra qué es admisible.
-QED ∈ [0,1] (druglikeness agregada, rdkit.Chem.QED.qed); Fsp3 ∈ [0,1] (fracción de
-carbonos sp3, CalcFractionCSP3); SA ∈ [1,10] (accesibilidad sintética).
+
+Objetivos: QED (↑, ∈[0,1]) y SA (↓, ∈[1,10])  →  pymoo minimiza [-QED, SA].
+Fsp3 (↑, ∈[0,1]) no es objetivo: entra como constraint (Fsp3 ≥ FSP3_MIN), así el
+frente queda en 2D y la saturación solo filtra qué es admisible.
 """
 
 import re, os, sys, glob, functools
@@ -37,15 +36,11 @@ RESULTS_DIR = os.path.join(ROOT_DIR, "results")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
-# Umbral del constraint de saturación: factible si Fsp3 ≥ FSP3_MIN  →  G = FSP3_MIN - Fsp3.
-# Como Fsp3 dejó de ser objetivo, nada empuja por encima del umbral: las soluciones se
-# estacionan EN el borde, así que este valor es el Fsp3 que se obtiene, no un piso.
-# Referencias medidas sobre los datos del proyecto, para interpretar el valor elegido:
-#   etapa lipinski (Fsp3 sin optimizar)  media 0.073, solo 0.6% del frente llega a 0.3
-#   MOSES train (lo que aprendió el VAE) mediana 0.333, media 0.350; 56% cumple ≥ 0.3
-#   etapa con Fsp3 como objetivo          media 0.61-0.70 por frente
-# Costo en QED medio según banda (frentes de la etapa a 3 objetivos): 0.906 en
-# [0.25,0.35) vs 0.887 en [0.35,0.45).  El máximo de QED (0.948) no cambia con la banda.
+# Factible si Fsp3 ≥ FSP3_MIN  →  G = FSP3_MIN - Fsp3.  Como Fsp3 no es objetivo,
+# nada empuja por encima del umbral: las soluciones se estacionan EN el borde, así
+# que este valor es el Fsp3 que se obtiene, no un piso.  Medido en el proyecto:
+# MOSES train mediana 0.333 (56% cumple ≥ 0.3); sin optimizar 0.073; con Fsp3 como
+# objetivo 0.61-0.70.  Costo en QED medio: 0.906 en [0.25,0.35) vs 0.887 en [0.35,0.45).
 FSP3_MIN = 0.3
 
 # Bounds teóricos por objetivo [-QED, SA] para normalizar el HV a [0,1]^2:
@@ -68,11 +63,9 @@ SMILES_REGEX = re.compile(
 
 
 # ─── Operadores genéticos ────────────────────────────────────────────────────
-# Sensibilidad de hiperparámetros: SOLO se barren las PROBABILIDADES (cruce y
-# mutación). Todo lo demás queda en el default de pymoo:
-#   SBX eta=15 · PCX eta=zeta=0.1 · PM eta=20 · Gauss sigma=0.1
-# La mutación se barre por-gen (prob_var); prob=1.0 (siempre se intenta mutar),
-# así el nº de genes mutados lo controla solo prob_var y PM/Gauss son comparables.
+# Solo se barren las PROBABILIDADES; el resto queda en el default de pymoo
+# (SBX eta=15 · PCX eta=zeta=0.1 · PM eta=20 · Gauss sigma=0.1).  La mutación va
+# por-gen (prob_var) con prob=1.0, así PM y Gauss son comparables.
 
 CROSSOVERS = {
     'sbx': lambda cx_prob: SBX(prob=cx_prob),
@@ -120,20 +113,14 @@ def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
 
 
 def get_ref_dirs(n_points):
-    """Direcciones de referencia (Das-Dennis uniforme, 2 objetivos) para NSGA-III /
-    MOEA-D: exactamente n_points, equiespaciadas sobre el símplex.
+    """Direcciones de referencia para NSGA-III / MOEA-D: exactamente n_points,
+    equiespaciadas sobre el símplex (Das-Dennis uniforme).
 
-    Con 2 objetivos el símplex es un segmento y Das-Dennis con n_points-1 particiones
-    da la solución EXACTA: n_points puntos a distancia 1/(n_points-1).  La etapa a 3
-    objetivos usaba Riesz s-energy porque ahí Das-Dennis no puede dar un n arbitrario,
-    pero en 2D energy es un optimizador numérico que aproxima algo que ya tiene forma
-    cerrada, y lo hace peor: medido con seed=1 devuelve una dirección DUPLICADA en
-    p=200 y p=400, y huecos de hasta 3-6x el espaciado ideal.  El duplicado importa
-    sobre todo en MOEA/D, donde cada dirección es un subproblema y pop_size = len(
-    ref_dirs): dos direcciones idénticas son un slot de población desperdiciado.
+    Con 2 objetivos Das-Dennis es EXACTO.  Riesz s-energy, que usaba la etapa a 3
+    objetivos, acá aproxima peor: con seed=1 devuelve una dirección duplicada en
+    p=200 y p=400.  En MOEA/D eso es un subproblema desperdiciado.
 
-    Es determinista y cuesta ~1 ms, así que no se cachea en disco (el cache anterior
-    llevaba el nº de objetivos en el nombre y era una fuente de errores silenciosos)."""
+    Determinista y ~1 ms: no se cachea en disco."""
     from pymoo.util.ref_dirs import get_reference_directions
     return get_reference_directions("uniform", 2, n_partitions=n_points - 1)
 
@@ -281,15 +268,10 @@ def load_seed_mus(model, stoi, n_samples, run_id):
 
 @functools.lru_cache(maxsize=100_000)
 def calc_properties(smi):
-    """Calcula propiedades de un SMILES. Retorna dict o None si inválido.
+    """Propiedades de un SMILES, o None si es inválido.
 
-    Objetivos: QED (↑) y SA (↓).  Fsp3 (↑) NO es objetivo: entra como constraint
-    (Fsp3 ≥ FSP3_MIN).  QED es la druglikeness agregada de RDKit (∈[0,1]); Fsp3 es
-    la fracción de carbonos sp3 (∈[0,1], CalcFractionCSP3, devuelve 0 si la molécula
-    no tiene carbonos); SA es la accesibilidad sintética (∈[1,10]).
-
-    Cacheado por SMILES (LRU acotado): la población converge y muchos latentes
-    decodifican al mismo SMILES, reusando el cálculo RDKit."""
+    QED y SA son los objetivos; Fsp3 es el constraint.  Cacheado por SMILES: la
+    población converge y muchos latentes decodifican al mismo."""
     mol = Chem.MolFromSmiles(smi) if smi else None
     if mol is None:
         return None
@@ -312,15 +294,13 @@ def calc_properties(smi):
 # ─── Problema pymoo ──────────────────────────────────────────────────────────
 
 class MolecularLatentProblem(Problem):
-    """Optimización bi-objetivo con constraint de saturación en espacio latente VAE.
+    """Optimización bi-objetivo con constraint, en el espacio latente del VAE.
 
     F = [-QED, SA]            → pymoo minimiza los 2.
-    G = [FSP3_MIN - Fsp3]     → factible si ≤ 0, o sea Fsp3 ≥ FSP3_MIN.
+    G = [FSP3_MIN - Fsp3]     → factible si ≤ 0.
 
     El constraint no entra al frente ni al HV: los algoritmos lo manejan por
-    dominancia de factibilidad (factible gana a infactible; entre infactibles,
-    menor violación), nativa en NSGA-II/III, AGE-MOEA y CMOPSO.  El único que
-    necesita subclase es MOEA/D (ver algoritmos_mo.MOEADConstr)."""
+    dominancia de factibilidad (ver experimento.py)."""
 
     def __init__(self, model, stoi, itos, latent_dim):
         self.model, self.stoi, self.itos = model, stoi, itos
@@ -353,18 +333,12 @@ class MolecularLatentProblem(Problem):
 
 
 class NormalizedMolecularLatentProblem(MolecularLatentProblem):
-    """MolecularLatentProblem con normalización estática de objetivos.
+    """MolecularLatentProblem con F normalizado a [0,1]^2 con bounds fijos.
 
-    Normaliza F a [0,1]^2 usando bounds teóricos fijos:
-      -QED ∈ [-1, 0],  SA ∈ [1, 10]
-
-    G queda SIN normalizar a propósito: con dominancia de factibilidad los
-    objetivos y la violación nunca se mezclan en la misma escala, y dejar G
-    crudo mantiene la violación interpretable como "cuánto Fsp3 falta".
-
-    eval_log mantiene valores crudos → post-procesamiento comparable.
-    Diseñado para MOEA/D y CMOPSO donde la escala cruda de SA
-    domina la descomposición Tchebycheff / velocidad de partículas.
+    Para MOEA/D y CMOPSO, donde la escala cruda de SA domina la descomposición
+    Tchebycheff y la velocidad de las partículas.  G queda sin normalizar: nunca
+    se mezcla con los objetivos y crudo se lee como "cuánto Fsp3 falta".
+    eval_log guarda los valores crudos.
     """
 
     _F_MIN   = F_MIN     # bounds teóricos compartidos con el cálculo del HV
@@ -458,11 +432,9 @@ class GenerationTracker(Callback):
 def _non_dominated_front(F):
     """Índices del frente no-dominado (minimización), exacto.
 
-    Sustituye a NonDominatedSorting de pymoo, que construye una matriz de
-    dominación O(n²) en RAM: con las ~100k moléculas únicas que acumula una run
-    exploradora (p. ej. PCX) eso son ~14 GB → OOM. Este filtro estilo Kung usa
-    memoria O(tamaño del frente): ordena lexicográficamente (todo dominador de un
-    punto aparece antes) y mantiene solo los puntos no-dominados vistos."""
+    NonDominatedSorting de pymoo arma una matriz O(n²): con las ~100k moléculas de
+    una run exploradora son ~14 GB → OOM.  Este filtro estilo Kung ordena
+    lexicográficamente y usa memoria O(tamaño del frente)."""
     n = len(F)
     if n == 0:
         return np.empty(0, dtype=int)
@@ -523,12 +495,10 @@ def compute_spacing(pareto):
 
 
 def build_pareto(eval_log):
-    """Construye frente de Pareto desde el log completo.
-    Retorna (pareto, validity, feasibility).
+    """Frente de Pareto desde el log completo → (pareto, validity, feasibility).
 
-    Solo compiten las moléculas FACTIBLES (Fsp3 ≥ FSP3_MIN): el frente reportado
-    debe cumplir el constraint, si no molecules.csv publicaría soluciones que
-    violan el umbral. 'feasibility' es la fracción de válidas que lo cumplen."""
+    Solo compiten las FACTIBLES: molecules.csv no debe publicar soluciones que
+    violen el umbral."""
     n_valid = 0
     n_feasible = 0
     seen = {}
@@ -578,10 +548,8 @@ def save_molecules(pareto, run_dir):
 def save_tracking(tracker, run_dir):
     """Guarda convergencia por generación y log completo de evaluaciones.
 
-    El log va con qed/sa/fsp3 a 4 decimales: es la misma precisión que guarda
-    metrics.csv y la que muestran las figuras, y achica el .gz a la mitad.
-    float_format toca solo las columnas float; smiles, valid/feasible y gen
-    quedan intactos, y las inválidas siguen saliendo vacías."""
+    qed/sa/fsp3 van a 4 decimales: misma precisión que metrics.csv y achica el .gz
+    a la mitad."""
     pd.DataFrame(tracker.history).to_csv(
         os.path.join(run_dir, "convergence.csv"), index=False)
     pd.DataFrame(tracker.problem.eval_log).to_csv(

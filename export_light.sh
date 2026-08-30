@@ -5,10 +5,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# El log crudo se excluye siempre: es lo que pesa.  convergence.csv se excluye
-# SOLO del grid, que son 513 configs x 20 semillas; las baselines son 80 corridas
-# y lo necesitan, porque analisis.py detecta una serie por ese archivo
-# (plot_comparison._has_runs) y sin el la etapa 4 no ve nada y no avisa por que.
+# convergence.csv se excluye solo del grid (513 configs x 20 semillas).  Las
+# baselines lo necesitan: analisis.py detecta una serie por ese archivo.
 EXCLUDES_GRID=(--exclude='all_molecules.csv.gz' --exclude='convergence.csv')
 EXCLUDES_BASE=(--exclude='all_molecules.csv.gz')
 

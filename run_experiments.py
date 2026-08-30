@@ -58,9 +58,7 @@ OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
 ELITE_SIZES = [5, 10, 25]
 VEL_RATES   = [0.1, 0.2, 0.35]
 
-# Los cuatro genéticos salen de algoritmos_mo: son los de familia 'ga', o sea los
-# que tienen operadores de cruce y mutación que barrer.  CMOPSO va aparte porque
-# sus perillas son otras.
+# Los cuatro genéticos (familia 'ga'): los que tienen operadores que barrer.
 GA_ALGS = ALGS_GA
 
 

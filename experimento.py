@@ -1,42 +1,25 @@
 """
-Los experimentos: los cinco algoritmos de la comparación y cómo se corre uno.
+Los cinco algoritmos de la comparación y cómo se corre uno.
 
-Objetivos: QED (↑), SA (↓)  →  pymoo minimiza [-QED, SA].
-Fsp3 (↑) entra como constraint de desigualdad (Fsp3 ≥ FSP3_MIN).
+Objetivos: QED (↑), SA (↓) → pymoo minimiza [-QED, SA].  Fsp3 entra como
+constraint (Fsp3 ≥ FSP3_MIN): solo MOEA/D necesita subclase, los otros cuatro
+lo manejan nativo por dominancia de factibilidad.
 
-Cuatro de los cinco se usan tal cual vienen en pymoo: NSGA-II, NSGA-III, AGE-MOEA
-y CMOPSO manejan constraints de forma nativa por dominancia de factibilidad
-(Survival.do → split_by_feasibility; en CMOPSO además el archivo de elites filtra
-por factibilidad al insertar).  El único que necesita subclase es MOEA/D.
+Cuatro partes: MOEADConstr, la tabla ALGORITMOS (lo único que hay que tocar para
+agregar o cambiar un algoritmo), correr() y el CLI.
 
-El archivo tiene cuatro partes, en este orden:
-
-  1. MOEADConstr — la subclase que le falta a pymoo.
-  2. ALGORITMOS  — los cinco declarados: cómo se construye cada uno, si su
-     problema va normalizado, si necesita direcciones de referencia y a qué
-     familia de perillas pertenece.  Es la ÚNICA tabla donde figura eso, y es lo
-     único que hay que tocar para agregar o cambiar un algoritmo.
-  3. correr()    — el cuerpo de una corrida, idéntico para los cinco: semillas,
-     VAE, población inicial, minimize y post-procesamiento.
-  4. El CLI      — qué perillas acepta cada familia.
-
-Las perillas dependen de la familia del algoritmo, y `--help` las muestra según
-el `--alg` que le pases:
-
+Las perillas dependen de la familia; --help muestra las del --alg que pases:
   ga  (NSGA2, NSGA3, MOEAD, AGEMOEA)   --crossover --mutation --cx_prob --mut_prob
   pso (CMOPSO)                         --elite_size --mut_prob --vel_rate
 
 Uso:
     python experimento.py --alg nsga2 --pop_size 300 --run_id 0
-    python experimento.py --alg nsga2 --pop_size 300 --run_id 0 --crossover pcx --mutation gauss
     python experimento.py --alg cmopso --pop_size 100 --n_gen 1000 --run_id 0
-    python experimento.py --alg moead --help        # las perillas de esa familia
-    python experimento.py --generate_summary        # consolidar results/all_metrics.csv
+    python experimento.py --alg moead --help
+    python experimento.py --generate_summary
 
-Corre UNA configuración por vez.  El grid completo lo lanza run_experiments.py,
-que llama a este script una vez por corrida.
+Corre UNA configuración por vez; el grid lo lanza run_experiments.py.
 """
-
 import argparse
 import os
 import textwrap
@@ -71,18 +54,13 @@ from utils_mo import (
 # ═══════════════════════════════════════════════════════════════════════════
 
 class MOEADConstr(ParallelMOEAD):
-    """MOEA/D con dominancia de factibilidad (criterio parameter-less de Deb, 2002).
+    """MOEA/D con dominancia de factibilidad (parameter-less de Deb, 2002).
 
-    Extiende ParallelMOEAD, que es la variante que usa el experimento; el reemplazo
-    corre por _replace igual que en la versión loopwise.
-
-    pymoo aborta con `assert not problem.has_constraints()` en _setup, y el criterio
-    que lo resolvería está escrito en moead.py pero comentado («not originally proposed
-    though and not tested enough») y sin importar siquiera la función que usa.  Acá se
-    activa: cada infactible pasa a valer fmax + CV en el espacio escalarizado, o sea
-    peor que cualquier factible, y entre infactibles gana el de menor violación.  Ese es
-    el mismo ORDEN que la dominancia de factibilidad de los otros cuatro algoritmos,
-    expresado sobre los valores descompuestos en vez de sobre el frente.
+    pymoo aborta con `assert not problem.has_constraints()` en _setup, y el
+    criterio que lo resolvería está en moead.py pero comentado.  Acá se activa:
+    cada infactible vale fmax + CV en el espacio escalarizado, o sea peor que
+    cualquier factible, y entre infactibles gana el de menor violación.  Es el
+    mismo ORDEN que usan los otros cuatro, sobre los valores descompuestos.
     """
 
     def _setup(self, problem, **kwargs):
@@ -122,20 +100,14 @@ class MOEADConstr(ParallelMOEAD):
 
 @dataclass(frozen=True)
 class Algoritmo:
-    """Todo lo que distingue a un algoritmo de los otros cuatro.
+    """Lo que distingue a un algoritmo de los otros cuatro.
 
     construir     (args, sampling, operadores, ref_dirs) → algoritmo de pymoo.
-                  'operadores' es la tupla (cruce, mutación) en la familia 'ga'
-                  y None en 'pso'; 'ref_dirs' es None si el algoritmo no las usa.
-    familia       'ga'  → se barren cruce, mutación y sus probabilidades.
-                  'pso' → se barren elite_size, mutación por-gen y velocidad.
-                  Decide las perillas del CLI, el directorio de salida y qué
-                  columnas de hiperparámetros van a metrics.csv.
-    normalizado   True si el problema debe entregar F normalizado a [0,1]^2.
-    ref_dirs      True si necesita direcciones de referencia (una por subproblema
-                  o por nicho); se generan exactamente pop_size.
-    nota          Por qué este algoritmo se configura así.  Se imprime en el
-                  --help de su propio algoritmo.
+    familia       'ga' (cruce y mutación) o 'pso' (elites y velocidad).  Decide
+                  las perillas del CLI, el run_dir y las columnas de hp.
+    normalizado   el problema entrega F normalizado a [0,1]^2.
+    ref_dirs      necesita direcciones de referencia; se generan pop_size.
+    nota          por qué se configura así; sale en su --help.
     """
     construir: Callable
     familia: str
@@ -163,8 +135,7 @@ def _agemoea(args, sampling, operadores, ref_dirs):
 
 
 def _moead(args, sampling, operadores, ref_dirs):
-    # No lleva pop_size: MOEA/D tiene un subproblema por dirección de referencia,
-    # así que el tamaño de población sale de len(ref_dirs) (ver MOEADConstr._setup).
+    # Sin pop_size: sale de len(ref_dirs), un subproblema por dirección.
     cruce, mutacion = operadores
     return MOEADConstr(ref_dirs=ref_dirs, n_neighbors=20,
                        prob_neighbor_mating=0.9, sampling=sampling,
@@ -174,11 +145,8 @@ def _moead(args, sampling, operadores, ref_dirs):
 def _cmopso(args, sampling, operadores, ref_dirs):
     algoritmo = CMOPSO(pop_size=args.pop_size, elite_size=args.elite_size,
                        max_velocity_rate=args.vel_rate, sampling=sampling)
-    # CMOPSO fija PolynomialMutation(prob=mutation_rate) en su __init__, sin parámetro
-    # para pasar el prob_var: `prob` es por-INDIVIDUO y deja el por-gen en el default
-    # 1/n_var (=1/256≈0.0039), ~8x más suave que el 0.031 que ganó en el grid GA.  Se
-    # pisa acá para barrer la misma perilla que los GA y que la mutación sea comparable
-    # entre las cinco familias.
+    # CMOPSO fija la mutación por INDIVIDUO y deja el por-gen en 1/n_var.  Se pisa
+    # para barrer la misma perilla que los GA.
     algoritmo.mutation = PM(prob=1.0, prob_var=args.mut_prob)
     return algoritmo
 
@@ -186,44 +154,33 @@ def _cmopso(args, sampling, operadores, ref_dirs):
 ALGORITMOS = {
     'NSGA2': Algoritmo(
         construir=_nsga2, familia='ga', normalizado=False, ref_dirs=False,
-        nota="El constraint lo maneja pymoo de forma nativa (dominancia de "
-             "factibilidad); no necesita ningún cambio más allá del problema."),
+        nota="Constraint nativo; no necesita nada más que el problema."),
 
     'NSGA3': Algoritmo(
         construir=_nsga3, familia='ga', normalizado=False, ref_dirs=True,
-        nota="Usa vectores de referencia: se generan exactamente pop_size "
-             "direcciones equiespaciadas con Das-Dennis uniforme (ver "
-             "utils_mo.get_ref_dirs).  Constraint nativo."),
+        nota="Usa vectores de referencia: pop_size direcciones Das-Dennis "
+             "(ver utils_mo.get_ref_dirs).  Constraint nativo."),
 
     'MOEAD': Algoritmo(
         construir=_moead, familia='ga', normalizado=True, ref_dirs=True,
-        nota="El único que necesita subclase para el constraint: el MOEA/D de "
-             "pymoo aborta con un assert (ver MOEADConstr).  Corre sobre "
-             "ParallelMOEAD, la variante síncrona que evalúa todo el offspring "
-             "en lote y permite el decode batcheado.  El problema va normalizado "
-             "porque la escala cruda de SA domina la descomposición Tchebycheff."),
+        nota="El único que necesita subclase: el MOEA/D de pymoo aborta con un "
+             "assert ante constraints (ver MOEADConstr).  Va normalizado porque "
+             "la escala de SA domina la descomposición Tchebycheff."),
 
     'AGEMOEA': Algoritmo(
         construir=_agemoea, familia='ga', normalizado=False, ref_dirs=False,
-        nota="Adapta la presión de selección según la geometría del frente de "
-             "Pareto actual.  Constraint nativo."),
+        nota="Adapta la presión de selección a la geometría del frente.  "
+             "Constraint nativo."),
 
     'CMOPSO': Algoritmo(
         construir=_cmopso, familia='pso', normalizado=True, ref_dirs=False,
-        nota="CMOPSO (Zhang et al., Inf. Sci. 427:63-76, 2018) reemplaza al "
-             "MOPSO_CD de la etapa anterior: maneja el constraint de forma "
-             "nativa (dominancia de factibilidad en la supervivencia SPEA2 y en "
-             "el archivo de elites), mientras que MOPSO_CD ordena por "
-             "NonDominatedSorting crudo sobre F y lo ignora en silencio.  Sus "
-             "perillas no son las de MOPSO_CD: la ecuación de velocidad es "
-             "v' = R1·v + R2·(ganador − p), con R1/R2 aleatorios por dimensión y "
-             "sin pbest, así que w, c1 y c2 no existen.  El problema va "
-             "normalizado porque la escala cruda de SA domina la velocidad de "
-             "las partículas."),
+        nota="Zhang et al. (2018).  Reemplaza al MOPSO_CD anterior, que "
+             "ignoraba el constraint en silencio.  No tiene w/c1/c2: su "
+             "velocidad usa coeficientes aleatorios y no hay pbest.  Va "
+             "normalizado porque la escala de SA domina la velocidad."),
 }
 
-# Los cuatro genéticos, en el orden en que se presentan.  Lo usa run_experiments.py
-# para armar el grid, y es la definición de "algoritmo con operadores de cruce".
+# Los cuatro genéticos: los que tienen operadores que barrer.  Lo usa run_experiments.
 ALGS_GA = [nombre for nombre, a in ALGORITMOS.items() if a.familia == 'ga']
 
 
@@ -232,12 +189,8 @@ ALGS_GA = [nombre for nombre, a in ALGORITMOS.items() if a.familia == 'ga']
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _perillas(alg, args, latent_dim):
-    """Lo que depende de la familia: directorio de salida, etiqueta de progreso y
-    las columnas de hiperparámetros que van a metrics.csv.
-
-    Devuelve (run_dir, label, hp, mut_prob).  El mut_prob se resuelve acá porque
-    en la familia 'ga' su default es 1/latent_dim, que no se conoce hasta cargar
-    el VAE."""
+    """(run_dir, label, hp, mut_prob) según la familia.  El mut_prob se resuelve
+    acá porque en 'ga' su default es 1/latent_dim, que sale del VAE."""
     if ALGORITMOS[alg].familia == 'pso':
         run_dir = cmopso_run_dir(args.pop_size, args.n_gen, args.elite_size,
                                  args.mut_prob, args.vel_rate, args.run_id)
@@ -259,17 +212,12 @@ def _perillas(alg, args, latent_dim):
 
 
 def correr(alg, args):
-    """Una corrida completa de cualquiera de los cinco.
-
-    Es el cuerpo que antes estaba copiado en los cinco experimento_*.py: fijar
-    las semillas, cargar el VAE y la población inicial, construir el problema y
-    el algoritmo, correr minimize y post-procesar.  Lo único que cambia entre
+    """Una corrida completa de cualquiera de los cinco.  Lo que cambia entre
     algoritmos sale de ALGORITMOS y de la familia de perillas."""
     spec = ALGORITMOS[alg]
 
-    # Semillas: la población inicial se muestrea con random_state=run_id, así que
-    # el run_id k da la MISMA población en los cinco algoritmos.  De ahí que los
-    # tests del análisis puedan tomar la semilla como bloque.
+    # El run_id da la MISMA población inicial en los cinco: por eso los tests del
+    # análisis pueden tomar la semilla como bloque.
     np.random.seed(args.run_id)
     torch.manual_seed(args.run_id)
     if torch.cuda.is_available():
@@ -285,8 +233,7 @@ def correr(alg, args):
              f"/run_{args.run_id + 1:02d}")
     print(f"[{label}] Iniciando...", flush=True)
 
-    # Direcciones de referencia: exactamente pop_size, equiespaciadas sobre el
-    # símplex (Das-Dennis uniforme, exacto con 2 objetivos).  Cuestan ~1 ms.
+    # Exactamente pop_size, Das-Dennis uniforme.  Cuestan ~1 ms, no se cachean.
     ref_dirs = get_ref_dirs(args.pop_size) if spec.ref_dirs else None
     operadores = (get_operators(args.crossover, args.mutation,
                                 args.cx_prob, mut_prob)
@@ -319,13 +266,10 @@ def correr(alg, args):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _parser(alg=None, ayuda=True):
-    """Parser con las perillas comunes y, si ya se sabe el algoritmo, las de su
-    familia.
+    """Perillas comunes y, si ya se sabe el algoritmo, las de su familia.
 
-    Se construye dos veces: una sin ayuda para averiguar el --alg, y otra ya con
-    la familia para el parseo de verdad.  Así `--alg cmopso --help` muestra las
-    perillas de CMOPSO, y pasar una ajena (--vel_rate a un genético) es un error
-    y no algo que se ignore en silencio."""
+    Se construye dos veces: una sin ayuda para averiguar el --alg, otra con la
+    familia para el parseo real.  Así una perilla ajena es error, no silencio."""
     spec = ALGORITMOS[alg] if alg else None
     ap = argparse.ArgumentParser(
         prog="experimento.py", add_help=ayuda,
@@ -367,8 +311,8 @@ def _parser(alg=None, ayuda=True):
 
 
 def main():
-    # Primera pasada, sin ayuda propia, solo para saber el algoritmo: así un
-    # `--alg cmopso --help` llega al parser definitivo y muestra SUS perillas.
+    # Sin ayuda propia: así `--alg X --help` llega al parser final y muestra
+    # las perillas de X.
     conocidos, _ = _parser(ayuda=False).parse_known_args()
 
     if conocidos.generate_summary:

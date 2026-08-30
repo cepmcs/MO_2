@@ -1,31 +1,24 @@
 """
 Gráficas comparativas entre algoritmos MOO.
 
-Espacio de objetivos: QED (↑) y SA (↓), o sea F = [-QED, SA] en minimización.
-Fsp3 NO es objetivo — entra como constraint (Fsp3 ≥ FSP3_MIN), así que el frente
-vive en un plano y Fsp3 se reporta como propiedad de lo que el constraint dejó
-pasar, nunca como una dimensión más de la dominancia (ver utils_mo).
+Objetivos: QED (↑) y SA (↓), o sea F = [-QED, SA] en minimización.  Fsp3 es
+constraint, no objetivo: se reporta como propiedad de lo que el umbral dejó
+pasar, nunca como una dimensión más de la dominancia.
 
-Los dos modos leen de resultados/, que es lo que baja del cluster (ver la
-cabecera de analisis.py):
+Dos modos, ambos leyendo de resultados/:
 
-  1. Algoritmos (default): superpone los cinco algoritmos, cada uno con la
-     configuración que quedó elegida tras las etapas 1 y 2.
-     Lee resultados/finalistas/<ALG>/run_XX/   →   plots/comparacion_final/.
+  1. Algoritmos (default): superpone los cinco, con la configuración elegida
+     tras las etapas 1 y 2.  finalistas/<ALG>/run_XX/ → plots/comparacion_final/.
 
-  2. Operadores (--operadores): para cada algoritmo, superpone las cuatro
-     combinaciones de operadores que ganaron su bloque en la etapa 1.
-     Lee resultados/winners/<ALG>/<cruce_mutacion>/<config>/run_XX/
-        →  plots/operadores/<ALG>/winners/.  Va a un subdirectorio propio para
-     no mezclarse con las tablas que analisis.py etapa2 deja un nivel arriba.
+  2. Operadores (--operadores): por algoritmo, superpone los cuatro combos que
+     ganaron su bloque en la etapa 1.  winners/<ALG>/<combo>/<config>/run_XX/ →
+     plots/operadores/<ALG>/winners/ (un nivel más abajo que las tablas de
+     analisis.py etapa2).
 
-Las funciones de carga y de figura de este módulo son además el motor que reusa
-analisis.py en sus cuatro etapas.  Una Series es cualquier directorio con
-run_XX/{metrics,molecules,convergence}.csv, así que para comparar otras carpetas
-—celdas del grid, por ejemplo— alcanza con apuntar --finalistas a un directorio
-cuyos hijos sean las series.  Lo que NO se puede es leer el results/ crudo del
-cluster: su estructura es <ALG>/<combo>/<config>/run_XX (ver utils_mo.ga_run_dir)
-y la copia que llega al PC como resultados/grid/ viene sin convergence.csv.
+Las funciones de este módulo son además el motor que reusa analisis.py.  Una
+Series es cualquier directorio con run_XX/{metrics,molecules,convergence}.csv.
+Lo que NO se puede leer es el results/ crudo del cluster: tiene otra estructura
+y la copia que llega al PC viene sin convergence.csv.
 
 Uso:
     python plot_comparison.py                            # comparación final
@@ -33,7 +26,6 @@ Uso:
     python plot_comparison.py --operadores               # operadores por algoritmo
     python plot_comparison.py --operadores --algorithms NSGA2 NSGA3
 """
-
 import os, argparse, glob, math
 import numpy as np
 import pandas as pd
@@ -90,13 +82,9 @@ _ALG_POR_DISPLAY = {v: k for k, v in DISPLAY_ALG.items()}
 # no por forma.
 PARETO_MARKER = 'o'
 
-# Tamaño del marcador en las figuras de frentes 2D.  Lo elige la densidad de
-# puntos del panel, que es lo que produce el solape:
-#   pareto_comparison superpone las 5 series en un mismo panel → ~58 pts/in²
-#   el grid QED-SA y el frente conjunto dibujan un frente      → ~12-15 pts/in²
-# El frente conjunto venía con el valor de la figura densa sin tener su densidad,
-# y encima es la figura más ancha (3 paneles), así que al escalarla al ancho de
-# texto sus puntos quedaban casi la mitad de los del grid.
+# Tamaño del marcador en los frentes 2D, según la densidad del panel:
+#   pareto_comparison superpone las 5 series      → ~58 pts/in²
+#   el grid QED-SA y el frente conjunto, un frente → ~12-15 pts/in²
 MARCADOR_DENSO  = 13    # varias series superpuestas en el panel
 MARCADOR_NORMAL = 23    # un frente por panel
 
@@ -138,10 +126,8 @@ def get_color(key, idx=0):
 # ─── Serie a comparar ────────────────────────────────────────────────────────
 
 class Series:
-    """Una serie a comparar: una curva/caja/frente en las gráficas.
-
-    En el modo algoritmos cada algoritmo es una serie; en el modo operadores
-    cada variante de operadores (de un mismo algoritmo) es una serie.
+    """Una serie a comparar: una curva/caja/frente en las gráficas.  En el modo
+    algoritmos cada algoritmo es una serie; en operadores, cada combo.
 
       label     → texto en leyendas y títulos.
       pop_dir   → ruta absoluta a .../pop{N} de donde se cargan los datos.
@@ -320,11 +306,9 @@ def _mapa_evaluaciones(series):
 def _a_evaluaciones(curvas, mapas, escala=1000.0):
     """Reindexa curvas de generación a evaluaciones acumuladas (en miles).
 
-    Con presupuestos distintos —200×500 y 100×1000 conviven entre los
-    finalistas— la generación no es un eje comparable: en la 500 un algoritmo de
-    población 200 ya gastó las 100.000 evaluaciones y uno de 100 va por la mitad.
-    Sobre el eje de evaluaciones las cinco curvas terminan en el mismo punto y
-    cualquier lectura vertical es a igual presupuesto."""
+    La generación no es un eje comparable: conviven repartos 200×500 y 100×1000,
+    así que en la generación 500 uno ya gastó el presupuesto y el otro va por la
+    mitad.  Sobre evaluaciones, toda lectura vertical es a igual presupuesto."""
     out = {}
     for label, (gens, vals) in curvas.items():
         m = mapas.get(label)
@@ -337,13 +321,12 @@ def _a_evaluaciones(curvas, mapas, escala=1000.0):
 
 
 def escribir_curvas_csv(series, curvas, mapas, output_dir, pop_size):
-    """CSV con todas las curvas de convergencia en formato largo: una fila por
-    serie y generación, con las evaluaciones acumuladas y una columna por métrica.
+    """CSV con las curvas de convergencia en formato largo: una fila por serie y
+    generación, con las evaluaciones acumuladas y una columna por métrica.
 
-    Son los valores CRUDOS —promedio sobre las runs, sin la media móvil que llevan
-    las figuras—, así que sirven para citar números en el documento.  IGD+ y ε+
-    quedan vacíos en las generaciones que no cayeron en el submuestreo con que se
-    calculan (cada 10)."""
+    Valores CRUDOS (promedio sobre las runs, sin la media móvil de las figuras),
+    para citar números en el documento.  IGD+ y ε+ quedan vacíos en las
+    generaciones fuera del submuestreo con que se calculan (cada 10)."""
     cols = [c for c, *_ in PANELES_MO + PANELES_QUIM]
     filas = []
     for s in series:
@@ -373,10 +356,8 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
     curvas: {col: {label: (gens, vals crudos)}}.
     mapas: mapa de evaluaciones acumuladas por serie (ver _mapa_evaluaciones).
 
-    El eje x son SIEMPRE evaluaciones, nunca generaciones: es el único donde la
-    comparación es a igual presupuesto, porque conviven repartos de 200×500 y
-    100×1000 y en la generación 500 un algoritmo ya gastó las 100.000
-    evaluaciones y el otro va por la mitad."""
+    El eje x son SIEMPRE evaluaciones: es el único a igual presupuesto (ver
+    _a_evaluaciones)."""
     panels = []
     for col, ylabel, title, ventana in specs:
         c = curvas.get(col) or {}
@@ -571,15 +552,13 @@ def _normalize_F(F, ideal, scale):
 
 
 def _additive_epsilon(F, pf):
-    """Additive Epsilon indicator (manual, pymoo 0.6 no lo incluye).
+    """Additive Epsilon (manual: pymoo 0.6 no lo trae).
 
     ε+ = max_j  min_i  max_k  (F_i_k - PF_j_k)
 
-    Mide el mínimo desplazamiento uniforme necesario para que F domine
-    a todo el frente de referencia PF.  Menor es mejor (0 = iguala PF).
-
-    F y pf deben estar ya normalizados con los mismos bounds (ver
-    _front_bounds / _normalize_F) para que las coordenadas sean comparables.
+    Mínimo desplazamiento uniforme para que F domine a todo el frente de
+    referencia; menor es mejor.  F y pf deben venir normalizados con los mismos
+    bounds (ver _front_bounds).
     """
     # F  : (n, m)  frente obtenido
     # pf : (p, m)  frente de referencia
@@ -596,13 +575,9 @@ def _additive_epsilon(F, pf):
 # ─── Frente de referencia combinado e indicadores ────────────────────────────
 
 def build_reference_front(series):
-    """Construye frente de Pareto de referencia combinando todas las runs
-    de todas las series.  Retorna (pf_F, pf_df) donde pf_F es la
-    matriz de objetivos de minimización y pf_df el DataFrame con SMILES.
-
-    Procedimiento estándar cuando el frente verdadero es desconocido:
-    juntar todas las soluciones no-dominadas, eliminar duplicados,
-    recalcular NDS global."""
+    """Frente de referencia combinando todas las runs de todas las series →
+    (pf_F, pf_df).  El procedimiento estándar cuando el frente verdadero se
+    desconoce: juntar todo, deduplicar y recalcular la no-dominancia global."""
     all_dfs = []
     for s in series:
         df = load_pareto_molecules(s.pop_dir)
@@ -773,12 +748,9 @@ def _combined_pareto_fronts(series):
 # ─── Contribución al frente no dominado conjunto ─────────────────────────────
 #
 #   El hipervolumen mide la extensión del frente, no la calidad de lo que hay
-#   dentro: un frente puede ganar volumen estirándose hacia un extremo aunque el
-#   grueso de sus soluciones esté dominado.  Para separar las dos cosas se junta
-#   lo que produjeron todos los combos, se recalcula la no-dominancia global y
-#   se mira quién aportó los supervivientes.  Es dominancia de Pareto pura sobre
-#   los dos objetivos: no hay umbrales ni ponderaciones de por medio (el único
-#   umbral del experimento, Fsp3, ya filtró antes qué entra a competir).
+#   dentro: se puede ganar volumen estirándose hacia un extremo con el grueso
+#   dominado.  Acá se junta lo de todos los combos, se recalcula la no-dominancia
+#   global y se mira quién aportó los supervivientes.
 
 # Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
 # CMOPSO entra acá porque en el frente conjunto de candidatos convive con las dos
@@ -811,17 +783,15 @@ def _etiqueta_compartida(grupos):
 def atribuir_frente(series, pf_df, grupo_de=_familia):
     """Marca qué series produjeron cada molécula del frente conjunto.
 
-    build_reference_front deduplica por SMILES quedándose con la primera
-    aparición, así que la fila que sobrevive arrastra el orden en que se
-    concatenaron las series y no sirve para atribuir.  Hay que volver a mirar
-    cada serie: una misma molécula puede haber sido hallada por varias, y
-    contarla como exclusiva de una sería inventar una diferencia.
+    No sirve mirar build_reference_front: deduplica quedándose con la primera
+    aparición, o sea con el orden en que se concatenaron las series.  Hay que
+    releer cada una, porque una misma molécula puede haberla hallado varias.
 
     grupo_de decide sobre qué se agrega: por familia de cruce al comparar
     operadores, por serie al comparar algoritmos.
 
-    Agrega una columna booleana 'en_<label>' por serie, otra por grupo, y
-    'origen' con el grupo que la halló en exclusiva o la marca de compartida.
+    Agrega 'en_<label>' por serie, otra por grupo, y 'origen' con el grupo que la
+    halló en exclusiva o la marca de compartida.
     """
     out = pf_df.copy()
     for s in series:
@@ -865,12 +835,9 @@ def _perfil(df):
 
 
 def contribucion_agregada(series, pf_df, grupo_de=_familia):
-    """Cuánto aporta cada serie —y cada grupo, si agrupan varias— al frente
-    conjunto, sobre la unión de las 20 semillas.
-
-    'aporta' cuenta toda molécula hallada por esa serie (compartidas incluidas,
-    así que las columnas no suman el total) y 'exclusiva' solo las que no
-    encontró ninguna otra."""
+    """Cuánto aporta cada serie al frente conjunto, sobre la unión de las 20
+    semillas.  'aporta' incluye las compartidas (así que las columnas no suman el
+    total); 'exclusiva' solo las que no encontró ninguna otra."""
     at = atribuir_frente(series, pf_df, grupo_de)
     total = len(at)
     filas = []
@@ -899,16 +866,12 @@ def contribucion_agregada(series, pf_df, grupo_de=_familia):
 
 
 def contribucion_por_semilla(series, grupo_de=_familia):
-    """Lo mismo pero dentro de cada semilla: los frentes de la misma semilla
-    compiten entre sí y se recalcula la no-dominancia ahí.
+    """Lo mismo pero dentro de cada semilla: solo compiten los frentes de esa
+    semilla.  Da bloques para un test de Friedman o de rangos con signo.  El
+    agregado mide otra cosa (todo contra todo), así que los dos porcentajes no
+    tienen por qué coincidir.
 
-    Da un valor por semilla y por grupo, o sea bloques que admiten un test de
-    rangos con signo o de Friedman.  El agregado mide otra cosa —todo contra
-    todo, 20 veces más candidatos— así que los dos porcentajes no tienen por
-    qué coincidir.
-
-    Devuelve dict grupo → array con el % de aportes exclusivos por semilla, el
-    % de moléculas compartidas, y las semillas usadas.
+    Devuelve dict grupo → (% exclusivos por semilla, % compartidas, semillas).
     """
     grupos = _grupos_de(series, grupo_de)
     compartida = _etiqueta_compartida(grupos)
@@ -952,15 +915,12 @@ def contribucion_por_semilla(series, grupo_de=_familia):
 
 def _atribucion_por_origen(series, pf_df, grupo_de):
     """Prepara el frente conjunto para dibujarlo: lo atribuye, arma la paleta y
-    cuenta cuántas moléculas puso cada grupo en exclusiva.
+    cuenta las exclusivas de cada grupo.
 
-    La separa de la figura porque la atribución es lo caro —relee molecules.csv
-    de todas las series— y porque la paleta tiene que salir de un solo lugar: es
-    la misma que usa la tabla de contribución, y armarla dos veces dejaría el
-    cuadro y el gráfico del documento contando lo mismo con colores distintos.
+    Va aparte de la figura porque la atribución es lo caro (relee molecules.csv de
+    todas las series) y porque la paleta la comparte con la tabla de contribución.
 
-    Devuelve None cuando la atribución no aplica (sin la columna 'origen' no hay
-    nada que colorear, que es el caso de una sola serie)."""
+    Devuelve None si la atribución no aplica (una sola serie)."""
     at = atribuir_frente(series, pf_df, grupo_de)
     if 'origen' not in at.columns:
         return None
@@ -982,11 +942,10 @@ def _atribucion_por_origen(series, pf_df, grupo_de):
 
 def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
     """Leyenda de grupos y título de las figuras del frente conjunto.  Las dos
-    coordenadas verticales se pasan por parámetro porque dependen de cuántos
-    paneles lleve la figura.
+    coordenadas verticales dependen de cuántos paneles lleve la figura.
 
-    'solo X' y no 'X' a secas: estas cuentas son exclusivas, mientras que la
-    columna «Aporta» de la tabla incluye las compartidas."""
+    Dice 'solo X': estas cuentas son exclusivas, a diferencia de la columna
+    «Aporta» de la tabla."""
     compartida = atr['compartida']
     handles = [mpatches.Patch(
         facecolor=atr['paleta'][g], edgecolor='white',
@@ -1015,16 +974,11 @@ def _linea_constraint(ax, eje):
 
 def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia):
     """El frente no dominado conjunto, cada molécula pintada según quién la
-    aportó (familia de cruce al comparar operadores, algoritmo al comparar
-    algoritmos).
+    aportó.  Dos paneles: el espacio de objetivos y el diagnóstico del
+    constraint, con el umbral dibujado (ver PLANOS_FRENTE).
 
-    Dos paneles: el espacio de objetivos —donde vive el frente— y el diagnóstico
-    del constraint, con el umbral dibujado (ver PLANOS_FRENTE).
-
-    Todos los puntos van en un único scatter con un array de colores: si se
-    dibujara un grupo después de otro, el último taparía a los anteriores en la
-    zona densa y la figura mostraría una diferencia de orden de dibujo en vez de
-    una diferencia real."""
+    Un único scatter con array de colores: dibujar grupo por grupo haría que el
+    último tape a los otros en la zona densa."""
     atr = _atribucion_por_origen(series, pf_df, grupo_de)
     if atr is None:
         return
@@ -1064,12 +1018,9 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
 
 
 def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
-    """Superpone frentes de Pareto combinados (todas las runs) de cada serie,
-    un panel por cada plano de objetivos.
-
-    Con groups —lista de (nombre de fila, [labels])— la figura se parte en una
-    fila por grupo en vez de apilar todas las series en el mismo panel.  Las
-    filas se dibujan con límites comunes para que se puedan comparar entre sí.
+    """Superpone los frentes combinados de cada serie, un panel por plano de
+    objetivos.  Con groups —(nombre de fila, [labels])— la figura se parte en una
+    fila por grupo, con límites comunes para poder compararlas.
     """
     combined_paretos, series_order, counts = _combined_pareto_fronts(series)
     if not combined_paretos:
@@ -1328,13 +1279,13 @@ def _write_latex_comparison_table(series, col_values, metrics_cfg,
 
 
 def _build_series_value_getter(series, indicator_data=None):
-    """Construye un getter unificado get(label, col) → array de valores per-run
-    (o None), consultando la fuente correcta según la columna:
+    """get(label, col) → array de valores per-run (o None), buscando en la fuente
+    que corresponda:
       - mean_qed/mean_sa/mean_fsp3 → medias del frente final (molecules.csv)
-      - igd_plus/igd/epsilon           → indicadores vs frente de referencia
-      - uniqueness                     → última generación (convergence.csv)
-      - resto (hypervolume, spacing, validity, novelty, n_pareto…) → metrics.csv
-    Calcula las fuentes una sola vez para reusarse en tablas y boxplots."""
+      - igd_plus/epsilon           → indicadores vs frente de referencia
+      - uniqueness                 → última generación (convergence.csv)
+      - el resto                   → metrics.csv
+    Calcula las fuentes una sola vez, para tablas y boxplots."""
     if indicator_data is None:
         indicator_data = {}
     metrics_by_series = {s.label: load_metrics(s.pop_dir) for s in series}
@@ -1426,31 +1377,23 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
 def _cmap_recortada(nombre, hasta):
     """El tramo [0, hasta] de un colormap, como rampa propia.
 
-    El extremo pálido de plasma —el amarillo— es ilegible sobre el fondo blanco de
-    la figura, y ahí caen justamente los valores altos: las moléculas que reaparecen
-    en muchas semillas, que son ~10% del frente y lo que interesa ver.  Recortarlo
-    las deja en naranja saturado y conserva el tramo oscuro, que es el que lleva el
-    grueso de los puntos y le da forma al frente.
+    El amarillo de plasma es ilegible sobre blanco, y ahí caen los valores altos:
+    las moléculas que reaparecen en muchas semillas, que son lo que interesa ver.
+    Recortarlo las deja en naranja saturado.
 
-    Cambiar a un tono único claro→oscuro, que es la regla habitual para codificar
-    magnitud, acá no sirve: tres cuartos de las moléculas están en el valor mínimo,
-    así que el extremo claro se queda con el grueso y el frente se desdibuja."""
+    Un tono único claro→oscuro acá no sirve: tres cuartos de las moléculas están
+    en el valor mínimo, así que el extremo claro se queda con el grueso."""
     base = plt.get_cmap(nombre)
     return mcolors.LinearSegmentedColormap.from_list(
         f'{nombre}_{hasta:g}', base(np.linspace(0.0, hasta, 256)))
 
 
-# Variantes de color del grid QED vs SA.  Los dos paneles comparten geometría y
-# responden preguntas distintas, así que se generan como archivos separados:
+# Variantes de color del grid QED vs SA.  Misma geometría, preguntas distintas,
+# así que salen como archivos separados (el sufijo va en el nombre):
 #   nruns → ¿el hallazgo se repite entre semillas, o lo vio una sola?
-#   fsp3  → ¿qué margen sobre el umbral tiene cada punto del compromiso QED-SA?
-# El sufijo va en el nombre del archivo para que no se confundan.
-#
-# El valor va solo en el color: todos los marcadores miden lo mismo, así que la
-# posición de un punto no compite con su tamaño por la atención del lector.
-# 'entero' marca las escalas que cuentan cosas: la colorbar lleva solo marcas
-# enteras, porque una molécula no aparece en 2.5 ejecuciones.  Fsp3 es una
-# fracción continua y ahí las marcas decimales son las correctas.
+#   fsp3  → ¿qué margen sobre el umbral tiene cada punto?
+# El valor va solo en el color; todos los marcadores miden lo mismo.  'entero'
+# marca las escalas que cuentan cosas: una molécula no aparece en 2.5 runs.
 GRID_COLOR_MODES = {
     'nruns': dict(col='n_runs_appeared', cmap=_cmap_recortada('plasma', 0.72),
                   label='Nº de ejecuciones en que aparece', entero=True),
@@ -1460,12 +1403,9 @@ GRID_COLOR_MODES = {
 
 
 def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
-    """Genera UNA imagen con un panel por serie (los 5 separados, no
-    superpuestos), mostrando solo el frente de Pareto QED vs SA.
-    Cada serie combina las moléculas de sus runs, elimina duplicados de
-    SMILES y recalcula el frente no-dominado global.
-
-    color_by elige qué se codifica en color (ver GRID_COLOR_MODES)."""
+    """Un panel por serie (separados, no superpuestos) con el frente QED vs SA.
+    Cada serie combina las moléculas de sus runs, deduplica por SMILES y
+    recalcula el frente.  color_by elige qué va en el color (GRID_COLOR_MODES)."""
     if color_by not in GRID_COLOR_MODES:
         raise ValueError(f"color_by debe ser uno de {list(GRID_COLOR_MODES)}")
     modo = GRID_COLOR_MODES[color_by]
@@ -1497,12 +1437,10 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         return
 
     if color_by == 'fsp3':
-        # Escala absoluta para que los paneles se comparen entre sí, pero
-        # arrancando en el umbral y no en 0: el frente publicado es factible por
-        # construcción, así que el tramo [0, FSP3_MIN) de la rampa no puede
-        # recibir ningún punto y gastarlo aplanaría todo el frente en un mismo
-        # tono.  El tope sale de los datos —con Fsp3 fuera de los objetivos nadie
-        # llega cerca de 1— acotado por abajo para que la banda nunca degenere.
+        # Escala absoluta para comparar paneles, pero arrancando en el umbral: el
+        # tramo [0, FSP3_MIN) no puede recibir puntos y gastarlo aplanaría todo
+        # el frente en un mismo tono.  El tope sale de los datos, acotado por
+        # abajo para que la banda no degenere.
         fsp3_max = max((p['fsp3'].max() for _, p, _ in paretos), default=1.0)
         norm = mcolors.Normalize(vmin=FSP3_MIN,
                                  vmax=max(float(fsp3_max), FSP3_MIN + 0.1))
@@ -1570,21 +1508,16 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
 
 
 def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
-    """Curvas de convergencia de IGD+ y ε+ por generación, SIN re-entrenar.
+    """Curvas de IGD+ y ε+ por generación, SIN re-entrenar.
 
-    Reconstruye el frente no-dominado de cada generación a partir de
-    all_molecules.csv.gz (que guarda la población completa por gen) y mide
-    los indicadores contra el frente de referencia combinado pf_F.
-    Promedia sobre todas las runs de cada serie y guarda las curvas en CSV.
+    Reconstruye el frente de cada generación desde all_molecules.csv.gz y lo mide
+    contra el frente de referencia pf_F, promediando sobre las runs.
 
-    Solo compiten las moléculas FACTIBLES, igual que en el frente final que
-    publica utils_mo.build_pareto.  El log crudo sí trae las infactibles, y
-    dejarlas entrar mediría la curva contra un frente por generación que incluye
-    soluciones que violan el umbral, mientras el frente de referencia se armó
-    solo con factibles: los indicadores quedarían comparando dos poblaciones
-    distintas y la curva bajaría por admitir lo inadmisible.
+    Solo compiten las FACTIBLES, igual que utils_mo.build_pareto.  El log crudo
+    trae infactibles, y dejarlas entrar compararía un frente por generación que
+    viola el umbral contra un frente de referencia que no.
 
-    gen_stride submuestrea generaciones (1 = todas) para acelerar el cómputo.
+    gen_stride submuestrea generaciones (1 = todas).
 
     Devuelve {col: {label: (gens, vals_suavizadas)}} para 'igd_plus' y 'epsilon'.
     """
@@ -1847,12 +1780,11 @@ def run_algorithm_comparison(algorithms, finalistas):
 
 
 def run_operator_comparison(algorithms, winners_dir):
-    """Comparación de variantes de operadores, un reporte por algoritmo, sobre
-    las configuraciones que ganaron su bloque en la etapa 1
-    (winners/<ALG>/<combo>/<config>/), cada una con sus propios hiperparámetros.
+    """Un reporte por algoritmo comparando sus cuatro combos de operadores, sobre
+    las configuraciones que ganaron su bloque en la etapa 1.
 
-    La salida va a plots/operadores/<ALG>/winners/: un nivel más abajo que las
-    tablas de analisis.py etapa2, que escribe en plots/operadores/<ALG>/."""
+    Sale a plots/operadores/<ALG>/winners/, un nivel debajo de las tablas de
+    analisis.py etapa2."""
     if not os.path.isdir(winners_dir):
         print(f"No existe {winners_dir}")
         return
