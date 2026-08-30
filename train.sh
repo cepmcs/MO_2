@@ -3,7 +3,7 @@
 #SBATCH --output=logs/mo_%j.out
 #SBATCH --error=logs/mo_%j.err
 #SBATCH --partition=gpu
-#SBATCH --nodelist=gpu1          # nodo GPU (quítalo para que SLURM elija en la partición)
+#SBATCH --nodelist=gpu2          # nodo GPU (quítalo para que SLURM elija en la partición)
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16       # el nodo entero (16 cores)
