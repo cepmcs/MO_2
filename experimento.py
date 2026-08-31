@@ -246,7 +246,7 @@ def _parser(alg=None, ayuda=True):
     """Perillas comunes y, si ya se sabe el algoritmo, las de su familia.
 
     Se construye dos veces: primero sin ayuda, para averiguar el --alg.  Así una
-    perilla ajena es error y no silencio."""
+    perilla ajena es error."""
     spec = ALGORITMOS[alg] if alg else None
     ap = argparse.ArgumentParser(
         prog="experimento.py", add_help=ayuda,
