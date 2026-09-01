@@ -47,9 +47,14 @@ from .comun import (
 #   parsea train.sh para armar winners/ en el cluster (ver su paso 2).
 # ═══════════════════════════════════════════════════════════════════════════
 
-# CMOPSO no tiene operadores; se colorea por el tamaño del archivo de elites, la
-# perilla propia de su selección de líderes.
-ELITE_COLORS = {5: '#9ECAE1', 10: '#4292C6', 25: '#08519C'}
+# CMOPSO no tiene operadores, así que su panel se colorea por una perilla propia.
+# Va el tope de velocidad y no el archivo de elites: sobre las 81 configuraciones,
+# vel_rate explica el 45% de la varianza del hipervolumen y el 83% de la de la
+# validez, mientras que elite_size explica 0.4% y 0.02%.  Coloreado por elites el
+# panel salía sin estructura —los tres tonos mezclados a lo largo de toda la
+# columna—, que es justamente lo que la figura tiene que dejar ver.
+# Rampa secuencial porque el factor es ordinal: más claro, menos velocidad.
+VEL_COLORS = {0.1: '#9ECAE1', 0.2: '#4292C6', 0.35: '#08519C'}
 
 
 # columna: (etiqueta, higher_better)
@@ -173,14 +178,14 @@ def _panel_seleccion(ax, g, alg, metric, chosen, sub_factors, por_combo):
                + m.index.get_level_values('mutation').astype(str))
         groups = [(c, OPERATOR_COLORS[c]) for c in HP_COMBOS if c in set(key)]
     else:
-        # elite_size llega del CSV como float (la columna trae NaN en las filas
-        # de los GA y pandas la promueve), así que la clave del mapa de colores
-        # se busca por su valor entero.
-        key = m.index.get_level_values('elite_size')
-        presentes = {int(v) for v in set(key)}
-        groups = [(e, c) for e, c in sorted(ELITE_COLORS.items())
+        # vel_rate llega del CSV como float; se redondea antes de indexar el
+        # mapa de colores para no depender de la representación exacta con que
+        # pandas parseó 0.35.
+        key = pd.Index([round(float(v), 4)
+                        for v in m.index.get_level_values('vel_rate')])
+        presentes = set(key)
+        groups = [(e, c) for e, c in sorted(VEL_COLORS.items())
                   if e in presentes]
-        key = pd.Index([int(v) for v in key])
 
     for name, color in groups:
         sel = key == name
@@ -194,7 +199,8 @@ def _panel_seleccion(ax, g, alg, metric, chosen, sub_factors, por_combo):
             lv['crossover'], lv['mutation'] = name.split('/')
         r = m.loc[tuple(lv[f] for f in fs)]
         color = (OPERATOR_COLORS[name] if por_combo
-                 else ELITE_COLORS.get(int(lv.get('elite_size', -1)), '#333333'))
+                 else VEL_COLORS.get(round(float(lv.get('vel_rate', -1)), 4),
+                                     '#333333'))
         ax.scatter(r['validity'], r[metric], s=170, color=color,
                    edgecolors='black', linewidths=1.6, zorder=4)
 
@@ -214,9 +220,9 @@ def _celda_leyenda(ax, con_operadores, con_pso):
         bloques.append(('Operadores (algoritmos genéticos)',
                         [punto(OPERATOR_COLORS[c], label=c) for c in HP_COMBOS]))
     if con_pso:
-        bloques.append((f'{PSO_ALG}: archivo de elites',
-                        [punto(c, label=f'elite = {e:g}')
-                         for e, c in sorted(ELITE_COLORS.items())]))
+        bloques.append((f'{PSO_ALG}: tope de velocidad',
+                        [punto(c, label=f'$v_{{\\max}}$ = {e:g}')
+                         for e, c in sorted(VEL_COLORS.items())]))
     bloques.append((None, [plt.Line2D([], [], marker='o', linestyle='none',
                                       markersize=13, markerfacecolor='#bbbbbb',
                                       markeredgecolor='black',

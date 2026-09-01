@@ -47,7 +47,7 @@ PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
 # Paleta de colores distinguibles.  Para algoritmos se usa el nombre como clave;
 # para operadores (claves no presentes aquí) se cae al ciclo DEFAULT por índice.
 COLORS = {
-    'NSGA2':   '#000000',   # Negro
+    'NSGA2':   '#E69F00',   # Ámbar (Okabe-Ito)
     'CMOPSO':  '#FF0000',   # Rojo 100%
     'AGEMOEA': '#008000',   # Verde
     'MOEAD':   '#1F77B4',   # Azul
