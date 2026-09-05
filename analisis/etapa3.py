@@ -376,9 +376,10 @@ def moleculas(args):
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
-            # Solo los dos objetivos.  Fsp3 es el constraint y el título ya dice
-            # que todas lo cumplen, así que en el pie no discriminaba nada.
-            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}",
+            # Los dos objetivos más Fsp3: no seleccionó nada, pero deja ver con
+            # cuánto margen sobre el umbral quedó cada estructura dibujada.
+            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
+                          f"·  Fsp3 {m['fsp3']:.2f}",
                           fontsize=9, labelpad=3)
             if j == 0:
                 ax.set_ylabel(DISPLAY.get(alg, alg), fontsize=13,

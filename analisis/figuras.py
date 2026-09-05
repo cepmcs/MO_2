@@ -872,10 +872,11 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
-            # Solo los dos objetivos.  Fsp3 es el constraint y todo lo que llega
-            # al frente lo cumple, así que en el pie no discriminaba nada.
-            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}",
-                          fontsize=10, labelpad=3)
+            # Los dos objetivos más Fsp3.  Fsp3 no seleccionó nada —es el
+            # constraint y todo lo que llega al frente lo cumple— pero deja ver
+            # con cuánto margen sobre el umbral quedó cada estructura dibujada.
+            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
+                          f"·  Fsp3 {m['fsp3']:.2f}", fontsize=10, labelpad=3)
             filas.append({'algoritmo': alg, 'combo': s.label, 'puesto': j + 1,
                           'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
                           'fsp3': round(m['fsp3'], 3),
