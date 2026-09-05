@@ -28,7 +28,8 @@ from .comun import (
     rank_biserial,
 )
 from .indicadores import build_reference_front, compute_indicators_per_run
-from .figuras import GRID_COLOR_MODES, plot_frente_conjunto, plot_pareto_qed_sa_grid
+from .figuras import (GRID_COLOR_MODES, plot_frente_conjunto,
+                      plot_moleculas_operadores, plot_pareto_qed_sa_grid)
 
 
 # Los combos como nombres de directorio bajo winners/ (con guion bajo).
@@ -156,6 +157,10 @@ def analyze_operators(alg, winners_dir, out_root, decision_col):
     # la responde mejor el frente conjunto de más abajo.
     for modo in GRID_COLOR_MODES:
         plot_pareto_qed_sa_grid(series, alg, out_dir, color_by=modo)
+    # Qué química pone cada combo a lo largo del frente.  Las tablas comparan
+    # números sobre el frente entero; esto muestra las estructuras y dónde deja
+    # de haberlas.
+    plot_moleculas_operadores(series, alg, out_dir)
 
     if pf_df is not None:
         # La tabla de contribución por combo no se emite en esta etapa: lo que

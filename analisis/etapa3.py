@@ -10,15 +10,11 @@ Tres cosas que se leen juntas:
   moleculas   las de mayor QED del frente de cada algoritmo, sobre ese mismo pool.
 """
 
-import io
 import os
 
-import matplotlib.image as mpimg
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from rdkit import Chem
-from rdkit.Chem.Draw import rdMolDraw2D
 
 from .comun import (
     ALGORITHM_ORDER,
@@ -53,7 +49,7 @@ from .indicadores import (
     compute_indicators_per_run,
     write_contribucion_table,
 )
-from .figuras import plot_frente_conjunto
+from .figuras import SA_MAX, plot_frente_conjunto, render, top_por_qed
 from .etapa2 import COMBO_DIRS, MUT_STD
 
 
@@ -315,9 +311,9 @@ N_MOLECULAS = 5      # por algoritmo
 
 
 # Ventana de interés farmacológico.  Ya no lleva banda de Fsp3: el constraint la
-# garantiza.  Queda el corte de SA, que desempata entre las decenas de moléculas
-# empatadas en el QED máximo.
-SA_MAX = 3.0
+# garantiza.  Queda el corte de SA (figuras.SA_MAX), que desempata entre las
+# decenas de moléculas empatadas en el QED máximo y lo comparte con la figura de
+# moléculas por operador.
 
 
 
@@ -343,31 +339,10 @@ def load_front(alg, winners_dir, finalistas_dir):
 
 
 def pick(front, n=N_MOLECULAS):
-    """Las n moléculas de mayor QED con SA por debajo de SA_MAX.
-
-    Ordenar solo por QED no alcanza: hay decenas empatadas en QED ≈ 0.948, así
-    que manda el desempate por SA.  Si el corte deja el frente vacío se cae al
-    frente completo.
-    """
-    dentro = front[front['sa'] < SA_MAX]
-    if dentro.empty:
-        dentro = front
-    return dentro.nlargest(n, 'qed').reset_index(drop=True)
-
-
-
-def render(smiles, size=(420, 320)):
-    """PNG de la estructura, como array para matplotlib."""
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return None
-    d = rdMolDraw2D.MolDraw2DCairo(*size)
-    opts = d.drawOptions()
-    opts.clearBackground = False
-    opts.bondLineWidth = 2
-    rdMolDraw2D.PrepareAndDrawMolecule(d, mol)
-    d.FinishDrawing()
-    return mpimg.imread(io.BytesIO(d.GetDrawingText()), format='png')
+    """Las n moléculas de mayor QED con SA por debajo de SA_MAX, desempatando por
+    SA entre las que comparten QED.  Mismo criterio que la figura de moléculas
+    por operador: ver figuras.top_por_qed."""
+    return top_por_qed(front, n).reset_index(drop=True)
 
 
 
@@ -401,10 +376,9 @@ def moleculas(args):
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
-            # Los dos objetivos más Fsp3: no seleccionó nada, pero deja ver con
-            # cuánto margen sobre el umbral quedó cada estructura dibujada.
-            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
-                          f"·  Fsp3 {m['fsp3']:.2f}",
+            # Solo los dos objetivos.  Fsp3 es el constraint y el título ya dice
+            # que todas lo cumplen, así que en el pie no discriminaba nada.
+            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}",
                           fontsize=9, labelpad=3)
             if j == 0:
                 ax.set_ylabel(DISPLAY.get(alg, alg), fontsize=13,

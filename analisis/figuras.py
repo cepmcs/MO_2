@@ -1,19 +1,24 @@
 """
-Figuras: convergencia, boxplots, frentes de Pareto y el grid QED-SA.
+Figuras: convergencia, boxplots, frentes de Pareto, el grid QED-SA y las
+estructuras moleculares.
 
 El eje x de la convergencia son SIEMPRE evaluaciones, nunca generaciones: es el
 único a igual presupuesto, porque conviven repartos de 200×500 y 100×1000.
 """
 
 import glob
+import io
 import math
 import os
 
 import matplotlib.colors as mcolors
+import matplotlib.image as mpimg
 import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from rdkit import Chem
+from rdkit.Chem.Draw import rdMolDraw2D
 
 from .comun import (
     FSP3_MIN,
@@ -730,6 +735,169 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
+
+
+
+# ─── Estructuras moleculares ────────────────────────────────────────────────
+
+# Lienzo de cada estructura, en px.  Las celdas vacías se dibujan con estos
+# mismos límites para que todos los recuadros de la grilla midan igual.
+LIENZO_MOL = (420, 320)
+
+
+
+def render(smiles, size=LIENZO_MOL):
+    """PNG de la estructura, como array para matplotlib."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    d = rdMolDraw2D.MolDraw2DCairo(*size)
+    opts = d.drawOptions()
+    opts.clearBackground = False
+    opts.bondLineWidth = 2
+    rdMolDraw2D.PrepareAndDrawMolecule(d, mol)
+    d.FinishDrawing()
+    return mpimg.imread(io.BytesIO(d.GetDrawingText()), format='png')
+
+
+
+# Corte de sintetizabilidad de las figuras de moléculas.  Ordenar por QED sin él
+# no alcanza: decenas de moléculas empatan en el techo (~0.948) y la de más QED
+# puede costar 3.5 de SA.  Lo comparte la figura de moléculas representativas de
+# la etapa 3, para que las dos usen el mismo corte.
+SA_MAX = 3.0
+
+
+# Cuántas moléculas se dibujan por combinación de operadores.
+N_MOLECULAS_OP = 2
+
+
+# Decimales con que el pie de las figuras publica el QED.  El desempate usa los
+# mismos: si dos estructuras se ven con el mismo QED en la figura, la que salga
+# tiene que ser la de menor SA.
+QED_DECIMALES = 3
+
+
+# Tamaño de cada celda de la grilla, en pulgadas.  Fijo, para que la figura no
+# encoja las estructuras al sumar columnas.  Sigue la proporción de LIENZO_MOL.
+CELDA_MOL = (4.2, 3.4)
+
+
+
+def _frente_propio(serie):
+    """Frente no dominado de una serie sobre la unión de sus runs, deduplicado
+    por SMILES."""
+    df = load_pareto_molecules(serie.pop_dir)
+    if df.empty:
+        return pd.DataFrame()
+    return _compute_non_dominated(df.drop_duplicates(subset='smiles'))
+
+
+
+def top_por_qed(frente, n, sa_max=SA_MAX):
+    """Las n moléculas de mayor QED del frente, entre las de SA < sa_max.
+
+    Ordenar solo por QED no alcanza: decenas empatan en el techo (~0.948) con SA
+    que va de 1.7 a 3.5, y cuál queda arriba lo decidiría el orden en que vienen
+    las filas.  Dentro de un mismo QED —redondeado a los decimales que muestra el
+    pie— gana la de menor SA: con el otro objetivo igualado, es estrictamente la
+    mejor de las empatadas.
+
+    Si el corte de SA deja el frente vacío se cae al frente completo."""
+    if frente.empty:
+        return frente
+    dentro = frente[frente['sa'] < sa_max]
+    base = dentro if not dentro.empty else frente
+    return (base.assign(_qed=base['qed'].round(QED_DECIMALES))
+                .sort_values(['_qed', 'sa'], ascending=[False, True])
+                .drop(columns='_qed')
+                .head(n))
+
+
+
+def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
+                              sa_max=SA_MAX):
+    """Las n moléculas de mayor QED del frente de cada combinación de operadores,
+    entre las de SA < sa_max.  Una COLUMNA por combo: la comparación es entre
+    combos, y leerlos de izquierda a derecha es lo mismo que hace el resto de las
+    figuras de la etapa (leyendas, boxplots y tablas los ordenan así).
+
+    Es una figura ILUSTRATIVA, no comparativa.  Por debajo de SA 3 casi todo el
+    frente empata en el techo de QED, así que cuál molécula sale la decide la
+    semilla y no el operador: cada elegida aparece en 1 de las 20 corridas, y
+    salen 29 estructuras distintas en 32 celdas.  Lo que compara operadores son
+    las tablas de la etapa 2, y el pie de figura del documento no debería
+    prometer más que «esto es lo que produce cada combo».  El CSV publica la
+    columna 'semillas' por si hace falta citar ese número.
+
+    Se probaron y descartaron: el extremo de SA mínima (PCX lo alcanza con
+    alcanos lineales, que no se quieren en el documento) y el punto de compromiso
+    más cercano al ideal (reproducible, 9 de 20 semillas, pero da la misma
+    molécula en 9 de las 16 celdas)."""
+    frentes = {s.label: _frente_propio(s) for s in series}
+    frentes = {lab: f for lab, f in frentes.items()
+               if not f.empty and {'qed', 'sa', 'fsp3'}.issubset(f.columns)}
+    if not frentes:
+        print("  ⚠ Sin frentes para la figura de moléculas por operador")
+        return
+
+    orden = [s for s in series if s.label in frentes]
+    ancho, alto = CELDA_MOL
+    fig, axes = plt.subplots(n, len(orden), squeeze=False,
+                             figsize=(ancho * len(orden), alto * n))
+    fig.patch.set_facecolor('white')
+
+    filas = []
+    for i, s in enumerate(orden):
+        frente = frentes[s.label]
+        elegidas = top_por_qed(frente, n, sa_max)
+        # Solo para el CSV: en cuántas de las semillas apareció cada elegida.
+        crudo = load_pareto_molecules(s.pop_dir)
+        semillas = (crudo.groupby('smiles')['run'].nunique() if not crudo.empty
+                    else pd.Series(dtype=int))
+
+        for j in range(n):
+            # El combo va en la columna i, las n moléculas bajan por sus filas.
+            ax = axes[j][i]
+            ax.set_xticks([]); ax.set_yticks([])
+            for sp in ax.spines.values():
+                sp.set_edgecolor('#cccccc')
+            if j == 0:
+                ax.set_title(s.label, fontsize=12, fontweight='bold', pad=8)
+            if j >= len(elegidas):
+                ax.set_visible(False)
+                continue
+
+            m = elegidas.iloc[j]
+            img = render(m['smiles'])
+            if img is not None:
+                ax.imshow(img)
+            # Solo los dos objetivos.  Fsp3 es el constraint y todo lo que llega
+            # al frente lo cumple, así que en el pie no discriminaba nada.
+            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}",
+                          fontsize=10, labelpad=3)
+            filas.append({'algoritmo': alg, 'combo': s.label, 'puesto': j + 1,
+                          'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
+                          'fsp3': round(m['fsp3'], 3),
+                          'semillas': int(semillas.get(m['smiles'], 0)),
+                          'smiles': m['smiles']})
+
+    fig.suptitle(f'Frente por combinación de operadores — {alg}\n'
+                 f'Las {n} moléculas de mayor QED con SA < {sa_max:g}',
+                 fontsize=13, fontweight='bold', y=0.998)
+    # h_pad explícito: el imshow fija el aspecto de la celda, así que el eje
+    # queda más alto que la estructura y su pie se mete en el recuadro de abajo.
+    plt.tight_layout(rect=[0, 0, 1, 0.95], h_pad=2.5)
+    fname = f"moleculas_operadores_{alg}.png"
+    plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight',
+                facecolor='white')
+    plt.close(fig)
+    print(f"  ✓ {fname}")
+
+    if filas:
+        csv = os.path.join(output_dir, f"moleculas_operadores_{alg}.csv")
+        pd.DataFrame(filas).to_csv(csv, index=False)
+        print(f"  ✓ moleculas_operadores_{alg}.csv")
 
 
 
