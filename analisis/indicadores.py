@@ -350,8 +350,16 @@ def _atribucion_por_origen(series, pf_df, grupo_de):
 def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
     """Curvas de IGD+ y ε+ por generación, SIN re-entrenar.
 
-    Reconstruye el frente de cada generación desde all_molecules.csv.gz y lo mide
-    contra el frente de referencia pf_F, promediando sobre las runs.
+    Mide el frente ACUMULADO hasta cada generación, no el de esa generación
+    sola.  El instantáneo medía otra cosa y engañaba: son 4-9 moléculas contra
+    las ~35 del frente de referencia, y al converger la población se apiña y deja
+    de cubrirlo, así que la curva SUBÍA.  Peor, su último punto no coincidía con
+    el IGD+ de la tabla —que sale de molecules.csv, o sea del frente acumulado— y
+    ordenaba los algoritmos al revés: NSGA-II es el mejor de la tabla (0.018) y
+    salía último en la curva (0.101).  Con el acumulado la curva baja y su último
+    punto es exactamente el valor de la tabla.
+
+    Reconstruye desde all_molecules.csv.gz y promedia sobre las runs.
 
     Solo compiten las FACTIBLES, igual que utils_mo.build_pareto.  El log crudo
     trae infactibles, y dejarlas entrar compararía un frente por generación que
@@ -392,15 +400,25 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
             if df.empty:
                 continue
 
-            gens = sorted(df['gen'].unique())
-            gens = gens[::gen_stride]
-            rows = []
-            for g in gens:
-                df_g = df[df['gen'] == g]
-                front = _compute_non_dominated(df_g)
-                if front.empty:
+            # El acumulado se construye incremental —no_dom(acumulado previo +
+            # evaluaciones de la generación)— y no recalculando sobre todo lo
+            # visto: con las ~100k evaluaciones de una corrida el
+            # NonDominatedSorting de pymoo arma una matriz n×n y se va a OOM (el
+            # mismo motivo por el que utils_mo tiene su propio filtro de Kung).
+            # Así nunca hay más de unos cientos de filas en juego.
+            ultima = df['gen'].max()
+            rows, acum = [], None
+            for k, (g, df_g) in enumerate(df.groupby('gen', sort=True)):
+                nuevo = (df_g[OBJECTIVES] if acum is None else
+                         pd.concat([acum, df_g[OBJECTIVES]], ignore_index=True))
+                acum = _compute_non_dominated(nuevo.drop_duplicates())
+                # La última generación va siempre: es la que tiene que cerrar con
+                # el valor que publica la tabla de indicadores por run.
+                if k % gen_stride and g != ultima:
                     continue
-                F_g = _normalize_F(_df_to_F(front), ideal, scale)
+                if acum.empty:
+                    continue
+                F_g = _normalize_F(_df_to_F(acum), ideal, scale)
                 rows.append({
                     'gen': g,
                     'igd_plus': float(igd_plus_ind(F_g)),
