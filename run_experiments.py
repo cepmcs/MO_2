@@ -28,17 +28,27 @@ PYTHON = sys.executable   # el python del entorno actual
 EXPERIMENTO = "experimento.py"
 
 # ─── Espacio de hiperparámetros ───────────────────────────────────────────────
-POP_GEN   = [(100, 1000), (200, 500), (400, 250)]   # los 3 = 100.000 evaluaciones
+# Ya no es un barrido: salvo la probabilidad de mutación, todo queda fijo en el
+# valor que ganó el grid anterior.
+POP_GEN   = [(100, 1000), (200, 500)]   # los 2 = 100.000 evaluaciones
 
-# GA: probabilidad de cruce, de mutación por-gen y combos de operadores.
-CX_PROBS  = [0.7, 0.9, 1.0]
-MUT_PROBS = [0.004, 0.012, 0.031]
+# GA: probabilidad de mutación por-gen y combos de operadores.
+MUT_PROBS = [0.1, 0.05]
 OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
 
-# CMOPSO: sus propias perillas.  La mutación se barre con los mismos valores que
-# los GA para que sea comparable.
-ELITE_SIZES = [5, 10, 25]
-VEL_RATES   = [0.1, 0.2, 0.35]
+# Probabilidad de cruce por algoritmo y familia: la que ganó el grid anterior
+# restringido a estos dos repartos.  Ya no se barre.
+CX_PROB = {
+    ('NSGA2',   'pcx'): 1.0, ('NSGA2',   'sbx'): 0.9,
+    ('NSGA3',   'pcx'): 1.0, ('NSGA3',   'sbx'): 0.9,
+    ('MOEAD',   'pcx'): 1.0, ('MOEAD',   'sbx'): 1.0,
+    ('AGEMOEA', 'pcx'): 1.0, ('AGEMOEA', 'sbx'): 1.0,
+}
+
+# CMOPSO: sus perillas quedan en la mejor del grid anterior y solo varía la
+# mutación, con los mismos valores que los GA para que sea comparable.
+ELITE_SIZES = [10]
+VEL_RATES   = [0.1]
 
 GA_ALGS = ALGS_GA
 
@@ -51,12 +61,12 @@ def build_tasks(n_runs):
     for alg in GA_ALGS:
         for pop, gen in POP_GEN:
             for cx, mut in OPERATORS:
-                for cxp in CX_PROBS:
-                    for mutp in MUT_PROBS:
-                        for run in range(n_runs):
-                            tasks.append(dict(kind="ga", alg=alg,
-                                              pop=pop, gen=gen, cx=cx, mut=mut,
-                                              cxp=cxp, mutp=mutp, run=run))
+                for mutp in MUT_PROBS:
+                    for run in range(n_runs):
+                        tasks.append(dict(kind="ga", alg=alg,
+                                          pop=pop, gen=gen, cx=cx, mut=mut,
+                                          cxp=CX_PROB[(alg, cx)], mutp=mutp,
+                                          run=run))
     for pop, gen in POP_GEN:
         for es in ELITE_SIZES:
             for mutp in MUT_PROBS:
@@ -184,7 +194,7 @@ def main():
     tasks   = build_tasks(args.n_runs)
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
-    n_ga    = len(GA_ALGS) * len(POP_GEN) * len(OPERATORS) * len(CX_PROBS) * len(MUT_PROBS)
+    n_ga    = len(GA_ALGS) * len(POP_GEN) * len(OPERATORS) * len(MUT_PROBS)
     n_cmopso = len(POP_GEN) * len(ELITE_SIZES) * len(MUT_PROBS) * len(VEL_RATES)
 
     print("=" * 54)
