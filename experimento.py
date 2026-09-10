@@ -24,12 +24,11 @@ from pymoo.algorithms.moo.cmopso import CMOPSO
 from pymoo.algorithms.moo.moead import ParallelMOEAD, default_decomp
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.moo.nsga3 import NSGA3
-from pymoo.operators.mutation.pm import PM
 from pymoo.optimize import minimize
 from pymoo.util.misc import parameter_less
 
 from utils_mo import (
-    load_model, load_seed_mus, load_train_smiles, set_device,
+    MUTATIONS, load_model, load_seed_mus, load_train_smiles, set_device,
     MolecularLatentProblem, NormalizedMolecularLatentProblem,
     LatentSampling, GenerationTracker,
     postprocess_run, consolidate_all, get_operators, get_ref_dirs,
@@ -130,7 +129,8 @@ def _cmopso(args, sampling, operadores, ref_dirs):
     algoritmo = CMOPSO(pop_size=args.pop_size, elite_size=args.elite_size,
                        max_velocity_rate=args.vel_rate, sampling=sampling)
     # Se pisa la mutación para barrer la misma perilla que los GA.
-    algoritmo.mutation = PM(prob=1.0, prob_var=args.mut_prob)
+    algoritmo.mutation = MUTATIONS[args.mutation](args.mut_prob,
+                                                  args.pop_size * args.n_gen)
     return algoritmo
 
 
@@ -172,11 +172,13 @@ def _perillas(alg, args, latent_dim):
     """(run_dir, label, hp, mut_prob) según la familia."""
     if ALGORITMOS[alg].familia == 'pso':
         run_dir = cmopso_run_dir(args.pop_size, args.n_gen, args.elite_size,
-                                 args.mut_prob, args.vel_rate, args.run_id)
-        label = (f"{alg}[e{args.elite_size:g}_mut{args.mut_prob:g}"
+                                 args.mut_prob, args.vel_rate, args.run_id,
+                                 mutation=args.mutation)
+        label = (f"{alg}[e{args.elite_size:g}_{args.mutation}{args.mut_prob:g}"
                  f"_vel{args.vel_rate:g}]")
-        hp = {'elite_size': args.elite_size, 'mut_prob': args.mut_prob,
-              'vel_rate': args.vel_rate, 'fsp3_min': FSP3_MIN}
+        hp = {'elite_size': args.elite_size, 'mutation': args.mutation,
+              'mut_prob': args.mut_prob, 'vel_rate': args.vel_rate,
+              'fsp3_min': FSP3_MIN}
         return run_dir, label, hp, args.mut_prob
 
     mut_prob = args.mut_prob if args.mut_prob is not None else 1.0 / latent_dim
@@ -212,8 +214,8 @@ def correr(alg, args):
     print(f"[{label}] Iniciando...", flush=True)
 
     ref_dirs = get_ref_dirs(args.pop_size) if spec.ref_dirs else None
-    operadores = (get_operators(args.crossover, args.mutation,
-                                args.cx_prob, mut_prob)
+    operadores = (get_operators(args.crossover, args.mutation, args.cx_prob,
+                                mut_prob, args.pop_size * args.n_gen)
                   if spec.familia == 'ga' else None)
 
     clase_problema = (NormalizedMolecularLatentProblem if spec.normalizado
@@ -271,7 +273,7 @@ def _parser(alg=None, ayuda=True):
 
     if spec.familia == 'ga':
         ap.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
-        ap.add_argument('--mutation', choices=['pm', 'gauss'], default='pm')
+        ap.add_argument('--mutation', choices=list(MUTATIONS), default='pm')
         ap.add_argument('--cx_prob', type=float, default=0.9,
                         help="Probabilidad de cruce (por apareamiento).")
         ap.add_argument('--mut_prob', type=float, default=None,
@@ -279,6 +281,7 @@ def _parser(alg=None, ayuda=True):
     else:
         ap.add_argument('--elite_size', type=int, default=10,
                         help="Tamaño al que se poda el archivo de elites.")
+        ap.add_argument('--mutation', choices=['pm', 'pm_adapt'], default='pm')
         ap.add_argument('--mut_prob', type=float, default=0.031,
                         help="Probabilidad de mutación POR-GEN (prob_var), como "
                              "en el grid GA.")

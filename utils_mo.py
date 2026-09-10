@@ -13,6 +13,7 @@ import pandas as pd
 from rdkit import Chem, RDLogger
 from rdkit.Chem import QED as QED_module, rdMolDescriptors
 from pymoo.core.problem import Problem
+from pymoo.core.variable import get
 from pymoo.core.sampling import Sampling
 from pymoo.core.callback import Callback
 from pymoo.indicators.hv import HV
@@ -58,15 +59,34 @@ CROSSOVERS = {
     'sbx': lambda cx_prob: SBX(prob=cx_prob),
     'pcx': lambda cx_prob: PCX(prob=cx_prob),
 }
+MUT_MIN = 0.001     # piso de las mutaciones adaptativas
+
+
+def adaptativa(mutacion, p_max, n_evals):
+    """Le cambia a una mutación de pymoo de dónde saca su probabilidad por-gen:
+    en vez de un valor fijo, baja de p_max a MUT_MIN según cuánto del presupuesto
+    se gastó.  El avance sale de problem.eval_log, que el problema ya lleva y que
+    pymoo le pasa a la mutación en los cinco algoritmos (el número de generación
+    solo se lo pasa a tres)."""
+    def prob_var(problem, **kwargs):
+        frac = min(len(problem.eval_log) / n_evals, 1.0)
+        return get(p_max - (p_max - MUT_MIN) * frac, **kwargs)
+    mutacion.get_prob_var = prob_var
+    return mutacion
+
+
 MUTATIONS = {
-    'pm':    lambda mut_prob: PM(prob=1.0, prob_var=mut_prob),
-    'gauss': lambda mut_prob: GaussianMutation(prob=1.0, prob_var=mut_prob, sigma=0.1),
+    'pm':          lambda p, n: PM(prob=1.0, prob_var=p),
+    'gauss':       lambda p, n: GaussianMutation(prob=1.0, prob_var=p, sigma=0.1),
+    'pm_adapt':    lambda p, n: adaptativa(PM(prob=1.0), p, n),
+    'gauss_adapt': lambda p, n: adaptativa(GaussianMutation(prob=1.0, sigma=0.1), p, n),
 }
 
 
-def get_operators(crossover, mutation, cx_prob, mut_prob):
-    """(crossover, mutation) de pymoo: cx_prob por apareamiento, mut_prob por-gen."""
-    return CROSSOVERS[crossover](cx_prob), MUTATIONS[mutation](mut_prob)
+def get_operators(crossover, mutation, cx_prob, mut_prob, n_evals=None):
+    """(crossover, mutation) de pymoo: cx_prob por apareamiento, mut_prob por-gen.
+    n_evals es el presupuesto, que solo usan las mutaciones adaptativas."""
+    return CROSSOVERS[crossover](cx_prob), MUTATIONS[mutation](mut_prob, n_evals)
 
 
 def _slug(x):
@@ -84,11 +104,11 @@ def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
 
 
 def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
-                   results_dir=None):
+                   results_dir=None, mutation='pm'):
     """Directorio de una run CMOPSO: results/CMOPSO/<config>/run_k."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     cfg = (f"pop{pop_size}_gen{n_gen}_e{_slug(elite_size)}"
-           f"_mut{_slug(mut_prob)}_vel{_slug(vel_rate)}")
+           f"_{mutation}{_slug(mut_prob)}_vel{_slug(vel_rate)}")
     return os.path.join(base, "CMOPSO", cfg, f"run_{run_id + 1:02d}")
 
 

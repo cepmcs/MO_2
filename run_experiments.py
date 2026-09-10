@@ -33,8 +33,12 @@ EXPERIMENTO = "experimento.py"
 POP_GEN   = [(100, 1000), (200, 500)]   # los 2 = 100.000 evaluaciones
 
 # GA: probabilidad de mutación por-gen y combos de operadores.
+# 0.1 y 0.05 fijas; con las mutaciones *_adapt, 0.05 es el arranque y baja hasta
+# utils_mo.MUT_MIN.  La combinación (0.1, adaptativa) no la pidieron.
 MUT_PROBS = [0.1, 0.05]
 OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
+ADAPTATIVAS = [("sbx", "pm_adapt"), ("sbx", "gauss_adapt"),
+               ("pcx", "pm_adapt"), ("pcx", "gauss_adapt")]
 
 # Probabilidad de cruce por algoritmo y familia: la que ganó el grid anterior
 # restringido a estos dos repartos.  Ya no se barre.
@@ -60,8 +64,8 @@ def build_tasks(n_runs):
     tasks = []
     for alg in GA_ALGS:
         for pop, gen in POP_GEN:
-            for cx, mut in OPERATORS:
-                for mutp in MUT_PROBS:
+            for cx, mut in OPERATORS + ADAPTATIVAS:
+                for mutp in (MUT_PROBS if mut in ('pm', 'gauss') else [0.05]):
                     for run in range(n_runs):
                         tasks.append(dict(kind="ga", alg=alg,
                                           pop=pop, gen=gen, cx=cx, mut=mut,
@@ -69,19 +73,20 @@ def build_tasks(n_runs):
                                           run=run))
     for pop, gen in POP_GEN:
         for es in ELITE_SIZES:
-            for mutp in MUT_PROBS:
+            for mut, mutp in [('pm', 0.1), ('pm', 0.05), ('pm_adapt', 0.05)]:
                 for vel in VEL_RATES:
                     for run in range(n_runs):
                         tasks.append(dict(kind="cmopso", alg="CMOPSO",
-                                          pop=pop, gen=gen, es=es, mutp=mutp,
-                                          vel=vel, run=run))
+                                          pop=pop, gen=gen, es=es, mut=mut,
+                                          mutp=mutp, vel=vel, run=run))
     return tasks
 
 
 def run_dir_of(t):
     """Path de la run, el mismo que arma experimento.py."""
     if t['kind'] == 'cmopso':
-        return cmopso_run_dir(t['pop'], t['gen'], t['es'], t['mutp'], t['vel'], t['run'])
+        return cmopso_run_dir(t['pop'], t['gen'], t['es'], t['mutp'], t['vel'],
+                              t['run'], mutation=t['mut'])
     return ga_run_dir(t['alg'], t['cx'], t['mut'], t['cxp'], t['mutp'],
                       t['pop'], t['gen'], t['run'])
 
@@ -94,7 +99,7 @@ def is_done(t):
 def label(t):
     cfg = f"pop{t['pop']}xgen{t['gen']}/run_{t['run'] + 1:02d}"
     if t['kind'] == 'cmopso':
-        return f"CMOPSO[e{t['es']:g}_mut{t['mutp']:g}_vel{t['vel']:g}]/{cfg}"
+        return f"CMOPSO[e{t['es']:g}_{t['mut']}{t['mutp']:g}_vel{t['vel']:g}]/{cfg}"
     return f"{t['alg']}[{t['cx']}{t['cxp']:g}+{t['mut']}{t['mutp']:g}]/{cfg}"
 
 
@@ -115,8 +120,8 @@ def run_one(t, device, threads):
            "--pop_size", str(t['pop']), "--n_gen", str(t['gen']),
            "--run_id", str(t['run']), "--device", device]
     if t['kind'] == 'cmopso':
-        cmd += ["--elite_size", str(t['es']), "--mut_prob", str(t['mutp']),
-                "--vel_rate", str(t['vel'])]
+        cmd += ["--elite_size", str(t['es']), "--mutation", t['mut'],
+                "--mut_prob", str(t['mutp']), "--vel_rate", str(t['vel'])]
     else:
         cmd += ["--crossover", t['cx'], "--mutation", t['mut'],
                 "--cx_prob", str(t['cxp']), "--mut_prob", str(t['mutp'])]
@@ -194,8 +199,10 @@ def main():
     tasks   = build_tasks(args.n_runs)
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
-    n_ga    = len(GA_ALGS) * len(POP_GEN) * len(OPERATORS) * len(MUT_PROBS)
-    n_cmopso = len(POP_GEN) * len(ELITE_SIZES) * len(MUT_PROBS) * len(VEL_RATES)
+    n_ga    = len({(x['alg'], x['pop'], x['cx'], x['mut'], x['mutp'])
+                   for x in tasks if x['kind'] == 'ga'})
+    n_cmopso = len(tasks_cfg := {(x['pop'], x['mut'], x['mutp'])
+                                 for x in tasks if x['kind'] == 'cmopso'})
 
     print("=" * 54)
     print(f"  Sensibilidad de hiperparámetros — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")
