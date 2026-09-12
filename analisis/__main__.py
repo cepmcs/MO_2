@@ -27,11 +27,13 @@ import os
 from .comun import (
     ALGORITHM_ORDER, BASELINES_DIR, FINALISTAS_DIR, METRICS_CSV, OUT_ALGORITMOS,
     OUT_BASELINES, OUT_FRENTE, OUT_HP, OUT_OPERADORES, PLOTS_DIR, RESULTADOS_DIR,
-    WINNERS_DIR, _has_runs, build_finalist_series, winner_cfg_dir,
+    OUT_TABLAS, RESULTS_DIR, WINNERS_DIR,
+    _has_runs, build_finalist_series, winner_cfg_dir,
 )
 from .figuras import _generate_report
-from .etapa1 import HP_METRICS, etapa1
-from .etapa2 import OP_INDICATORS, etapa2
+from .etapa1 import etapa1
+from .tablas_pdf import comparar_repartos, tablas_pdf
+from .etapa2 import etapa2
 from .etapa3 import MOLECULAS_OUT, etapa3, moleculas
 from .etapa4 import etapa4
 
@@ -65,28 +67,30 @@ def main():
     ap = argparse.ArgumentParser(
         description="Análisis de los experimentos multiobjetivo.")
     sub = ap.add_subparsers(dest='etapa', required=True,
-                            metavar='etapa1|etapa2|etapa3|etapa4|moleculas|figuras')
+                            metavar='etapa1|etapa2|etapa3|etapa4|moleculas|figuras|pdf')
     fmt = argparse.ArgumentDefaultsHelpFormatter
 
     p1 = sub.add_parser('etapa1', formatter_class=fmt,
-                        help="Selección de hiperparámetros por combinación de "
-                             "operadores.")
-    p1.add_argument('--csv', default=METRICS_CSV, help="CSV consolidado del grid.")
-    p1.add_argument('--out', default=OUT_HP, help="Directorio de salida.")
-    p1.add_argument('--algorithms', nargs='+', default=None,
-                    help="Algoritmos a analizar (default: todos).")
-    p1.add_argument('--metric', default='hypervolume', choices=list(HP_METRICS),
-                    help="Métrica de selección.")
+                        help="Tablas del experimento de mutación: qué mutación, "
+                             "qué reparto y los cinco algoritmos.")
+    p1.add_argument('--results', default=RESULTS_DIR, help="Raíz de las corridas.")
+    p1.add_argument('--out', default=OUT_TABLAS, help="Directorio de salida.")
+    p1.add_argument('--metric', default='hypervolume',
+                    help="Métrica que ordena los rangos.")
+    p1.add_argument('--mutacion', default=None,
+                    help="Fija la configuración del bloque 2 (default: la mejor).")
+    p1.add_argument('--reparto', default=None,
+                    help="Fija el reparto del bloque 3 (default: el mejor).")
     p1.set_defaults(func=etapa1)
 
     p2 = sub.add_parser('etapa2', formatter_class=fmt,
-                        help="Comparación de operadores por algoritmo.")
-    p2.add_argument('--winners', default=WINNERS_DIR)
-    p2.add_argument('--out', default=OUT_OPERADORES)
-    p2.add_argument('--algorithms', nargs='+', default=None)
-    p2.add_argument('--metric', default='hypervolume',
-                    choices=[c for c, _, _ in OP_INDICATORS],
-                    help="Indicador con el que se elige el combo ganador.")
+                        help="Cómo se distribuyen las soluciones en el frente.")
+    p2.add_argument('--results', default=RESULTS_DIR)
+    p2.add_argument('--out', default=os.path.join(PLOTS_DIR, 'mutacion', 'frentes'))
+    p2.add_argument('--mutacion', default='0.1', help="Configuración de mutación.")
+    p2.add_argument('--reparto', default='100x1000')
+    p2.add_argument('--algoritmo', default='NSGA2',
+                    help="Algoritmo de las comparaciones de mutación y reparto.")
     p2.set_defaults(func=etapa2)
 
     p3 = sub.add_parser('etapa3', formatter_class=fmt,
@@ -121,6 +125,20 @@ def main():
     # mismo reporte sobre los cuatro combos de cada algoritmo, a
     # plots/operadores/<ALG>/winners/; se quitó porque no se usaba y lo que
     # decide entre operadores son las tablas de la etapa 2.
+    pp = sub.add_parser('pdf', formatter_class=fmt,
+                        help="Un PDF con las dos tablas completas.")
+    pp.add_argument('--results', default=RESULTS_DIR)
+    pp.add_argument('--out', default=os.path.join(PLOTS_DIR, 'mutacion'))
+    pp.add_argument('--reparto', default='100x1000')
+    pp.set_defaults(func=tablas_pdf)
+
+    pr = sub.add_parser('pdf-repartos', formatter_class=fmt,
+                        help="PDF comparando los dos presupuestos.")
+    pr.add_argument('--results', default=RESULTS_DIR)
+    pr.add_argument('--out', default=os.path.join(PLOTS_DIR, 'mutacion'))
+    pr.add_argument('--mutacion', default='0.1')
+    pr.set_defaults(func=comparar_repartos)
+
     pf = sub.add_parser('figuras', formatter_class=fmt,
                         help="Figuras comparativas de los cinco algoritmos.")
     pf.add_argument('--algorithms', nargs='+', default=None,

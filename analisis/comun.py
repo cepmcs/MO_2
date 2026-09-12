@@ -586,6 +586,11 @@ FINALISTAS_DIR = os.path.join(RESULTADOS_DIR, "finalistas")
 
 BASELINES_DIR  = os.path.join(RESULTADOS_DIR, "baselines")
 
+# Este experimento corre a results/ y publica en plots/mutacion/.
+RESULTS_DIR    = os.path.join(ROOT_DIR, "results")
+
+OUT_TABLAS     = os.path.join(PLOTS_DIR, "mutacion")
+
 OUT_HP         = os.path.join(PLOTS_DIR, "hiperparametros")
 
 OUT_OPERADORES = os.path.join(PLOTS_DIR, "operadores")
