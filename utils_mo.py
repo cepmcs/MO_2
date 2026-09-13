@@ -83,12 +83,14 @@ def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
     return os.path.join(base, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
 
 
-def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
-                   results_dir=None):
-    """Directorio de una run CMOPSO: results/CMOPSO/<config>/run_k."""
+def cmopso_run_dir(pop_size, n_gen, elite_size, mutation, mut_prob, vel_rate,
+                   run_id, results_dir=None):
+    """Directorio de una run CMOPSO: results/CMOPSO/<config>/run_k.  La mutación
+    va en el nombre de la config (p. ej. e10_gauss0.05) y no como un nivel
+    aparte: así CMOPSO conserva la profundidad que espera el análisis."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     cfg = (f"pop{pop_size}_gen{n_gen}_e{_slug(elite_size)}"
-           f"_mut{_slug(mut_prob)}_vel{_slug(vel_rate)}")
+           f"_{mutation}{_slug(mut_prob)}_vel{_slug(vel_rate)}")
     return os.path.join(base, "CMOPSO", cfg, f"run_{run_id + 1:02d}")
 
 

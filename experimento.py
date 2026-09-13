@@ -4,7 +4,7 @@ Los cinco algoritmos de la comparación y el cuerpo de una corrida.
 Para agregar o cambiar un algoritmo se toca la tabla ALGORITMOS.  Las perillas
 dependen de la familia; --help muestra las del --alg que pases:
   ga  (NSGA2, NSGA3, MOEAD, AGEMOEA)   --crossover --mutation --cx_prob --mut_prob
-  pso (CMOPSO)                         --elite_size --mut_prob --vel_rate
+  pso (CMOPSO)                         --elite_size --mutation --mut_prob --vel_rate
 
 Corre UNA configuración por vez; el grid lo lanza run_experiments.py.
 """
@@ -24,7 +24,6 @@ from pymoo.algorithms.moo.cmopso import CMOPSO
 from pymoo.algorithms.moo.moead import ParallelMOEAD, default_decomp
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.moo.nsga3 import NSGA3
-from pymoo.operators.mutation.pm import PM
 from pymoo.optimize import minimize
 from pymoo.util.misc import parameter_less
 
@@ -32,7 +31,7 @@ from utils_mo import (
     load_model, load_seed_mus, load_train_smiles, set_device,
     MolecularLatentProblem, NormalizedMolecularLatentProblem,
     LatentSampling, GenerationTracker,
-    postprocess_run, consolidate_all, get_operators, get_ref_dirs,
+    postprocess_run, consolidate_all, get_operators, get_ref_dirs, MUTATIONS,
     ga_run_dir, cmopso_run_dir, FSP3_MIN,
 )
 
@@ -129,8 +128,9 @@ def _moead(args, sampling, operadores, ref_dirs):
 def _cmopso(args, sampling, operadores, ref_dirs):
     algoritmo = CMOPSO(pop_size=args.pop_size, elite_size=args.elite_size,
                        max_velocity_rate=args.vel_rate, sampling=sampling)
-    # Se pisa la mutación para barrer la misma perilla que los GA.
-    algoritmo.mutation = PM(prob=1.0, prob_var=args.mut_prob)
+    # Se pisa la mutación para barrer las mismas perillas que los GA: el tipo
+    # (PM o gaussiana) y la probabilidad por-gen.
+    algoritmo.mutation = MUTATIONS[args.mutation](args.mut_prob)
     return algoritmo
 
 
@@ -172,11 +172,13 @@ def _perillas(alg, args, latent_dim):
     """(run_dir, label, hp, mut_prob) según la familia."""
     if ALGORITMOS[alg].familia == 'pso':
         run_dir = cmopso_run_dir(args.pop_size, args.n_gen, args.elite_size,
-                                 args.mut_prob, args.vel_rate, args.run_id)
-        label = (f"{alg}[e{args.elite_size:g}_mut{args.mut_prob:g}"
+                                 args.mutation, args.mut_prob, args.vel_rate,
+                                 args.run_id)
+        label = (f"{alg}[e{args.elite_size:g}_{args.mutation}{args.mut_prob:g}"
                  f"_vel{args.vel_rate:g}]")
-        hp = {'elite_size': args.elite_size, 'mut_prob': args.mut_prob,
-              'vel_rate': args.vel_rate, 'fsp3_min': FSP3_MIN}
+        hp = {'elite_size': args.elite_size, 'mutation': args.mutation,
+              'mut_prob': args.mut_prob, 'vel_rate': args.vel_rate,
+              'fsp3_min': FSP3_MIN}
         return run_dir, label, hp, args.mut_prob
 
     mut_prob = args.mut_prob if args.mut_prob is not None else 1.0 / latent_dim
@@ -279,7 +281,8 @@ def _parser(alg=None, ayuda=True):
     else:
         ap.add_argument('--elite_size', type=int, default=10,
                         help="Tamaño al que se poda el archivo de elites.")
-        ap.add_argument('--mut_prob', type=float, default=0.031,
+        ap.add_argument('--mutation', choices=['pm', 'gauss'], default='pm')
+        ap.add_argument('--mut_prob', type=float, default=0.05,
                         help="Probabilidad de mutación POR-GEN (prob_var), como "
                              "en el grid GA.")
         ap.add_argument('--vel_rate', type=float, default=0.2,

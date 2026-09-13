@@ -180,7 +180,7 @@ def combos_pool(alg, winners_dir, alpha=0.05):
     Devuelve [(familia, combo)] en el orden de POOL_FAMILIAS."""
     series = build_operator_series_winners(alg, winners_dir, COMBO_DIRS)
     if not series:
-        return []          # CMOPSO: sin operadores no hay ramas que elegir
+        return []          # CMOPSO: sin cruce no hay ramas que elegir
     hv = {s.label: load_metrics(s.pop_dir).sort_values('run')['hypervolume'].values
           for s in series}
     res = compare_indicator(lambda lab, _col: hv[lab], list(hv), None)
@@ -202,7 +202,7 @@ def combos_pool(alg, winners_dir, alpha=0.05):
 
 
 def _series_pool(winners_dir, finalistas_dir):
-    """Las dos ramas de cruce de cada AG, más CMOPSO, que no tiene operadores."""
+    """Las dos ramas de cruce de cada AG, más CMOPSO, que no tiene cruce."""
     series = []
     for alg in GA_ALGS:
         # El combo va en la etiqueta y no solo la familia: desde que la mutación
@@ -320,8 +320,8 @@ N_MOLECULAS = 5      # por algoritmo
 def load_front(alg, winners_dir, finalistas_dir):
     """Frente no dominado de un algoritmo sobre las configuraciones del pool.
 
-    Para los AG son sus dos ramas de cruce juntas; CMOPSO no tiene operadores y
-    va con su única configuración."""
+    Para los AG son sus dos ramas de cruce juntas; CMOPSO no tiene cruce y va
+    con su única configuración."""
     dfs = []
     for _, combo in combos_pool(alg, winners_dir):
         cfg_dir = winner_cfg_dir(winners_dir, alg, combo)

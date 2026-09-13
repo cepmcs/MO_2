@@ -1,9 +1,9 @@
 """
 Orquestador del grid de sensibilidad de hiperparámetros.
 
-Corre las 513 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
+Corre las 594 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
 de 100.000 evaluaciones cada una: 108 por cada GA (reparto pob×gen × operadores ×
-probabilidades) más 81 de CMOPSO.  Reanudable: una run cuenta como completa si
+probabilidades) más 162 de CMOPSO.  Reanudable: una run cuenta como completa si
 existe su molecules.csv.
 
 Cada perilla barrida queda en el path (results/<ALG>/<slug>/run_k) y como columna
@@ -32,13 +32,14 @@ POP_GEN   = [(100, 1000), (200, 500), (400, 250)]   # los 3 = 100.000 evaluacion
 
 # GA: probabilidad de cruce, de mutación por-gen y combos de operadores.
 CX_PROBS  = [0.7, 0.9, 1.0]
-MUT_PROBS = [0.004, 0.012, 0.031]
+MUT_PROBS = [0.01, 0.05, 0.1]
 OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
 
-# CMOPSO: sus propias perillas.  La mutación se barre con los mismos valores que
-# los GA para que sea comparable.
+# CMOPSO: sus propias perillas.  La mutación se barre con los mismos tipos y
+# valores que los GA para que sea comparable.
 ELITE_SIZES = [5, 10, 25]
 VEL_RATES   = [0.1, 0.2, 0.35]
+MUTATIONS   = ["pm", "gauss"]
 
 GA_ALGS = ALGS_GA
 
@@ -58,20 +59,22 @@ def build_tasks(n_runs):
                                               pop=pop, gen=gen, cx=cx, mut=mut,
                                               cxp=cxp, mutp=mutp, run=run))
     for pop, gen in POP_GEN:
-        for es in ELITE_SIZES:
-            for mutp in MUT_PROBS:
-                for vel in VEL_RATES:
-                    for run in range(n_runs):
-                        tasks.append(dict(kind="cmopso", alg="CMOPSO",
-                                          pop=pop, gen=gen, es=es, mutp=mutp,
-                                          vel=vel, run=run))
+        for mut in MUTATIONS:
+            for es in ELITE_SIZES:
+                for mutp in MUT_PROBS:
+                    for vel in VEL_RATES:
+                        for run in range(n_runs):
+                            tasks.append(dict(kind="cmopso", alg="CMOPSO",
+                                              pop=pop, gen=gen, es=es, mut=mut,
+                                              mutp=mutp, vel=vel, run=run))
     return tasks
 
 
 def run_dir_of(t):
     """Path de la run, el mismo que arma experimento.py."""
     if t['kind'] == 'cmopso':
-        return cmopso_run_dir(t['pop'], t['gen'], t['es'], t['mutp'], t['vel'], t['run'])
+        return cmopso_run_dir(t['pop'], t['gen'], t['es'], t['mut'], t['mutp'],
+                              t['vel'], t['run'])
     return ga_run_dir(t['alg'], t['cx'], t['mut'], t['cxp'], t['mutp'],
                       t['pop'], t['gen'], t['run'])
 
@@ -84,7 +87,7 @@ def is_done(t):
 def label(t):
     cfg = f"pop{t['pop']}xgen{t['gen']}/run_{t['run'] + 1:02d}"
     if t['kind'] == 'cmopso':
-        return f"CMOPSO[e{t['es']:g}_mut{t['mutp']:g}_vel{t['vel']:g}]/{cfg}"
+        return f"CMOPSO[e{t['es']:g}_{t['mut']}{t['mutp']:g}_vel{t['vel']:g}]/{cfg}"
     return f"{t['alg']}[{t['cx']}{t['cxp']:g}+{t['mut']}{t['mutp']:g}]/{cfg}"
 
 
@@ -105,8 +108,8 @@ def run_one(t, device, threads):
            "--pop_size", str(t['pop']), "--n_gen", str(t['gen']),
            "--run_id", str(t['run']), "--device", device]
     if t['kind'] == 'cmopso':
-        cmd += ["--elite_size", str(t['es']), "--mut_prob", str(t['mutp']),
-                "--vel_rate", str(t['vel'])]
+        cmd += ["--elite_size", str(t['es']), "--mutation", t['mut'],
+                "--mut_prob", str(t['mutp']), "--vel_rate", str(t['vel'])]
     else:
         cmd += ["--crossover", t['cx'], "--mutation", t['mut'],
                 "--cx_prob", str(t['cxp']), "--mut_prob", str(t['mutp'])]
@@ -185,7 +188,8 @@ def main():
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
     n_ga    = len(GA_ALGS) * len(POP_GEN) * len(OPERATORS) * len(CX_PROBS) * len(MUT_PROBS)
-    n_cmopso = len(POP_GEN) * len(ELITE_SIZES) * len(MUT_PROBS) * len(VEL_RATES)
+    n_cmopso = (len(POP_GEN) * len(MUTATIONS) * len(ELITE_SIZES) * len(MUT_PROBS)
+                * len(VEL_RATES))
 
     print("=" * 54)
     print(f"  Sensibilidad de hiperparámetros — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")

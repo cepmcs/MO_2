@@ -500,7 +500,7 @@ def _test_aporte(por_grupo, runs):
 
 def _partir_etiqueta(nombre):
     """'NSGA-II (PCX)' → ('NSGA-II', 'PCX').  Sin paréntesis, el segundo campo
-    queda vacío: es el caso de CMOPSO, que no tiene operadores."""
+    queda vacío: es el caso de CMOPSO, que no tiene cruce."""
     if nombre.endswith(')') and '(' in nombre:
         alg, cruce = nombre.rsplit('(', 1)
         return alg.strip(), cruce[:-1].strip()

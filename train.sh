@@ -99,9 +99,9 @@ echo "[$(date '+%F %T')] Grid completo: $HECHAS/$ESPERADAS runs. Exportando..."
 CONFIGS=$(LC_ALL=C awk -F, '
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     $(col["algorithm"]) == "CMOPSO" {
-        printf "CMOPSO/pop%d_gen%d_e%g_mut%g_vel%g\n",
+        printf "CMOPSO/pop%d_gen%d_e%g_%s%g_vel%g\n",
                $(col["pop_size"]), $(col["n_gen"]), $(col["elite_size"]),
-               $(col["mut_prob"]), $(col["vel_rate"]); next }
+               $(col["mutation"]), $(col["mut_prob"]), $(col["vel_rate"]); next }
     { printf "%s/%s_%s/cx%g_mut%g_pop%d_gen%d\n",
              $(col["algorithm"]), $(col["crossover"]), $(col["mutation"]),
              $(col["cx_prob"]), $(col["mut_prob"]),

@@ -218,7 +218,7 @@ def load_pareto_molecules(pop_dir):
 
 # Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
 # CMOPSO entra acá porque en el frente conjunto de candidatos convive con las dos
-# familias de cruce sin pertenecer a ninguna: no tiene operadores.  Su rojo va
+# familias de cruce sin pertenecer a ninguna: no tiene cruce.  Su rojo va
 # oscurecido para que no se confunda con el naranja de PCX.
 CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'CMOPSO': '#B01818'}
 
@@ -607,9 +607,9 @@ DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
            'SCREENING': 'Cribado MOSES', 'HILL_CLIMBER': 'Escalador'}
 
 
-# El algoritmo de enjambre.  Se nombra una sola vez: al no tener operadores de
-# cruce/mutación queda fuera de la comparación de operadores, del pool por
-# familias y de los factores GA.
+# El algoritmo de enjambre.  Se nombra una sola vez: al no tener cruce queda
+# fuera de la comparación de operadores, del pool por familias y de los factores
+# GA.  Su mutación (PM o gaussiana) la elige la etapa 1 como una perilla más.
 PSO_ALG = 'CMOPSO'
 
 

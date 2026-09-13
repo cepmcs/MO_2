@@ -1,8 +1,9 @@
 """
 Etapa 1 — selección de hiperparámetros.
 
-De las 513 configuraciones del grid elige 17: la mejor de cada combo de
-operadores en los 4 AG, más la mejor global de CMOPSO.  Gana la de menor rango
+De las 594 configuraciones del grid elige 17: la mejor de cada combo de
+operadores en los 4 AG, más la mejor global de CMOPSO (su mutación, PM o
+gaussiana, compite como una perilla más).  Gana la de menor rango
 medio de hipervolumen, rankeando dentro de cada semilla.
 
 Los operadores no se testean acá; esa es la etapa 2.
@@ -37,8 +38,9 @@ from .comun import (
 # ═══════════════════════════════════════════════════════════════════════════
 #   Etapa 1 — selección de hiperparámetros
 #
-#   De las 513 configuraciones del grid elige 17: la mejor de cada combo de
-#   operadores en los 4 GA, más la mejor global de CMOPSO.  Gana la de menor rango
+#   De las 594 configuraciones del grid elige 17: la mejor de cada combo de
+#   operadores en los 4 GA, más la mejor global de CMOPSO (su mutación, PM o
+#   gaussiana, compite como una perilla más).  Gana la de menor rango
 #   medio de hipervolumen, rankeando dentro de cada semilla.
 #
 #   Los operadores no se testean acá; esa es la etapa 2.
@@ -47,7 +49,7 @@ from .comun import (
 #   parsea train.sh para armar winners/ en el cluster (ver su paso 2).
 # ═══════════════════════════════════════════════════════════════════════════
 
-# CMOPSO no tiene operadores, así que su panel se colorea por una perilla propia.
+# CMOPSO no tiene cruce, así que su panel se colorea por una perilla propia.
 # Va el tope de velocidad y no el archivo de elites: sobre las 81 configuraciones,
 # vel_rate explica el 45% de la varianza del hipervolumen y el 83% de la de la
 # validez, mientras que elite_size explica 0.4% y 0.02%.  Coloreado por elites el
@@ -76,9 +78,10 @@ HP_METRICS = {
 # evaluaciones.
 FACTORS_GA = ['budget', 'crossover', 'mutation', 'cx_prob', 'mut_prob']
 
-# CMOPSO barre el archivo de elites, la mutación por-gen y el tope de velocidad
-# (ver run_experiments.py).
-FACTORS_PSO = ['budget', 'elite_size', 'mut_prob', 'vel_rate']
+# CMOPSO barre el tipo de mutación, el archivo de elites, la mutación por-gen y
+# el tope de velocidad (ver run_experiments.py).  'mutation' tiene que estar: sin
+# ella run_matrix promediaría en silencio las corridas PM con las gaussianas.
+FACTORS_PSO = ['budget', 'mutation', 'elite_size', 'mut_prob', 'vel_rate']
 
 
 COMBO_FACTORS = ['crossover', 'mutation']
@@ -144,8 +147,8 @@ FACTOR_ABBR = {'cx_prob': 'cx', 'mut_prob': 'mut',
 
 
 def config_label(cfg, factors):
-    """Etiqueta compacta, p. ej. '400×250 pcx/pm cx=1 mut=0.031' o, en CMOPSO,
-    '400×250 elite=10 mut=0.031 vel=0.2'."""
+    """Etiqueta compacta, p. ej. '400×250 pcx/pm cx=1 mut=0.05' o, en CMOPSO,
+    '400×250 gauss elite=10 mut=0.05 vel=0.2'."""
     cfg = cfg if isinstance(cfg, tuple) else (cfg,)
     parts, cx, mu = [], None, None
     for f, v in zip(factors, cfg):
@@ -157,8 +160,9 @@ def config_label(cfg, factors):
             mu = v
         else:
             parts.append(f'{FACTOR_ABBR.get(f, f)}={v:g}')
-    if cx is not None:
-        parts.insert(1, f'{cx}/{mu}' if mu is not None else cx)
+    ops = [o for o in (cx, mu) if o is not None]
+    if ops:
+        parts.insert(1, '/'.join(ops))
     return ' '.join(parts)
 
 
@@ -169,7 +173,7 @@ def _panel_seleccion(ax, g, alg, metric, chosen, sub_factors, por_combo):
     """Un algoritmo: cada configuración del grid como un punto (validez contra
     la métrica de selección, ambas medianas sobre las 20 semillas) y la elegida
     de cada bloque resaltada.  El color separa las combinaciones de operadores;
-    en CMOPSO, que no tiene operadores, el tamaño del archivo de elites."""
+    en CMOPSO, que no tiene cruce, el tope de velocidad."""
     fs = [f for f in factors_for(alg) if g[f].notna().any()]
     m = g.groupby(fs, observed=True)[[metric, 'validity']].median()
 
@@ -308,9 +312,9 @@ EFECTO_COLOR = {'pcx': '#D55E00', 'sbx': '#0072B2', 'pso': '#B01818'}
 EFECTO_F_GA = [('budget', 'pob$\\times$gen'), ('cx_prob', '$P$(cruce)'),
                ('mut_prob', '$P$(mut.)')]
 
-# CMOPSO comparte con los GA la mutación por-gen —se barre con los mismos tres
-# valores justamente para que el efecto sea comparable entre familias— y suma dos
-# perillas propias: el archivo de elites y el tope de velocidad.
+# CMOPSO comparte con los GA la mutación —los mismos dos tipos y los mismos tres
+# valores por-gen, justamente para que el efecto sea comparable entre familias— y
+# suma dos perillas propias: el archivo de elites y el tope de velocidad.
 EFECTO_F_PSO = [('budget', 'pob$\\times$gen'), ('elite_size', 'elites'),
                 ('mut_prob', '$P$(mut.)'), ('vel_rate', '$v_{\\max}$')]
 
@@ -361,9 +365,17 @@ def plot_efectos_hp(df, metric, out_dir):
         ax = axes[len(algs)]
         g = df[df['algorithm'] == PSO_ALG]
         x = np.arange(len(EFECTO_F_PSO))
-        ax.bar(x, [_efecto_factor(g, f, metric) for f, _ in EFECTO_F_PSO], 0.62,
-               color=EFECTO_COLOR['pso'], edgecolor='white', linewidth=0.6,
-               zorder=3)
+        # Igual que en los GA, el efecto se mide dentro de cada mutación.  Un
+        # grid sin la columna (el de exp3) cae a una sola barra.
+        muts_pso = [mu for mu in EFECTO_TRAMA if (g['mutation'] == mu).any()]
+        grupos = [(mu, g[g['mutation'] == mu]) for mu in muts_pso] or [(None, g)]
+        ancho_pso = 0.62 / len(grupos)
+        for k, (mu, sel) in enumerate(grupos):
+            ax.bar(x + (k - (len(grupos) - 1) / 2) * ancho_pso,
+                   [_efecto_factor(sel, f, metric) for f, _ in EFECTO_F_PSO],
+                   ancho_pso, color=EFECTO_COLOR['pso'],
+                   hatch=EFECTO_TRAMA.get(mu), edgecolor='white',
+                   linewidth=0.6, zorder=3)
         ax.set_xticks(x)
         ax.set_xticklabels([e for _, e in EFECTO_F_PSO], fontsize=9)
         ax.set_title(DISPLAY.get(PSO_ALG, PSO_ALG), fontsize=11,
@@ -382,8 +394,14 @@ def plot_efectos_hp(df, metric, out_dir):
     etiqs = [f'{cx.upper()} + {"PM" if mu == "pm" else "gaussiana"}'
              for cx, mu in EFECTO_COMBOS]
     if con_pso:
-        manos.append(plt.Rectangle((0, 0), 1, 1, facecolor=EFECTO_COLOR['pso']))
-        etiqs.append(f'{PSO_ALG} (sin operadores)')
+        for mu in muts_pso:
+            manos.append(plt.Rectangle((0, 0), 1, 1, facecolor=EFECTO_COLOR['pso'],
+                                       hatch=EFECTO_TRAMA[mu], edgecolor='white',
+                                       linewidth=0.6))
+            etiqs.append(f'{PSO_ALG} + {"PM" if mu == "pm" else "gaussiana"}')
+        if not muts_pso:
+            manos.append(plt.Rectangle((0, 0), 1, 1, facecolor=EFECTO_COLOR['pso']))
+            etiqs.append(PSO_ALG)
     fig.legend(manos, etiqs, loc='lower center', ncol=len(etiqs), frameon=False,
                fontsize=9.5, bbox_to_anchor=(0.5, -0.13))
 
@@ -463,7 +481,7 @@ def write_selection_summary(per_alg, metric, out_dir):
 
 def analyze_algorithm(g, alg, metric):
     """Elige la mejor configuración de cada combinación de operadores (la mejor
-    global en CMOPSO, que no tiene operadores)."""
+    global en CMOPSO, que no tiene cruce)."""
     factors = [f for f in factors_for(alg) if g[f].notna().any()]
     _, higher = HP_METRICS[metric]
     por_combo = set(COMBO_FACTORS).issubset(factors)
