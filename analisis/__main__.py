@@ -126,7 +126,7 @@ def main():
     # plots/operadores/<ALG>/winners/; se quitó porque no se usaba y lo que
     # decide entre operadores son las tablas de la etapa 2.
     pp = sub.add_parser('pdf', formatter_class=fmt,
-                        help="Un PDF con las dos tablas completas.")
+                        help="Un PDF con una tabla por algoritmo.")
     pp.add_argument('--results', default=RESULTS_DIR)
     pp.add_argument('--out', default=os.path.join(PLOTS_DIR, 'mutacion'))
     pp.add_argument('--reparto', default='100x1000')

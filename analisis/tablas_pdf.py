@@ -12,11 +12,16 @@ import subprocess
 import pandas as pd
 
 from .etapa1 import (DISPLAY, MULTIOBJETIVO, ORDEN_ALG, agregar_indicadores,
-                     cargar, comparar)
+                     cargar)
 
 
 # Los encabezados que no existen en la fuente de LaTeX.
 TEX = {'ε+': r'$\epsilon^+$', 'IGD+': r'IGD$^+$', 'Fsp3': r'Fsp$_3$'}
+
+# Las columnas de las tablas: las multiobjetivo de la etapa 1 sin el tiempo, más
+# la validez.
+COLUMNAS = ([c for c in MULTIOBJETIVO if c[0] != 'time_sec']
+            + [('validity', 'Validez', 4, '↑')])
 
 
 CONFIGS = ['0.05', '0.1', 'adaptativa']
@@ -96,59 +101,6 @@ def _tabla(d, alg, columnas, reparto):
     return '\n'.join(out)
 
 
-ABREV = {'0.05': '.05', '0.1': '.1', 'adaptativa': 'ad'}
-
-
-def _grupos(d, alg, columnas):
-    """Los grupos homogéneos de las tres mutaciones, uno por combinación de
-    operadores.  Va apaisada —métricas en filas, combinaciones en columnas— para
-    que entre en la misma página que la tabla de arriba.
-
-    Un test por combinación y no uno agregado: la mejor mutación puede no ser la
-    misma en todas.  Friedman con las 20 semillas como bloques y, cuando separa,
-    Wilcoxon por pares con Holm.  Donde el test no separa va un guion: las tres
-    quedan empatadas."""
-    g = d[d.algorithm == alg]
-    combos = (['—'] if alg == 'CMOPSO'
-              else ['PCX pm', 'PCX gauss', 'SBX pm', 'SBX gauss'])
-    metricas = [(c, e, fl) for c, e, _, fl in columnas
-                if fl and c in g.columns and not g[c].isna().all()]
-
-    celdas = {}
-    for combo in combos:
-        if combo == '—':
-            sub = g
-        else:
-            cx, tp = combo.split()
-            sub = g[(g.cruce == cx) & (g.tipo == tp)]
-        for col, enc, fl in metricas:
-            res = comparar(sub, CONFIGS, 'config', col, fl == '↑', ['run'])
-            if res is None:
-                celdas[(combo, col)] = '--'
-            elif res['p_omnibus'] >= 0.05 or len(res['grupos']) == 1:
-                celdas[(combo, col)] = '--'
-            else:
-                celdas[(combo, col)] = ' $>$ '.join(
-                    '\\{' + ','.join(ABREV.get(x, x) for x in gr) + '\\}'
-                    for gr in res['grupos'])
-
-    out = [r'\vspace{0.6em}', r'\begin{center}', r'\footnotesize',
-           r'\captionof{table}{Grupos homogéneos de las tres configuraciones de '
-           r'mutación dentro de cada combinación de operadores.  Friedman con las '
-           r'20 semillas como bloques y Wilcoxon por pares con corrección de Holm '
-           r'($\alpha = 0{,}05$); un guion indica que el test no las separa.  '
-           r'Abreviaturas: .05, .1 y ad (adaptativa).}',
-           r'\begin{tabular}{l' + 'c' * len(combos) + '}', r'\toprule',
-           r'\textbf{Métrica} & '
-           + ' & '.join(r'\textbf{' + c.replace('—', '--') + '}' for c in combos)
-           + r' \\', r'\midrule']
-    for col, enc, fl in metricas:
-        out.append(TEX.get(enc, enc) + ' & '
-                   + ' & '.join(celdas[(c, col)] for c in combos) + r' \\')
-    out += [r'\bottomrule', r'\end{tabular}', r'\end{center}']
-    return '\n'.join(out)
-
-
 def tablas_pdf(args):
     d = agregar_indicadores(cargar(args.results))
     d = d[d.reparto == args.reparto]
@@ -160,8 +112,7 @@ def tablas_pdf(args):
     for alg in ORDEN_ALG:
         if not (d.algorithm == alg).any():
             continue
-        partes.append(_tabla(d, alg, MULTIOBJETIVO, args.reparto)
-                      + '\n\n' + _grupos(d, alg, MULTIOBJETIVO))
+        partes.append(_tabla(d, alg, COLUMNAS, args.reparto))
     cuerpo = '\n\\clearpage\n'.join(partes)
     base = os.path.join(args.out, f'mutacion_{args.reparto}')
     with open(base + '.tex', 'w') as fh:
@@ -253,44 +204,6 @@ def _tabla_reparto(d, alg, columnas):
     return '\n'.join(out)
 
 
-def _grupos_reparto(d, alg, columnas):
-    """Wilcoxon pareado entre los dos presupuestos, por combinación.  Con dos
-    niveles no hay grupos que armar: se indica cuál gana, o un guion si el test
-    no los separa."""
-    g = d[d.algorithm == alg]
-    combos = (['—'] if alg == 'CMOPSO'
-              else ['PCX pm', 'PCX gauss', 'SBX pm', 'SBX gauss'])
-    repartos = sorted(g.reparto.unique(), key=lambda r: -int(r.split('x')[1]))
-    metricas = [(c, e, fl) for c, e, _, fl in columnas
-                if fl and c in g.columns and not g[c].isna().all()]
-
-    celdas = {}
-    for combo in combos:
-        sub = g if combo == '—' else g[(g.cruce == combo.split()[0])
-                                       & (g.tipo == combo.split()[1])]
-        bloques = ['run'] if MUT != 'todas' else ['run', 'config']
-        for col, enc, fl in metricas:
-            res = comparar(sub, repartos, 'reparto', col, fl == '↑', bloques)
-            celdas[(combo, col)] = ('--' if res is None or res['p_omnibus'] >= 0.05
-                                    else res['grupos'][0][0])
-
-    out = [r'\vspace{0.6em}', r'\begin{center}', r'\footnotesize',
-           r'\captionof{table}{Presupuesto que gana dentro de cada combinación de '
-           r'operadores (Wilcoxon de rangos con signo, $\alpha = 0{,}05$); un '
-           r'guion indica que el test no los separa.  Los bloques son las 20 '
-           + ('semillas.}' if MUT != 'todas' else
-              r'semillas por las tres configuraciones de mutación.}'),
-           r'\begin{tabular}{l' + 'c' * len(combos) + '}', r'\toprule',
-           r'\textbf{Métrica} & '
-           + ' & '.join(r'\textbf{' + c.replace('—', '--') + '}' for c in combos)
-           + r' \\', r'\midrule']
-    for col, enc, fl in metricas:
-        out.append(TEX.get(enc, enc) + ' & '
-                   + ' & '.join(celdas[(c, col)] for c in combos) + r' \\')
-    out += [r'\bottomrule', r'\end{tabular}', r'\end{center}']
-    return '\n'.join(out)
-
-
 MUT = '0.1'
 
 
@@ -303,8 +216,7 @@ def comparar_repartos(args):
     globals()['MUT'] = args.mutacion
     os.makedirs(args.out, exist_ok=True)
 
-    partes = [_tabla_reparto(d, alg, MULTIOBJETIVO) + '\n\n'
-              + _grupos_reparto(d, alg, MULTIOBJETIVO)
+    partes = [_tabla_reparto(d, alg, COLUMNAS)
               for alg in ORDEN_ALG if (d.algorithm == alg).any()]
     base = os.path.join(args.out, f'repartos_mut{args.mutacion}')
     with open(base + '.tex', 'w') as fh:
