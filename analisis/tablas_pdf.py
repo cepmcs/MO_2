@@ -122,10 +122,11 @@ def _tabla(d, alg, columnas, reparto, configs=CONFIGS):
                   f'semillas; en negrita la mejor de las tres configuraciones de '
                   f'mutación dentro de cada combinación.')
     else:
+        dentro = '' if alg == 'CMOPSO' else ' de cada combinación'
         titulo = (f'{DISPLAY[alg]} — reparto {reparto}, {_fijo(g, alg)}.  Media y '
-                  f'desvío sobre las 20 semillas.  En cada combinación, sobre la '
-                  f'línea las mutaciones del estudio de hiperparámetros y debajo las '
-                  f'del experimento de mutación; en negrita la mejor de las seis.')
+                  f'desvío sobre 20 semillas.  0.004, 0.012 y 0.031: estudio de '
+                  f'hiperparámetros; 0.05, 0.1 y adaptativa: experimento de mutación.  '
+                  f'En negrita, la mejor{dentro}.')
     out = [r'\begin{center}',
            f'\\captionof{{table}}{{{titulo}}}',
            r'\begin{tabular}{ll' + 'c' * len(cols) + '}', r'\toprule',
