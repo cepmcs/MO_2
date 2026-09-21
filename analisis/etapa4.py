@@ -25,7 +25,7 @@ from .comun import (
     fmt_groups,
     homogeneous_groups,
 )
-from .indicadores import build_reference_front, compute_indicators_per_run
+from .indicadores import compute_indicators_per_run, load_reference_front
 
 
 
@@ -131,7 +131,7 @@ def etapa4(args):
     print(f"  {', '.join(DISPLAY.get(l, l) for l in labels)}")
     print(f"{'='*70}\n")
 
-    pf, _ = build_reference_front(series)
+    pf, _ = load_reference_front()
     ind = compute_indicators_per_run(series, pf) if pf is not None else {}
     get = _build_series_value_getter(series, ind)
 

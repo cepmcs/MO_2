@@ -39,8 +39,8 @@ from .indicadores import (
     _compute_non_dominated,
     _familia,
     _indicator_curves,
-    build_reference_front,
     compute_indicators_per_run,
+    load_reference_front,
 )
 
 
@@ -920,8 +920,8 @@ def _generate_report(series, pop_size, output_dir, report_label):
     indicator_data = {}
     ind_curves = {'igd_plus': {}, 'epsilon': {}}
     if len(series) >= 2:
-        print("📐 Construyendo frente de referencia combinado...")
-        pf_F, pf_df = build_reference_front(series)
+        print("📐 Frente de referencia común (frente_referencia.csv)...")
+        pf_F, pf_df = load_reference_front()
         if pf_F is not None:
             print(f"   Frente de referencia: {len(pf_F)} soluciones no-dominadas")
             indicator_data = compute_indicators_per_run(series, pf_F)

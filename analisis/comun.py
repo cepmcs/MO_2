@@ -41,7 +41,9 @@ plt.rcParams.update({
 # El paquete cuelga de la raíz del repo, de ahí el dirname doble.
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
+# Cada experimento publica en su subcarpeta (plots/main, plots/exp3), igual que
+# en results/.
+PLOTS_DIR = os.path.join(ROOT_DIR, "plots", "main")
 
 
 # Paleta de colores distinguibles.  Para algoritmos se usa el nombre como clave;
@@ -498,7 +500,10 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
     ctx = str(pop_size)
     cap_ctx = ('' if ctx == 'final'
                else f' — {_latex_escape(DISPLAY_ALG.get(ctx, ctx))}')
-    dir_ctx = os.path.basename(os.path.dirname(output_dir))
+    # Directo bajo PLOTS_DIR la etiqueta sigue diciendo 'plots', como antes de que
+    # cada experimento tuviera su subcarpeta (plots/main).
+    dir_ctx = ('plots' if os.path.dirname(output_dir) == PLOTS_DIR
+               else os.path.basename(os.path.dirname(output_dir)))
     lab_ctx = '' if dir_ctx == 'comparison' else f'_{dir_ctx.lower()}'
 
     _write_latex_comparison_table(
@@ -567,16 +572,17 @@ def build_operator_series_winners(alg, winners_dir, combos=None):
     return series
 
 
-# El cluster baja UN tar (lo arma train.sh) y se extrae en la
-# raíz del repo; cada cosa cae ya en su lugar:
-#   grid/        SOLO all_metrics.csv, que es lo único que lee la etapa 1.  El
-#                árbol del grid (10.260 runs) no lo consume nadie y no viaja.
+# Los resultados de este experimento viven en results/main; results/exp3 es el
+# de mutación, que se analiza en su rama.
+#   grid/        all_metrics.csv, que es lo que lee la etapa 1, y de cada corrida
+#                solo molecules.csv y metrics.csv (los baja exportar_light.sh),
+#                que es lo que usa construir_frente.py.
 #   winners/     las 17 configuraciones que ganaron su bloque en la etapa 1, con
 #                sus runs completas (incluido all_molecules.csv.gz).
-#   finalistas/  symlinks a la ganadora de cada algoritmo en winners/.  Lo armás
-#                vos en el PC, después de la etapa 2.
+#   finalistas/  symlinks relativos a la ganadora de cada algoritmo en winners/.
+#                Lo armás vos en el PC, después de la etapa 2.
 #   baselines/   NO viene del cluster: las baselines se corren y se analizan acá.
-RESULTADOS_DIR = os.path.join(ROOT_DIR, "resultados")
+RESULTADOS_DIR = os.path.join(ROOT_DIR, "results", "main")
 
 METRICS_CSV    = os.path.join(RESULTADOS_DIR, "grid", "all_metrics.csv")
 

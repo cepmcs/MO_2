@@ -27,7 +27,8 @@ from .comun import (
     homogeneous_groups,
     rank_biserial,
 )
-from .indicadores import build_reference_front, compute_indicators_per_run
+from .indicadores import (build_reference_front, compute_indicators_per_run,
+                          load_reference_front)
 from .figuras import (GRID_COLOR_MODES, plot_frente_conjunto,
                       plot_moleculas_operadores, plot_pareto_qed_sa_grid)
 
@@ -139,8 +140,8 @@ def analyze_operators(alg, winners_dir, out_root, decision_col):
 
     print(f"\n{'─'*64}\n  {alg}   combos: {', '.join(labels)}\n{'─'*64}")
 
-    # Frente de referencia común a los 4 combos → IGD+ y ε+ comparables.
-    pf_F, pf_df = build_reference_front(series)
+    # IGD+ y ε+ contra el frente común de todo el documento.
+    pf_F, pf_df = load_reference_front()
     indicator_data = {}
     if pf_F is not None:
         print(f"  frente de referencia: {len(pf_F)} soluciones no dominadas")
@@ -162,11 +163,14 @@ def analyze_operators(alg, winners_dir, out_root, decision_col):
     # de haberlas.
     plot_moleculas_operadores(series, alg, out_dir)
 
-    if pf_df is not None:
+    # El frente conjunto cuenta qué combo aportó cada molécula, así que va con el
+    # frente de sus propias series y no con el común de IGD+.
+    _, pf_propio = build_reference_front(series)
+    if pf_propio is not None:
         # La tabla de contribución por combo no se emite en esta etapa: lo que
         # decide está en las dos tablas de operadores de más abajo.  La figura
         # del frente conjunto sí, que es la que muestra el mecanismo.
-        plot_frente_conjunto(series, alg, out_dir, pf_df)
+        plot_frente_conjunto(series, alg, out_dir, pf_propio)
 
     # La comparación de operadores, sobre el indicador de decisión.
     label, higher = dict((c, (l, h)) for c, l, h in OP_INDICATORS)[decision_col]

@@ -47,6 +47,7 @@ from .indicadores import (
     atribuir_frente,
     build_reference_front,
     compute_indicators_per_run,
+    load_reference_front,
     write_contribucion_table,
 )
 from .figuras import SA_MAX, plot_frente_conjunto, render, top_por_qed
@@ -123,7 +124,7 @@ def etapa3(args):
     print(f"  {', '.join(DISPLAY.get(l, l) for l in labels)}")
     print(f"{'='*70}\n")
 
-    pf, pf_df = build_reference_front(series)
+    pf, pf_df = load_reference_front()
     ind = compute_indicators_per_run(series, pf) if pf is not None else {}
     print(f"  frente de referencia: {len(pf) if pf is not None else 0} soluciones\n")
     get = _build_series_value_getter(series, ind)
