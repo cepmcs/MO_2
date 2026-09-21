@@ -20,6 +20,7 @@ from .comun import (
     DISPLAY,
     FSP3_MIN,
     OBJECTIVES,
+    ROOT_DIR,
     _fmt_p,
     _latex_escape,
     _num,
@@ -125,6 +126,27 @@ def build_reference_front(series):
         return None, None
     pf_F = _df_to_F(pf_df)
     return pf_F, pf_df
+
+
+
+# El frente contra el que se miden IGD+ y ε+ en todas las tablas: uno solo para
+# todo el documento, que arma construir_frente.py con todos los experimentos de
+# results/.  Si cada etapa usara el de sus propias series, el mismo IGD+ daría
+# distinto en cada tabla (NSGA-II pcx_pm: 0.0292 en la etapa 2, 0.0178 en la 3).
+FRENTE_REFERENCIA = os.path.join(ROOT_DIR, "frente_referencia.csv")
+
+
+
+def load_reference_front():
+    """El frente de referencia común → (pf_F, pf_df).
+
+    build_reference_front queda para el frente conjunto, que cuenta quién aporta
+    cada molécula y por eso necesita el frente de sus propias series."""
+    if not os.path.exists(FRENTE_REFERENCIA):
+        raise SystemExit(f"No existe {FRENTE_REFERENCIA}.  Correr antes: "
+                         f"python construir_frente.py")
+    pf_df = pd.read_csv(FRENTE_REFERENCIA)
+    return _df_to_F(pf_df), pf_df
 
 
 

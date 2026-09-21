@@ -23,8 +23,8 @@ import pandas as pd
 from scipy import stats
 
 from .comun import SEP_DECIMAL, _latex_escape, _write_tex
-from .indicadores import (_additive_epsilon, _compute_non_dominated, _df_to_F,
-                          _front_bounds, _normalize_F)
+from .indicadores import (_additive_epsilon, _df_to_F, _front_bounds,
+                          _normalize_F, load_reference_front)
 
 
 ORDEN_ALG = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'CMOPSO']
@@ -75,13 +75,13 @@ def cargar(results_dir):
 
 
 def agregar_indicadores(d):
-    """IGD+ y ε+ de cada corrida contra un único frente de referencia.
+    """IGD+ y ε+ de cada corrida contra el frente de referencia común.
 
-    El frente junta todo lo corrido y recalcula la no-dominancia: es el
-    procedimiento estándar cuando el frente verdadero se desconoce.  Tiene que
-    ser uno solo para todo el experimento, y no uno por reparto, porque si no
-    cada reparto se mide contra una vara que arma él mismo y la comparación
-    entre repartos no significa nada.  Los dos indicadores se normalizan con los
+    Es frente_referencia.csv, el mismo para todo el documento: lo arma
+    construir_frente.py con todos los experimentos de results/, así que estos
+    IGD+ se comparan directo con los de main.  Tiene que ser uno solo, y no uno
+    por reparto, porque si no cada reparto se mide contra una vara que arma él
+    mismo y la comparación entre repartos no significa nada.  Los dos indicadores se normalizan con los
     mismos bounds para que QED y SA pesen igual."""
     from pymoo.indicators.igd_plus import IGDPlus
 
@@ -96,17 +96,16 @@ def agregar_indicadores(d):
                 frentes[carpeta] = df
     if not frentes:
         return d
-    juntos = pd.concat(frentes.values(), ignore_index=True)
-    pf = _compute_non_dominated(juntos.drop_duplicates(subset='smiles'))
-    ideal, escala = _front_bounds(_df_to_F(pf))
-    pf_n = _normalize_F(_df_to_F(pf), ideal, escala)
+    pf_F, pf = load_reference_front()
+    ideal, escala = _front_bounds(pf_F)
+    pf_n = _normalize_F(pf_F, ideal, escala)
     igd = IGDPlus(pf_n)
     for carpeta, df in frentes.items():
         F = _normalize_F(_df_to_F(df), ideal, escala)
         i = d.index[d._dir == carpeta]
         d.loc[i, 'igd_plus'] = float(igd(F))
         d.loc[i, 'epsilon'] = _additive_epsilon(F, pf_n)
-    print(f"    frente de referencia único con {len(pf)} moléculas")
+    print(f"    frente de referencia común con {len(pf)} moléculas")
     return d
 
 

@@ -41,7 +41,9 @@ plt.rcParams.update({
 # El paquete cuelga de la raíz del repo, de ahí el dirname doble.
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-PLOTS_DIR = os.path.join(ROOT_DIR, "plots")
+# Cada experimento publica en su subcarpeta (plots/main, plots/exp3), igual que
+# en results/.
+PLOTS_DIR = os.path.join(ROOT_DIR, "plots", "exp3")
 
 
 # Paleta de colores distinguibles.  Para algoritmos se usa el nombre como clave;
@@ -586,10 +588,11 @@ FINALISTAS_DIR = os.path.join(RESULTADOS_DIR, "finalistas")
 
 BASELINES_DIR  = os.path.join(RESULTADOS_DIR, "baselines")
 
-# Este experimento corre a results/ y publica en plots/mutacion/.
-RESULTS_DIR    = os.path.join(ROOT_DIR, "results")
+# Este experimento vive en results/exp3 (results/main es el grid de main, que no
+# hay que mezclar con este) y publica directo en plots/exp3.
+RESULTS_DIR    = os.path.join(ROOT_DIR, "results", "exp3")
 
-OUT_TABLAS     = os.path.join(PLOTS_DIR, "mutacion")
+OUT_TABLAS     = PLOTS_DIR
 
 OUT_HP         = os.path.join(PLOTS_DIR, "hiperparametros")
 

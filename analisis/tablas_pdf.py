@@ -4,6 +4,11 @@ cada una, las tres configuraciones de mutación.
 
 En cada métrica va en negrita la mejor de las tres mutaciones de esa combinación.
 CMOPSO no tiene operadores, así que su tabla lleva una sola combinación.
+
+Con --con-main se agregan, del grid de main, las tres mutaciones anteriores con
+todo lo demás igual: mismo algoritmo, combinación, reparto y probabilidad de cruce
+(en CMOPSO, misma élite y velocidad).  Así lo único que cambia entre las seis filas
+de cada combinación es la mutación.
 """
 
 import os
@@ -11,20 +16,34 @@ import subprocess
 
 import pandas as pd
 
+from .comun import ROOT_DIR
 from .etapa1 import (DISPLAY, MULTIOBJETIVO, ORDEN_ALG, agregar_indicadores,
                      cargar)
 
 
-# Los encabezados que no existen en la fuente de LaTeX.
-TEX = {'ε+': r'$\epsilon^+$', 'IGD+': r'IGD$^+$', 'Fsp3': r'Fsp$_3$'}
+# Los encabezados que no existen en la fuente de LaTeX, o que en los PDFs van con
+# otro nombre que en las tablas de la etapa 1.
+TEX = {'ε+': r'$\epsilon^+$', 'IGD+': r'IGD$^+$', 'Fsp3': r'Fsp$_3$',
+       'Tamaño de Pareto': 'Pareto size'}
 
-# Las columnas de las tablas: las multiobjetivo de la etapa 1 sin el tiempo, más
-# la validez.
+# Las columnas de las tablas: las multiobjetivo de la etapa 1, más la validez, y el
+# tiempo al final.
 COLUMNAS = ([c for c in MULTIOBJETIVO if c[0] != 'time_sec']
-            + [('validity', 'Validez', 4, '↑')])
+            + [('validity', 'Validez', 4, '↑')]
+            + [c for c in MULTIOBJETIVO if c[0] == 'time_sec'])
 
 
 CONFIGS = ['0.05', '0.1', 'adaptativa']
+
+# Las mutaciones del grid de main, que --con-main pone arriba de las de exp3.
+CONFIGS_MAIN = ['0.004', '0.012', '0.031']
+
+MAIN_GRID = os.path.join(ROOT_DIR, 'results', 'main', 'grid')
+
+# Lo que tiene que coincidir entre una corrida de main y una de exp3 para que solo
+# difieran en la mutación.  'tipo' y no 'mutation': en exp3 la adaptativa es pm_adapt.
+CLAVES_GA  = ['algorithm', 'crossover', 'tipo', 'cx_prob', 'pop_size', 'n_gen']
+CLAVES_PSO = ['algorithm', 'elite_size', 'vel_rate', 'pop_size', 'n_gen']
 
 CABECERA = r"""\documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
@@ -42,7 +61,29 @@ def _num(v, dec):
     return f'{v:.{dec}f}'.replace('.', '{,}')
 
 
-def _tabla(d, alg, columnas, reparto):
+def _con_main(d):
+    """Suma a las corridas de exp3 las del grid de main que se diferencian de
+    ellas solo en la mutación."""
+    m = cargar(MAIN_GRID)
+    ga = d[d.algorithm != 'CMOPSO'][CLAVES_GA].drop_duplicates()
+    pso = d[d.algorithm == 'CMOPSO'][CLAVES_PSO].drop_duplicates()
+    m = pd.concat([m.merge(ga, on=CLAVES_GA), m.merge(pso, on=CLAVES_PSO)])
+    print(f"  del grid de main: {len(m)} corridas con el mismo cruce y reparto")
+    # índice nuevo: agregar_indicadores ubica cada corrida por índice
+    return pd.concat([m, d], ignore_index=True)
+
+
+def _fijo(g, alg):
+    """Lo que es igual en todas las filas de la tabla, para el título."""
+    if alg == 'CMOPSO':
+        return (f'élite {g.elite_size.iloc[0]:g}, '
+                f'$v_{{\\max}}$ = {_num(g.vel_rate.iloc[0], 1)}')
+    cx = ' y '.join(f'{" / ".join(_num(v, 1) for v in sorted(g[g.cruce == c].cx_prob.unique()))} ({c})'
+                    for c in ('PCX', 'SBX'))
+    return f'$p_c$ = {cx}'
+
+
+def _tabla(d, alg, columnas, reparto, configs=CONFIGS):
     g = d[d.algorithm == alg]
     cols = [(c, e, dec, fl) for c, e, dec, fl in columnas
             if c in g.columns and not g[c].isna().all()]
@@ -57,7 +98,7 @@ def _tabla(d, alg, columnas, reparto):
             cx, tp = combo.split()
             s0 = g[(g.cruce == cx) & (g.tipo == tp)]
         bloque = []
-        for cfg in CONFIGS:
+        for cfg in configs:
             s = s0[s0.config == cfg]
             if s.empty:
                 continue
@@ -76,16 +117,26 @@ def _tabla(d, alg, columnas, reparto):
                      + (r' $\uparrow$' if fl == '↑' else
                         r' $\downarrow$' if fl == '↓' else '')
                      for _, e, _, fl in cols)
+    if configs == CONFIGS:
+        titulo = (f'{DISPLAY[alg]} — reparto {reparto}.  Media y desvío sobre las 20 '
+                  f'semillas; en negrita la mejor de las tres configuraciones de '
+                  f'mutación dentro de cada combinación.')
+    else:
+        titulo = (f'{DISPLAY[alg]} — reparto {reparto}, {_fijo(g, alg)}.  Media y '
+                  f'desvío sobre las 20 semillas.  En cada combinación, sobre la '
+                  f'línea las mutaciones del estudio de hiperparámetros y debajo las '
+                  f'del experimento de mutación; en negrita la mejor de las seis.')
     out = [r'\begin{center}',
-           f'\\captionof{{table}}{{{DISPLAY[alg]} — reparto {reparto}.  '
-           f'Media y desvío sobre las 20 semillas; en negrita la mejor de las tres '
-           f'configuraciones de mutación dentro de cada combinación.}}',
+           f'\\captionof{{table}}{{{titulo}}}',
            r'\begin{tabular}{ll' + 'c' * len(cols) + '}', r'\toprule',
            r'\textbf{Operadores} & \textbf{Mutación} & ' + enc + r' \\', r'\midrule']
     previo = mut_previo = None
     for f in filas:
         if previo is not None and f['combo'] != previo:
             out.append(r'\midrule')
+        elif (f['combo'] == previo and f['mut'] not in CONFIGS_MAIN
+              and mut_previo in CONFIGS_MAIN):
+            out.append(r'\cmidrule(l){2-' + str(2 + len(cols)) + '}')
         f['_mut_previo'] = (f.get('mut') == mut_previo and f['combo'] == previo)
         mut_previo = f.get('mut')
         celdas = ['' if f['combo'] == previo else f['combo'].replace('—', '--'),
@@ -102,8 +153,12 @@ def _tabla(d, alg, columnas, reparto):
 
 
 def tablas_pdf(args):
-    d = agregar_indicadores(cargar(args.results))
+    d = cargar(args.results)
+    if args.con_main:
+        d = _con_main(d)
+    d = agregar_indicadores(d)
     d = d[d.reparto == args.reparto]
+    configs = CONFIGS_MAIN + CONFIGS if args.con_main else CONFIGS
     if d.empty:
         raise SystemExit(f"no hay corridas con reparto {args.reparto}")
     os.makedirs(args.out, exist_ok=True)
@@ -112,9 +167,10 @@ def tablas_pdf(args):
     for alg in ORDEN_ALG:
         if not (d.algorithm == alg).any():
             continue
-        partes.append(_tabla(d, alg, COLUMNAS, args.reparto))
+        partes.append(_tabla(d, alg, COLUMNAS, args.reparto, configs))
     cuerpo = '\n\\clearpage\n'.join(partes)
-    base = os.path.join(args.out, f'mutacion_{args.reparto}')
+    base = os.path.join(args.out, f'mutacion_{args.reparto}'
+                                  + ('_con_main' if args.con_main else ''))
     with open(base + '.tex', 'w') as fh:
         fh.write(CABECERA + cuerpo + '\n\\end{document}\n')
 

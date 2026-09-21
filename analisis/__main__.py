@@ -86,7 +86,7 @@ def main():
     p2 = sub.add_parser('etapa2', formatter_class=fmt,
                         help="Cómo se distribuyen las soluciones en el frente.")
     p2.add_argument('--results', default=RESULTS_DIR)
-    p2.add_argument('--out', default=os.path.join(PLOTS_DIR, 'mutacion', 'frentes'))
+    p2.add_argument('--out', default=os.path.join(PLOTS_DIR, 'frentes'))
     p2.add_argument('--mutacion', default='0.1', help="Configuración de mutación.")
     p2.add_argument('--reparto', default='100x1000')
     p2.add_argument('--algoritmo', default='NSGA2',
@@ -128,14 +128,17 @@ def main():
     pp = sub.add_parser('pdf', formatter_class=fmt,
                         help="Un PDF con una tabla por algoritmo.")
     pp.add_argument('--results', default=RESULTS_DIR)
-    pp.add_argument('--out', default=os.path.join(PLOTS_DIR, 'mutacion'))
+    pp.add_argument('--out', default=OUT_TABLAS)
     pp.add_argument('--reparto', default='100x1000')
+    pp.add_argument('--con-main', action='store_true',
+                    help="Agrega las tres mutaciones del grid de main, con el mismo "
+                         "cruce y reparto.  Sale en mutacion_<reparto>_con_main.pdf.")
     pp.set_defaults(func=tablas_pdf)
 
     pr = sub.add_parser('pdf-repartos', formatter_class=fmt,
                         help="PDF comparando los dos presupuestos.")
     pr.add_argument('--results', default=RESULTS_DIR)
-    pr.add_argument('--out', default=os.path.join(PLOTS_DIR, 'mutacion'))
+    pr.add_argument('--out', default=OUT_TABLAS)
     pr.add_argument('--mutacion', default='0.1')
     pr.set_defaults(func=comparar_repartos)
 
