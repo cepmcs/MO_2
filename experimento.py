@@ -3,7 +3,7 @@ Los tres algoritmos de la comparación (NSGA-II, NSGA-III y AGE-MOEA) y el cuerp
 de una corrida.
 
 Para agregar o cambiar un algoritmo se toca la tabla ALGORITMOS.  Las perillas son
-las mismas en los tres: --crossover --mutation --cx_prob --mut_prob.
+las mismas en los tres: --crossover --cx_prob --mut_prob (la mutación es siempre PM).
 
 Corre UNA configuración por vez; el grid lo lanza run_experiments.py.
 """
@@ -170,8 +170,8 @@ def _parser():
                     help="No corre nada: consolida results/all_metrics.csv y sale.")
 
     ap.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
-    ap.add_argument('--mutation', choices=['pm', 'gauss'], default='pm')
-    ap.add_argument('--cx_prob', type=float, default=0.9,
+    ap.add_argument('--mutation', choices=['pm'], default='pm')
+    ap.add_argument('--cx_prob', type=float, default=1.0,
                     help="Probabilidad de cruce (por apareamiento).")
     ap.add_argument('--mut_prob', type=float, default=None,
                     help="Probabilidad de mutación POR-GEN (default: 1/n_var).")

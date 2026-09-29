@@ -10,20 +10,6 @@
 #SBATCH --exclusive              # reserva el nodo completo: nadie más corre en paralelo
 #SBATCH --time=12:00:00          # límite de la partición GPU (12 h); relanzar para continuar
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  Wrapper SLURM: corre el grid y deja un tar listo para bajar al PC.
-#
-#    1. run_experiments.py         el grid, en paralelo y reanudable.
-#    2. python -m analisis etapa1  elige las 12 configuraciones ganadoras.
-#    3. tar                        esas 12 + all_metrics.csv + las figuras.
-#
-#  La etapa 1 corre acá para no bajar el grid entero y volver al cluster a buscar
-#  las ganadoras.  El grid no entra en las 12 h de la partición: los jobs
-#  intermedios terminan sin exportar y el tar sale cuando está completo.
-#
-#  Las baselines NO están acá: se corren y se analizan en el PC.
-# ══════════════════════════════════════════════════════════════════════════════
-
 source /etc/profile
 # module load cuda        # descomenta si tu torch NO trae runtime CUDA propio
 
@@ -89,11 +75,11 @@ fi
 echo
 echo "[$(date '+%F %T')] Grid completo: $HECHAS/$ESPERADAS runs. Exportando..."
 
-# Etapa 1: elige las 12 ganadoras y deja figuras, selected_configs.csv y la
+# Etapa 1: elige las 6 ganadoras y deja figuras, selected_configs.csv y la
 # tabla LaTeX en plots/hiperparametros/.
 "$PYTHON" -m analisis etapa1 --csv results/all_metrics.csv || exit 1
 
-# selected_configs.csv → las rutas de esas 12 dentro de results/.  El %g de awk
+# selected_configs.csv → las rutas de esas 6 dentro de results/.  El %g de awk
 # es el mismo formato con que utils_mo._slug nombró las carpetas.  LC_ALL=C no es
 # opcional: con un locale de coma decimal awk leería 0.7 como 0.
 CONFIGS=$(LC_ALL=C awk -F, '

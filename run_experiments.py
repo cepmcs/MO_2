@@ -1,10 +1,10 @@
 """
 Orquestador del grid de sensibilidad de hiperparámetros.
 
-Corre las 324 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
-de 100.000 evaluaciones cada una: 108 por cada algoritmo (reparto pob×gen ×
-operadores × probabilidades).  Reanudable: una run cuenta como completa si existe
-su molecules.csv.
+Corre las 18 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
+de 100.000 evaluaciones (población 100 × 1000 generaciones) cada una: 6 por cada
+algoritmo (cruce SBX o PCX con probabilidad 1,0, y mutación PM × 3 tasas).
+Reanudable: una run cuenta como completa si existe su molecules.csv.
 
 Cada perilla barrida queda en el path (results/<ALG>/<slug>/run_k) y como columna
 de metrics.csv; al final se consolida en results/all_metrics.csv.
@@ -28,12 +28,12 @@ PYTHON = sys.executable   # el python del entorno actual
 EXPERIMENTO = "experimento.py"
 
 # ─── Espacio de hiperparámetros ───────────────────────────────────────────────
-POP_GEN   = [(100, 1000), (200, 500), (400, 250)]   # los 3 = 100.000 evaluaciones
+POP_GEN   = [(100, 1000)]                            # 100.000 evaluaciones
 
 # GA: probabilidad de cruce, de mutación por-gen y combos de operadores.
-CX_PROBS  = [0.7, 0.9, 1.0]
+CX_PROBS  = [1.0]
 MUT_PROBS = [0.004, 0.012, 0.031]
-OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
+OPERATORS = [("sbx", "pm"), ("pcx", "pm")]
 
 GA_ALGS = ALGS_GA
 

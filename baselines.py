@@ -2,7 +2,7 @@
 Baselines: cribado de MOSES, muestreo aleatorio, escalador y GA de suma ponderada.
 Ninguno hace búsqueda de Pareto: son el piso de comparación de los MOEAs.
 
-Mismo presupuesto (100.000 evaluaciones = 400 × 250) y las mismas 20 semillas, así
+Mismo presupuesto (100.000 evaluaciones = 100 × 1000) y las mismas 20 semillas, así
 la comparación queda pareada.  Guardan en results/main/baselines/, aparte de results/main/grid.
 Reanudable: una corrida cuenta como completa si existe su molecules.csv.
 
@@ -32,7 +32,7 @@ BASELINE_RESULTS_DIR = os.path.join(ROOT_DIR, "results", "main", "baselines")
 PYTHON = sys.executable      # el python del entorno actual
 Z_LOW, Z_HIGH = -5.0, 5.0    # mismos bounds que MolecularLatentProblem
 
-POP_SIZE, N_GEN = 400, 250   # 100.000 evaluaciones, igual que los MOEAs
+POP_SIZE, N_GEN = 100, 1000  # 100.000 evaluaciones, igual reparto que los MOEAs
 METHODS = ['screening', 'random', 'hill_climber', 'weighted_ga']
 DEFAULT_WEIGHTS = (0.5, 0.5)   # un peso por objetivo ([-QED, SA])
 

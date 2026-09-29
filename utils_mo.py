@@ -19,7 +19,6 @@ from pymoo.indicators.hv import HV
 from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.crossover.pcx import PCX
 from pymoo.operators.mutation.pm import PM
-from pymoo.operators.mutation.gauss import GaussianMutation
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(ROOT_DIR, 'SA_Score'))
@@ -52,15 +51,14 @@ SMILES_REGEX = re.compile(
 
 # ─── Operadores genéticos ────────────────────────────────────────────────────
 # Solo se barren las probabilidades; el resto queda en el default de pymoo.
-# La mutación va por-gen (prob_var) con prob=1.0, así PM y Gauss son comparables.
+# La mutación va por-gen (prob_var) con prob=1.0.
 
 CROSSOVERS = {
     'sbx': lambda cx_prob: SBX(prob=cx_prob),
     'pcx': lambda cx_prob: PCX(prob=cx_prob),
 }
 MUTATIONS = {
-    'pm':    lambda mut_prob: PM(prob=1.0, prob_var=mut_prob),
-    'gauss': lambda mut_prob: GaussianMutation(prob=1.0, prob_var=mut_prob, sigma=0.1),
+    'pm': lambda mut_prob: PM(prob=1.0, prob_var=mut_prob),
 }
 
 
