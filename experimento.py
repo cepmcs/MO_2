@@ -88,17 +88,16 @@ ALGS_GA = list(ALGORITMOS)
 #   2. El cuerpo de una corrida
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _perillas(alg, args, latent_dim):
-    """(run_dir, label, hp, mut_prob) de una corrida."""
-    mut_prob = args.mut_prob if args.mut_prob is not None else 1.0 / latent_dim
+def _perillas(alg, args):
+    """(run_dir, label, hp) de una corrida."""
     run_dir = ga_run_dir(alg, args.crossover, args.mutation, args.cx_prob,
-                         mut_prob, args.pop_size, args.n_gen, args.run_id)
+                         args.mut_prob, args.pop_size, args.n_gen, args.run_id)
     label = (f"{alg}[{args.crossover}{args.cx_prob:g}"
-             f"+{args.mutation}{mut_prob:g}]")
+             f"+{args.mutation}{args.mut_prob:g}]")
     hp = {'crossover': args.crossover, 'mutation': args.mutation,
-          'cx_prob': args.cx_prob, 'mut_prob': round(mut_prob, 6),
+          'cx_prob': args.cx_prob, 'mut_prob': round(args.mut_prob, 6),
           'fsp3_min': FSP3_MIN}
-    return run_dir, label, hp, mut_prob
+    return run_dir, label, hp
 
 
 def correr(alg, args):
@@ -116,7 +115,7 @@ def correr(alg, args):
     mus = load_seed_mus(model, stoi, args.pop_size, args.run_id)
     train_smiles = load_train_smiles()
 
-    run_dir, etiqueta_cfg, hp, mut_prob = _perillas(alg, args, latent_dim)
+    run_dir, etiqueta_cfg, hp = _perillas(alg, args)
     os.makedirs(run_dir, exist_ok=True)
     label = (f"{etiqueta_cfg}/pop{args.pop_size}xgen{args.n_gen}"
              f"/run_{args.run_id + 1:02d}")
@@ -124,7 +123,7 @@ def correr(alg, args):
 
     ref_dirs = get_ref_dirs(args.pop_size) if spec.ref_dirs else None
     operadores = get_operators(args.crossover, args.mutation,
-                               args.cx_prob, mut_prob)
+                               args.cx_prob, args.mut_prob)
 
     problem = MolecularLatentProblem(model, stoi, itos, latent_dim)
     tracker = GenerationTracker(problem, train_smiles)
@@ -162,19 +161,19 @@ def _parser():
     ap.add_argument('--alg', choices=list(ALGORITMOS), type=str.upper,
                     help="Algoritmo a correr.")
     ap.add_argument('--pop_size', type=int, default=None)
-    ap.add_argument('--n_gen', type=int, default=500)
+    ap.add_argument('--n_gen', type=int, default=1000)
     ap.add_argument('--run_id', type=int, default=None)
     ap.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto',
                     help="Dispositivo para el VAE (default: auto → GPU si hay CUDA).")
     ap.add_argument('--generate_summary', action='store_true',
-                    help="No corre nada: consolida results/all_metrics.csv y sale.")
+                    help="No corre nada: consolida results/exp4/all_metrics.csv y sale.")
 
     ap.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
     ap.add_argument('--mutation', choices=['pm'], default='pm')
     ap.add_argument('--cx_prob', type=float, default=1.0,
                     help="Probabilidad de cruce (por apareamiento).")
-    ap.add_argument('--mut_prob', type=float, default=None,
-                    help="Probabilidad de mutación POR-GEN (default: 1/n_var).")
+    ap.add_argument('--mut_prob', type=float, default=0.1,
+                    help="Probabilidad de mutación POR-GEN.")
     return ap
 
 

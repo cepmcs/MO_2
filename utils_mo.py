@@ -30,7 +30,7 @@ RDLogger.DisableLog('rdApp.*')
 MODEL_PATH  = os.path.join(ROOT_DIR, "SMILES_LSTM_2_256_300_lr1e4_b64.pth")
 MOSES_CSV   = os.path.join(ROOT_DIR, "data", "moses.csv")
 MOSES_TRAIN_CACHE = os.path.join(ROOT_DIR, "data", "moses_train_smiles.pkl.gz")
-RESULTS_DIR = os.path.join(ROOT_DIR, "results")
+RESULTS_DIR = os.path.join(ROOT_DIR, "results", "exp4")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
@@ -74,7 +74,7 @@ def _slug(x):
 
 def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
                pop_size, n_gen, run_id, results_dir=None):
-    """Directorio de una run GA: results/<ALG>/<cruce_mut>/<config>/run_k."""
+    """Directorio de una run GA: results/exp4/<ALG>/<cruce_mut>/<config>/run_k."""
     base = results_dir if results_dir is not None else RESULTS_DIR
     combo = f"{crossover}_{mutation}"
     cfg   = f"cx{_slug(cx_prob)}_mut{_slug(mut_prob)}_pop{pop_size}_gen{n_gen}"
@@ -499,7 +499,7 @@ def consolidate_all(results_dir=None):
 
 def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed, run_dir, hp=None):
     """Calcula métricas y guarda los CSVs de una run.  hp: los hiperparámetros
-    barridos, que van como columnas de metrics.csv."""
+    de la corrida, que van como columnas de metrics.csv."""
     pareto, validity, feasibility = build_pareto(problem.eval_log)
     hv      = compute_hv(pareto)
     spacing = compute_spacing(pareto)
@@ -511,7 +511,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
 
     metrics = {
         'algorithm': alg_name, 'pop_size': pop_size, 'n_gen': n_gen,
-        **(hp or {}),                       # los hiperparámetros barridos
+        **(hp or {}),                       # los hiperparámetros de la corrida
         'run': run_id + 1, 'n_pareto': len(pareto),
         'hypervolume': round(hv, 6), 'spacing': spacing,
         'validity': validity, 'feasibility': feasibility, 'novelty': novelty,

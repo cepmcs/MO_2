@@ -1,13 +1,14 @@
 """
-Orquestador del grid de sensibilidad de hiperparámetros.
+Orquestador del experimento exp4.
 
-Corre las 18 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
-de 100.000 evaluaciones (población 100 × 1000 generaciones) cada una: 6 por cada
-algoritmo (cruce SBX o PCX con probabilidad 1,0, y mutación PM × 3 tasas).
+Corre las 6 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
+de 100.000 evaluaciones (población 100 × 1000 generaciones) cada una: 2 por cada
+algoritmo (cruce SBX o PCX con probabilidad 1,0, y mutación PM con tasa 0,1).
 Reanudable: una run cuenta como completa si existe su molecules.csv.
 
-Cada perilla barrida queda en el path (results/<ALG>/<slug>/run_k) y como columna
-de metrics.csv; al final se consolida en results/all_metrics.csv.
+Cada configuración queda en el path (results/exp4/<ALG>/<slug>/run_k) y sus
+parámetros como columnas de metrics.csv; al final se consolida en
+results/exp4/all_metrics.csv.
 
     python run_experiments.py
 """
@@ -27,12 +28,12 @@ PYTHON = sys.executable   # el python del entorno actual
 # Los tres algoritmos entran por el mismo script, con --alg.
 EXPERIMENTO = "experimento.py"
 
-# ─── Espacio de hiperparámetros ───────────────────────────────────────────────
+# ─── Configuración ───────────────────────────────────────────────
 POP_GEN   = [(100, 1000)]                            # 100.000 evaluaciones
 
 # GA: probabilidad de cruce, de mutación por-gen y combos de operadores.
 CX_PROBS  = [1.0]
-MUT_PROBS = [0.004, 0.012, 0.031]
+MUT_PROBS = [0.1]
 OPERATORS = [("sbx", "pm"), ("pcx", "pm")]
 
 GA_ALGS = ALGS_GA
@@ -138,7 +139,7 @@ def prewarm_caches():
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Orquestador del análisis de sensibilidad de hiperparámetros MO.",
+        description="Orquestador del experimento exp4.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--n-runs",  type=int, default=20, help="Semillas por configuración.")
     ap.add_argument("--device",  choices=["auto", "cpu", "cuda"], default="auto",
@@ -146,7 +147,7 @@ def main():
     ap.add_argument("-p", "--parallel", type=int, default=None,
                     help="Runs concurrentes (default: 4 en GPU, ~núcleos-1 en CPU).")
     ap.add_argument("--summary-only", action="store_true",
-                    help="No corre experimentos; solo consolida results/all_metrics.csv.")
+                    help="No corre experimentos; solo consolida results/exp4/all_metrics.csv.")
     args = ap.parse_args()
 
     # Line-buffering: mantiene el orden con la salida de los subprocesos.
@@ -167,7 +168,7 @@ def main():
                  * len(CX_PROBS) * len(MUT_PROBS))
 
     print("=" * 54)
-    print(f"  Sensibilidad de hiperparámetros — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")
+    print(f"  exp4 — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")
     print(f"  Máquina        : {os.uname().nodename}  ({os.cpu_count()} núcleos)")
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")

@@ -2,8 +2,7 @@
 Figuras: convergencia, boxplots, frentes de Pareto, el grid QED-SA y las
 estructuras moleculares.
 
-El eje x de la convergencia son SIEMPRE evaluaciones, nunca generaciones: es el
-único a igual presupuesto, porque conviven repartos de 200×500 y 100×1000.
+El eje x de la convergencia son evaluaciones, no generaciones.
 """
 
 import glob
@@ -40,7 +39,6 @@ from .indicadores import (
     _familia,
     _indicator_curves,
     compute_indicators_per_run,
-    load_reference_front,
 )
 
 
@@ -121,9 +119,8 @@ PANELES_QUIM = [
 def _mapa_evaluaciones(series):
     """{label: Series(gen → evaluaciones acumuladas)}, promediado sobre las runs.
 
-    Sale de la columna n_eval de convergence.csv y no de gen × pop_size: no
-    siempre coinciden —CMOPSO evalúa 200 en una generación y 100 en el resto— y
-    acá el eje tiene que ser el gasto real."""
+    Sale de la columna n_eval de convergence.csv: es el gasto real de cada
+    generación."""
     mapas = {}
     for s in series:
         acum = []
@@ -139,11 +136,7 @@ def _mapa_evaluaciones(series):
 
 
 def _a_evaluaciones(curvas, mapas, escala=1000.0):
-    """Reindexa curvas de generación a evaluaciones acumuladas (en miles).
-
-    La generación no es un eje comparable: conviven repartos 200×500 y 100×1000,
-    así que en la generación 500 uno ya gastó el presupuesto y el otro va por la
-    mitad.  Sobre evaluaciones, toda lectura vertical es a igual presupuesto."""
+    """Reindexa curvas de generación a evaluaciones acumuladas (en miles)."""
     out = {}
     for label, (gens, vals) in curvas.items():
         m = mapas.get(label)
@@ -682,9 +675,7 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         norm = mcolors.Normalize(vmin=1, vmax=max(global_max_runs, 2))
 
     n_plots = len(paretos)
-    # Con 4 series (los combos de operadores) una grilla 2×2 queda pareja; con
-    # 3 columnas sobraría una celda vacía.  Con 5 (los algoritmos) 3+2 es lo mejor.
-    ncols = 2 if n_plots == 4 else min(3, n_plots)
+    ncols = min(3, n_plots)
     nrows = math.ceil(n_plots / ncols)
     fig, axes = plt.subplots(nrows, ncols,
                              figsize=(6.5 * ncols, 5.5 * nrows),
@@ -763,12 +754,12 @@ def render(smiles, size=LIENZO_MOL):
 
 # Corte de sintetizabilidad de las figuras de moléculas.  Ordenar por QED sin él
 # no alcanza: decenas de moléculas empatan en el techo (~0.948) y la de más QED
-# puede costar 3.5 de SA.  Lo comparte la figura de moléculas representativas de
-# la etapa 3, para que las dos usen el mismo corte.
+# puede costar 3.5 de SA.  Lo comparte la figura de moléculas representativas,
+# para que las dos usen el mismo corte.
 SA_MAX = 3.0
 
 
-# Cuántas moléculas se dibujan por combinación de operadores.
+# Cuántas moléculas se dibujan por cruce.
 N_MOLECULAS_OP = 2
 
 
@@ -817,23 +808,23 @@ def top_por_qed(frente, n, sa_max=SA_MAX):
 
 def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
                               sa_max=SA_MAX):
-    """Las n moléculas de mayor QED del frente de cada combinación de operadores,
-    entre las de SA < sa_max.  Una COLUMNA por combo: la comparación es entre
-    combos, y leerlos de izquierda a derecha es lo mismo que hace el resto de las
-    figuras de la etapa (leyendas, boxplots y tablas los ordenan así).
+    """Las n moléculas de mayor QED del frente de cada cruce, entre las de SA <
+    sa_max.  Una COLUMNA por cruce: la comparación es entre cruces, y leerlos de
+    izquierda a derecha es lo mismo que hace el resto de las figuras (leyendas,
+    boxplots y tablas los ordenan así).
 
     Es una figura ILUSTRATIVA, no comparativa.  Por debajo de SA 3 casi todo el
     frente empata en el techo de QED, así que cuál molécula sale la decide la
-    semilla y no el operador: cada elegida aparece en 1 de las 20 corridas, y
-    salen 29 estructuras distintas en 32 celdas.  Lo que compara operadores son
-    las tablas de la etapa 2, y el pie de figura del documento no debería
-    prometer más que «esto es lo que produce cada combo».  El CSV publica la
-    columna 'semillas' por si hace falta citar ese número.
+    semilla y no el operador.  Lo que compara operadores son las tablas de la
+    comparación de operadores, y el pie de figura del documento no debería
+    prometer más que «esto es lo que produce cada cruce».  El CSV publica la
+    columna 'semillas' por si hace falta citar en cuántas corridas apareció cada
+    elegida.
 
     Se probaron y descartaron: el extremo de SA mínima (PCX lo alcanza con
     alcanos lineales, que no se quieren en el documento) y el punto de compromiso
-    más cercano al ideal (reproducible, 9 de 20 semillas, pero da la misma
-    molécula en 9 de las 16 celdas)."""
+    más cercano al ideal (reproducible, pero da la misma molécula en muchas
+    celdas)."""
     frentes = {s.label: _frente_propio(s) for s in series}
     frentes = {lab: f for lab, f in frentes.items()
                if not f.empty and {'qed', 'sa', 'fsp3'}.issubset(f.columns)}
@@ -857,7 +848,7 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
                     else pd.Series(dtype=int))
 
         for j in range(n):
-            # El combo va en la columna i, las n moléculas bajan por sus filas.
+            # El cruce va en la columna i, las n moléculas bajan por sus filas.
             ax = axes[j][i]
             ax.set_xticks([]); ax.set_yticks([])
             for sp in ax.spines.values():
@@ -877,13 +868,13 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
             # con cuánto margen sobre el umbral quedó cada estructura dibujada.
             ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
                           f"·  Fsp3 {m['fsp3']:.2f}", fontsize=10, labelpad=3)
-            filas.append({'algoritmo': alg, 'combo': s.label, 'puesto': j + 1,
+            filas.append({'algoritmo': alg, 'cruce': s.label, 'puesto': j + 1,
                           'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
                           'fsp3': round(m['fsp3'], 3),
                           'semillas': int(semillas.get(m['smiles'], 0)),
                           'smiles': m['smiles']})
 
-    fig.suptitle(f'Frente por combinación de operadores — {alg}\n'
+    fig.suptitle(f'Frente por cruce — {alg}\n'
                  f'Las {n} moléculas de mayor QED con SA < {sa_max:g}',
                  fontsize=13, fontweight='bold', y=0.998)
     # h_pad explícito: el imshow fija el aspecto de la celda, así que el eje
@@ -904,8 +895,11 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
 
 # ─── Generación de gráficas para un grupo de series ─────────────────────────
 
-def _generate_report(series, pop_size, output_dir, report_label):
-    """Genera el conjunto completo de gráficas para un grupo de series."""
+def _generate_report(series, pop_size, output_dir, report_label, frente=None):
+    """Genera el conjunto completo de gráficas para un grupo de series.
+
+    frente es el frente de referencia común, (pf_F, pf_df), contra el que se
+    miden IGD+ y ε+; sin él se omiten esos indicadores."""
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\n{'─'*60}")
@@ -919,33 +913,29 @@ def _generate_report(series, pop_size, output_dir, report_label):
     #    tanto la gráfica de convergencia MO como las tablas/boxplots.
     indicator_data = {}
     ind_curves = {'igd_plus': {}, 'epsilon': {}}
-    if len(series) >= 2:
-        print("📐 Frente de referencia común (frente_referencia.csv)...")
-        pf_F, pf_df = load_reference_front()
-        if pf_F is not None:
-            print(f"   Frente de referencia: {len(pf_F)} soluciones no-dominadas")
-            indicator_data = compute_indicators_per_run(series, pf_F)
+    if len(series) >= 2 and frente is not None:
+        pf_F, pf_df = frente
+        print(f"📐 Frente de referencia común: {len(pf_F)} soluciones no-dominadas")
+        indicator_data = compute_indicators_per_run(series, pf_F)
 
-            # Guardar frente de referencia
-            pf_path = os.path.join(output_dir, f"reference_front_pop{pop_size}.csv")
-            pf_df.to_csv(pf_path, index=False)
-            print(f"  ✓ reference_front_pop{pop_size}.csv")
+        # Guardar frente de referencia
+        pf_path = os.path.join(output_dir, f"reference_front_pop{pop_size}.csv")
+        pf_df.to_csv(pf_path, index=False)
+        print(f"  ✓ reference_front_pop{pop_size}.csv")
 
-            # Guardar indicadores por run
-            ind_rows = []
-            for label, df_ind in indicator_data.items():
-                for _, row in df_ind.iterrows():
-                    ind_rows.append({'series': label, **row.to_dict()})
-            if ind_rows:
-                ind_path = os.path.join(output_dir, f"indicators_pop{pop_size}.csv")
-                pd.DataFrame(ind_rows).to_csv(ind_path, index=False)
-                print(f"  ✓ indicators_pop{pop_size}.csv")
+        # Guardar indicadores por run
+        ind_rows = []
+        for label, df_ind in indicator_data.items():
+            for _, row in df_ind.iterrows():
+                ind_rows.append({'series': label, **row.to_dict()})
+        if ind_rows:
+            ind_path = os.path.join(output_dir, f"indicators_pop{pop_size}.csv")
+            pd.DataFrame(ind_rows).to_csv(ind_path, index=False)
+            print(f"  ✓ indicators_pop{pop_size}.csv")
 
-            # Curvas de convergencia de indicadores por generación (sin re-entrenar)
-            print("📈 Curvas de convergencia de indicadores (IGD+, ε+)...")
-            ind_curves = _indicator_curves(series, pop_size, output_dir, pf_F)
-        else:
-            print("  ⚠ No se pudo construir frente de referencia")
+        # Curvas de convergencia de indicadores por generación (sin re-entrenar)
+        print("📈 Curvas de convergencia de indicadores (IGD+, ε+)...")
+        ind_curves = _indicator_curves(series, pop_size, output_dir, pf_F)
 
     # 2. Todas las curvas de convergencia, crudas y en un solo diccionario
     #    indexado por el nombre de columna: de acá salen las cuatro figuras y el

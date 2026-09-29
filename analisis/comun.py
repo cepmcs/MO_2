@@ -1,11 +1,12 @@
 """
 Estilo, series, carga de resultados, tests estadísticos y tablas LaTeX.
 
-Lo que usan todas las etapas.  Una Series es cualquier directorio con
+Lo que usan todos los comandos.  Una Series es cualquier directorio con
 run_XX/{metrics,molecules,convergence}.csv.
 
-Los tests toman la semilla como bloque (las 20 están pareadas): Friedman y, si
-da significativo, Wilcoxon por pares con Holm, resumido en grupos homogéneos.
+Los tests toman la semilla como bloque (las 20 están pareadas): Friedman con tres
+o más series y, si da significativo, Wilcoxon por pares con Holm, resumido en
+grupos homogéneos.  Con dos series, Wilcoxon pareado.
 """
 
 import glob
@@ -41,18 +42,16 @@ plt.rcParams.update({
 # El paquete cuelga de la raíz del repo, de ahí el dirname doble.
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Cada experimento publica en su subcarpeta (plots/main, plots/exp3), igual que
-# en results/.
-PLOTS_DIR = os.path.join(ROOT_DIR, "plots", "main")
+# Cada experimento publica en su subcarpeta (plots/main, plots/exp3, plots/exp4),
+# igual que en results/.
+PLOTS_DIR = os.path.join(ROOT_DIR, "plots", "exp4")
 
 
 # Paleta de colores distinguibles.  Para algoritmos se usa el nombre como clave;
-# para operadores (claves no presentes aquí) se cae al ciclo DEFAULT por índice.
+# los cruces tienen la suya en CRUCE_COLORS.
 COLORS = {
     'NSGA2':   '#E69F00',   # Ámbar (Okabe-Ito)
-    'CMOPSO':  '#FF0000',   # Rojo 100%
     'AGEMOEA': '#008000',   # Verde
-    'MOEAD':   '#1F77B4',   # Azul
     'NSGA3':   '#7B1FA2',   # Violeta
 }
 
@@ -60,15 +59,13 @@ DEFAULT_COLORS = ['#000000', '#FF0000', '#008000', '#1F77B4', '#7B1FA2', '#8C564
 
 
 # Orden en que se presentan los algoritmos en la comparación final.
-ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'CMOPSO']
+ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'AGEMOEA']
 
 
-# Nombres de presentación para los captions de las figuras: solo algoritmos.
-# DISPLAY, más abajo, es el de las etapas e incluye las baselines.
-DISPLAY_ALG = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
-               'AGEMOEA': 'AGE-MOEA', 'CMOPSO': 'CMOPSO'}
+# Nombres para el documento (los directorios usan la forma corta).
+DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'AGEMOEA': 'AGE-MOEA'}
 
-_ALG_POR_DISPLAY = {v: k for k, v in DISPLAY_ALG.items()}
+_ALG_POR_DISPLAY = {v: k for k, v in DISPLAY.items()}
 
 
 # Todas las series usan el mismo marcador (punto): se distinguen por color,
@@ -77,8 +74,8 @@ PARETO_MARKER = 'o'
 
 
 # Tamaño del marcador en los frentes 2D, según la densidad del panel:
-#   pareto_comparison superpone las 5 series      → ~58 pts/in²
-#   el grid QED-SA y el frente conjunto, un frente → ~12-15 pts/in²
+#   pareto_comparison superpone varias series
+#   el grid QED-SA y el frente conjunto, un frente
 MARCADOR_DENSO  = 13    # varias series superpuestas en el panel
 
 MARCADOR_NORMAL = 23    # un frente por panel
@@ -110,12 +107,13 @@ OBJECTIVES = ['qed', 'sa']
 
 def get_color(key, idx=0):
     """Color de una serie o de un grupo.  Acepta el nombre corto del algoritmo
-    (NSGA2) y también el de presentación (NSGA-II): las figuras que agrupan por
-    nombre legible —el frente conjunto del pool— tienen que salir con el mismo
-    color que el algoritmo lleva en el resto del documento, no con el del ciclo
-    por defecto, que le asignaría a NSGA-III el rojo de CMOPSO."""
+    (NSGA2), el de presentación (NSGA-II) y el cruce (PCX): las figuras que agrupan
+    por nombre legible —el frente conjunto del pool— tienen que salir con el mismo
+    color que llevan en el resto del documento, no con el del ciclo por defecto."""
     if key in COLORS:
         return COLORS[key]
+    if key in CRUCE_COLORS:
+        return CRUCE_COLORS[key]
     corto = _ALG_POR_DISPLAY.get(key)
     if corto in COLORS:
         return COLORS[corto]
@@ -126,8 +124,8 @@ def get_color(key, idx=0):
 # ─── Serie a comparar ────────────────────────────────────────────────────────
 
 class Series:
-    """Una serie a comparar: una curva/caja/frente en las gráficas.  En el modo
-    algoritmos cada algoritmo es una serie; en operadores, cada combo.
+    """Una serie a comparar: una curva/caja/frente en las gráficas.  Al comparar
+    algoritmos cada algoritmo es una serie; al comparar operadores, cada cruce.
 
       label     → texto en leyendas y títulos.
       pop_dir   → ruta absoluta a .../pop{N} de donde se cargan los datos.
@@ -215,14 +213,11 @@ def load_pareto_molecules(pop_dir):
 #
 #   El hipervolumen mide la extensión del frente, no la calidad de lo que hay
 #   dentro: se puede ganar volumen estirándose hacia un extremo con el grueso
-#   dominado.  Acá se junta lo de todos los combos, se recalcula la no-dominancia
-#   global y se mira quién aportó los supervivientes.
+#   dominado.  Acá se juntan las series, se recalcula la no-dominancia global y
+#   se mira quién aportó los supervivientes.
 
 # Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
-# CMOPSO entra acá porque en el frente conjunto de candidatos convive con las dos
-# familias de cruce sin pertenecer a ninguna: no tiene operadores.  Su rojo va
-# oscurecido para que no se confunda con el naranja de PCX.
-CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'CMOPSO': '#B01818'}
+CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2'}
 
 COMPARTIDA_COLOR = '#7F7F7F'
 
@@ -343,7 +338,7 @@ def _num_es(x, fmt):
 
 def _latex_escape(s):
     """Escapa caracteres especiales de LaTeX en texto (p. ej. el guion bajo
-    de nombres de operadores como pcx_gauss → pcx\\_gauss)."""
+    de pcx_pm → pcx\\_pm)."""
     repl = {'\\': r'\textbackslash{}', '&': r'\&', '%': r'\%', '$': r'\$',
             '#': r'\#', '_': r'\_', '{': r'\{', '}': r'\}', '~': r'\textasciitilde{}',
             '^': r'\textasciicircum{}',
@@ -499,7 +494,7 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
     # romper referencias ya escritas.
     ctx = str(pop_size)
     cap_ctx = ('' if ctx == 'final'
-               else f' — {_latex_escape(DISPLAY_ALG.get(ctx, ctx))}')
+               else f' — {_latex_escape(DISPLAY.get(ctx, ctx))}')
     # Directo bajo PLOTS_DIR la etiqueta sigue diciendo 'plots', como antes de que
     # cada experimento tuviera su subcarpeta (plots/main).
     dir_ctx = ('plots' if os.path.dirname(output_dir) == PLOTS_DIR
@@ -529,94 +524,73 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
 
 
 
-# ─── Construcción de series por modo ────────────────────────────────────────
+# ─── Construcción de series ─────────────────────────────────────────────────
 
-def build_finalist_series(algorithms, finalistas_dir):
-    """Modo algoritmos sobre finalistas/<ALG>/run_XX/: la configuración elegida
-    de cada algoritmo tras las etapas 1 y 2."""
+# Orden de los cruces en tablas y leyendas.
+CRUCES = ['pcx', 'sbx']
+
+
+
+def cfg_dir(results, alg, cruce):
+    """Directorio de la configuración de un algoritmo con un cruce:
+    <results>/<ALG>/<cruce>_<mutacion>/<config>/, la única con runs.  El nivel de
+    configuración no se nombra: se resuelve con glob.  None si no hay datos."""
+    cfgs = [d for d in sorted(glob.glob(os.path.join(results, alg, f'{cruce}_*', '*')))
+            if _has_runs(d)]
+    if len(cfgs) > 1:
+        raise SystemExit(f"{alg}/{cruce}: hay {len(cfgs)} configuraciones con runs "
+                         f"y el análisis espera una:\n  " + '\n  '.join(cfgs))
+    return cfgs[0] if cfgs else None
+
+
+
+def series_operadores(results, alg):
+    """Los dos cruces de un algoritmo, PCX y SBX."""
     series = []
-    for alg in algorithms:
-        d = os.path.join(finalistas_dir, alg)
-        if _has_runs(d):
+    for cruce in CRUCES:
+        d = cfg_dir(results, alg, cruce)
+        if d:
+            series.append(Series(cruce.upper(), d))
+    return series
+
+
+
+def series_algoritmos(results, cruce):
+    """Los algoritmos con un mismo cruce."""
+    series = []
+    for alg in ALGORITHM_ORDER:
+        d = cfg_dir(results, alg, cruce)
+        if d:
             series.append(Series(alg, d, color_key=alg))
     return series
 
 
 
-def winner_cfg_dir(winners_dir, alg, combo):
-    """Directorio de la configuración con que un combo ganó su bloque en la
-    etapa 1.  Cada uno ganó con hiperparámetros distintos, así que el nivel de
-    configuración no se puede nombrar: se resuelve con glob y se toma el hijo con
-    runs.  None si ese combo no tiene datos."""
-    cfgs = [d for d in sorted(glob.glob(os.path.join(winners_dir, alg, combo, '*')))
-            if _has_runs(d)]
-    return cfgs[0] if cfgs else None
-
-
-
-def build_operator_series_winners(alg, winners_dir, combos=None):
-    """Modo operadores sobre winners/<ALG>/<combo>/<config>/: las configuraciones
-    que ganaron su bloque en la etapa 1.
-
-    combos fija el orden de las series, que es el de las leyendas y el de las
-    filas de las tablas; sin él se toman los combos del directorio, alfabéticos."""
-    if combos is None:
-        base = os.path.join(winners_dir, alg)
-        combos = [c for c in sorted(os.listdir(base))
-                  if os.path.isdir(os.path.join(base, c))]
+def series_pool(results):
+    """Las seis configuraciones, una por algoritmo y cruce."""
     series = []
-    for combo in combos:
-        cfg_dir = winner_cfg_dir(winners_dir, alg, combo)
-        if cfg_dir:
-            series.append(Series(combo, cfg_dir, color_key=combo))
+    for alg in ALGORITHM_ORDER:
+        for cruce in CRUCES:
+            d = cfg_dir(results, alg, cruce)
+            if d:
+                series.append(Series(f'{DISPLAY.get(alg, alg)} ({cruce.upper()})', d))
     return series
 
 
-# Los resultados de este experimento viven en results/main; results/exp3 es el
-# de mutación, que se analiza en su rama.
-#   grid/        all_metrics.csv, que es lo que lee la etapa 1, y de cada corrida
-#                solo molecules.csv y metrics.csv (los baja exportar_light.sh),
-#                que es lo que usa construir_frente.py.
-#   winners/     las 17 configuraciones que ganaron su bloque en la etapa 1, con
-#                sus runs completas (incluido all_molecules.csv.gz).
-#   finalistas/  symlinks relativos a la ganadora de cada algoritmo en winners/.
-#                Lo armás vos en el PC, después de la etapa 2.
-#   baselines/   NO viene del cluster: las baselines se corren y se analizan acá.
-RESULTADOS_DIR = os.path.join(ROOT_DIR, "results", "main")
 
-METRICS_CSV    = os.path.join(RESULTADOS_DIR, "grid", "all_metrics.csv")
-
-WINNERS_DIR    = os.path.join(RESULTADOS_DIR, "winners")
-
-FINALISTAS_DIR = os.path.join(RESULTADOS_DIR, "finalistas")
-
-BASELINES_DIR  = os.path.join(RESULTADOS_DIR, "baselines")
-
-OUT_HP         = os.path.join(PLOTS_DIR, "hiperparametros")
+# Los resultados de este experimento viven en results/exp4, con una
+# configuración por algoritmo y cruce:
+#   <ALG>/<cruce>_<mutacion>/<config>/run_XX/
+RESULTADOS_DIR = os.path.join(ROOT_DIR, "results", "exp4")
 
 OUT_OPERADORES = os.path.join(PLOTS_DIR, "operadores")
 
 OUT_ALGORITMOS = os.path.join(PLOTS_DIR, "comparacion_final")
 
-OUT_BASELINES  = os.path.join(PLOTS_DIR, "baselines")
-
 # El frente conjunto va aparte: no compara algoritmos entre sí como el resto de
-# la etapa 3, sino que caracteriza qué moléculas sobreviven al unirlos y de dónde
-# salen.  Son preguntas distintas y conviene que no se mezclen en la lectura.
+# la comparación, sino que caracteriza qué moléculas sobreviven al unirlos y de
+# dónde salen.  Son preguntas distintas y conviene que no se mezclen en la lectura.
 OUT_FRENTE     = os.path.join(PLOTS_DIR, "frente_conjunto")
-
-
-# Nombres para el documento (los directorios usan la forma corta).
-DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
-           'AGEMOEA': 'AGE-MOEA', 'CMOPSO': 'CMOPSO',
-           'RANDOM': 'Aleatorio', 'WEIGHTED_GA': 'GA ponderado',
-           'SCREENING': 'Cribado MOSES', 'HILL_CLIMBER': 'Escalador'}
-
-
-# El algoritmo de enjambre.  Se nombra una sola vez: al no tener operadores de
-# cruce/mutación queda fuera de la comparación de operadores, del pool por
-# familias y de los factores GA.
-PSO_ALG = 'CMOPSO'
 
 
 
@@ -634,10 +608,7 @@ def _fmt_p(p):
 
 
 def fmt_groups(groups):
-    """'{A, B} $>$ {C}' con los nombres de presentación.
-
-    Escapa los nombres: los combos de operadores llevan guion bajo (pcx\\_pm) y
-    sin escapar rompen la compilación."""
+    """'{A, B} $>$ {C}' con los nombres de presentación, escapados para LaTeX."""
     return ' $>$ '.join(
         '\\{' + ', '.join(_latex_escape(DISPLAY.get(x, x)) for x in g) + '\\}'
         for g in groups)
@@ -748,14 +719,3 @@ def _write_tex(lines, path, msg=None):
     with open(path, 'w') as fh:
         fh.write('\n'.join(lines) + '\n')
     print(f"  ✓ {msg or os.path.basename(path)}")
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#   Etapa 2 — comparación de combinaciones de operadores, por algoritmo
-#
-#   Lee winners/<ALG>/<cruce>_<mutacion>/<config>/run_XX/ (lo que ganó su bloque
-#   en la etapa 1) y compara los 4 combos entre sí, un reporte por algoritmo.
-# ═══════════════════════════════════════════════════════════════════════════
-
-GA_ALGS = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA']

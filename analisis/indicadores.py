@@ -20,7 +20,7 @@ from .comun import (
     DISPLAY,
     FSP3_MIN,
     OBJECTIVES,
-    ROOT_DIR,
+    RESULTADOS_DIR,
     _fmt_p,
     _latex_escape,
     _num,
@@ -30,6 +30,7 @@ from .comun import (
     get_color,
     homogeneous_groups,
     load_pareto_molecules,
+    series_pool,
 )
 
 
@@ -129,24 +130,16 @@ def build_reference_front(series):
 
 
 
-# El frente contra el que se miden IGD+ y ε+ en todas las tablas: uno solo para
-# todo el documento, que arma construir_frente.py con todos los experimentos de
-# results/.  Si cada etapa usara el de sus propias series, el mismo IGD+ daría
-# distinto en cada tabla (NSGA-II pcx_pm: 0.0292 en la etapa 2, 0.0178 en la 3).
-FRENTE_REFERENCIA = os.path.join(ROOT_DIR, "frente_referencia.csv")
-
-
-
-def load_reference_front():
-    """El frente de referencia común → (pf_F, pf_df).
+def load_reference_front(results=RESULTADOS_DIR):
+    """El frente de referencia común → (pf_F, pf_df): la no-dominancia de todas las
+    corridas de las seis configuraciones, sea cual sea la comparación que lo pida.
 
     build_reference_front queda para el frente conjunto, que cuenta quién aporta
     cada molécula y por eso necesita el frente de sus propias series."""
-    if not os.path.exists(FRENTE_REFERENCIA):
-        raise SystemExit(f"No existe {FRENTE_REFERENCIA}.  Correr antes: "
-                         f"python construir_frente.py")
-    pf_df = pd.read_csv(FRENTE_REFERENCIA)
-    return _df_to_F(pf_df), pf_df
+    pf_F, pf_df = build_reference_front(series_pool(results))
+    if pf_F is None:
+        raise SystemExit(f"No hay corridas en {results}.")
+    return pf_F, pf_df
 
 
 
@@ -182,7 +175,7 @@ def compute_indicators_per_run(series, pf_F):
 
 
 def _familia(label):
-    """Familia de cruce de un combo: 'pcx_gauss' → 'PCX'."""
+    """Familia de cruce de una etiqueta: 'PCX', 'pcx_pm' → 'PCX'."""
     return label.split('_')[0].upper()
 
 
@@ -241,8 +234,8 @@ def atribuir_frente(series, pf_df, grupo_de=_familia):
 
 # Ancho de la banda que cuenta como «apoyado en el umbral».  Con Fsp3 fuera de
 # los objetivos nada la empuja hacia arriba, así que la pregunta útil dejó de ser
-# cuántas moléculas llegan alto (con el constraint casi ninguna: el máximo del
-# grid ronda 0.64) y pasó a ser cuántas se estacionan justo sobre el borde.
+# cuántas moléculas llegan alto (con el constraint casi ninguna) y pasó a ser
+# cuántas se estacionan justo sobre el borde.
 FSP3_BORDE = 0.05
 
 
@@ -355,8 +348,7 @@ def _atribucion_por_origen(series, pf_df, grupo_de):
         return None
     grupos = _grupos_de(series, grupo_de)
     compartida = _etiqueta_compartida(grupos)
-    # Los combos de operadores no están en COLORS y caerían todos al mismo color
-    # del ciclo por defecto; los algoritmos sí tienen color propio asignado.
+    # Los cruces tienen su paleta y los algoritmos su color propio.
     por_cruce = set(grupos) <= set(CRUCE_COLORS)
     paleta = ({g: CRUCE_COLORS[g] for g in grupos} if por_cruce
               else {g: get_color(g, i) for i, g in enumerate(grupos)})
@@ -373,13 +365,12 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
     """Curvas de IGD+ y ε+ por generación, SIN re-entrenar.
 
     Mide el frente ACUMULADO hasta cada generación, no el de esa generación
-    sola.  El instantáneo medía otra cosa y engañaba: son 4-9 moléculas contra
-    las ~35 del frente de referencia, y al converger la población se apiña y deja
-    de cubrirlo, así que la curva SUBÍA.  Peor, su último punto no coincidía con
-    el IGD+ de la tabla —que sale de molecules.csv, o sea del frente acumulado— y
-    ordenaba los algoritmos al revés: NSGA-II es el mejor de la tabla (0.018) y
-    salía último en la curva (0.101).  Con el acumulado la curva baja y su último
-    punto es exactamente el valor de la tabla.
+    sola.  El instantáneo medía otra cosa y engañaba: son pocas moléculas contra
+    las del frente de referencia, y al converger la población se apiña y deja de
+    cubrirlo, así que la curva SUBÍA.  Peor, su último punto no coincidía con el
+    IGD+ de la tabla —que sale de molecules.csv, o sea del frente acumulado— y
+    podía ordenar los algoritmos al revés.  Con el acumulado la curva baja y su
+    último punto es exactamente el valor de la tabla.
 
     Reconstruye desde all_molecules.csv.gz y promedia sobre las runs.
 
@@ -412,9 +403,9 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
             if not {'gen', 'qed', 'sa', 'valid'}.issubset(df.columns):
                 continue
             df = df[df['valid'].astype(bool)].dropna(subset=['qed', 'sa'])
-            # 'feasible' lo escribe el eval_log de esta etapa; si el log viniera
-            # de una corrida sin constraint se cae a Fsp3 ≥ umbral, que es la
-            # misma condición calculada desde la propiedad.
+            # 'feasible' lo escribe el eval_log; si el log viniera de una corrida
+            # sin constraint se cae a Fsp3 ≥ umbral, que es la misma condición
+            # calculada desde la propiedad.
             if 'feasible' in df.columns:
                 df = df[df['feasible'].astype(bool)]
             elif 'fsp3' in df.columns:
@@ -522,7 +513,7 @@ def _test_aporte(por_grupo, runs):
 
 def _partir_etiqueta(nombre):
     """'NSGA-II (PCX)' → ('NSGA-II', 'PCX').  Sin paréntesis, el segundo campo
-    queda vacío: es el caso de CMOPSO, que no tiene operadores."""
+    queda '---'."""
     if nombre.endswith(')') and '(' in nombre:
         alg, cruce = nombre.rsplit('(', 1)
         return alg.strip(), cruce[:-1].strip()
@@ -542,7 +533,7 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
     Las etiquetas 'NSGA-II (PCX)' se parten en dos columnas, con el algoritmo en
     \\multirow: son dos ramas de la misma entidad, no dos entidades.
 
-    Devuelve el resumen del contraste para el CSV de la etapa.
+    Devuelve el resumen del contraste sobre el aporte por semilla.
     """
     grupo_de = grupo_de or _familia
     filas, _ = contribucion_agregada(series, pf_df, grupo_de)
@@ -586,10 +577,11 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
                      if n_ramas > 1 else _latex_escape(alg))
         else:
             celda = ''
+        num = lambda x, dec: '---' if pd.isna(x) else _num(x, dec)
         lines.append(
             f"{celda} & {_latex_escape(cruce)} & "
             f"{f['aporta']} & {f['exclusiva']} & {_num(100*f['frac'], 1)} & "
-            f"{_num(f['qed'], 3)} & {_num(f['sa'], 2)} & {_num(f['fsp3'], 3)} \\\\")
+            f"{num(f['qed'], 3)} & {num(f['sa'], 2)} & {num(f['fsp3'], 3)} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, f'contribucion_{nombre}.tex'))
 
