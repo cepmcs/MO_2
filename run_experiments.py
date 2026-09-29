@@ -1,10 +1,10 @@
 """
 Orquestador del grid de sensibilidad de hiperparámetros.
 
-Corre las 513 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
-de 100.000 evaluaciones cada una: 108 por cada GA (reparto pob×gen × operadores ×
-probabilidades) más 81 de CMOPSO.  Reanudable: una run cuenta como completa si
-existe su molecules.csv.
+Corre las 324 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
+de 100.000 evaluaciones cada una: 108 por cada algoritmo (reparto pob×gen ×
+operadores × probabilidades).  Reanudable: una run cuenta como completa si existe
+su molecules.csv.
 
 Cada perilla barrida queda en el path (results/<ALG>/<slug>/run_k) y como columna
 de metrics.csv; al final se consolida en results/all_metrics.csv.
@@ -20,11 +20,11 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from experimento import ALGS_GA
-from utils_mo import ga_run_dir, cmopso_run_dir, consolidate_all, FSP3_MIN
+from utils_mo import ga_run_dir, consolidate_all, FSP3_MIN
 
 ROOT   = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable   # el python del entorno actual
-# Los cinco algoritmos entran por el mismo script, con --alg.
+# Los tres algoritmos entran por el mismo script, con --alg.
 EXPERIMENTO = "experimento.py"
 
 # ─── Espacio de hiperparámetros ───────────────────────────────────────────────
@@ -34,11 +34,6 @@ POP_GEN   = [(100, 1000), (200, 500), (400, 250)]   # los 3 = 100.000 evaluacion
 CX_PROBS  = [0.7, 0.9, 1.0]
 MUT_PROBS = [0.004, 0.012, 0.031]
 OPERATORS = [("sbx", "pm"), ("sbx", "gauss"), ("pcx", "pm"), ("pcx", "gauss")]
-
-# CMOPSO: sus propias perillas.  La mutación se barre con los mismos valores que
-# los GA para que sea comparable.
-ELITE_SIZES = [5, 10, 25]
-VEL_RATES   = [0.1, 0.2, 0.35]
 
 GA_ALGS = ALGS_GA
 
@@ -54,24 +49,14 @@ def build_tasks(n_runs):
                 for cxp in CX_PROBS:
                     for mutp in MUT_PROBS:
                         for run in range(n_runs):
-                            tasks.append(dict(kind="ga", alg=alg,
-                                              pop=pop, gen=gen, cx=cx, mut=mut,
-                                              cxp=cxp, mutp=mutp, run=run))
-    for pop, gen in POP_GEN:
-        for es in ELITE_SIZES:
-            for mutp in MUT_PROBS:
-                for vel in VEL_RATES:
-                    for run in range(n_runs):
-                        tasks.append(dict(kind="cmopso", alg="CMOPSO",
-                                          pop=pop, gen=gen, es=es, mutp=mutp,
-                                          vel=vel, run=run))
+                            tasks.append(dict(alg=alg, pop=pop, gen=gen,
+                                              cx=cx, mut=mut, cxp=cxp,
+                                              mutp=mutp, run=run))
     return tasks
 
 
 def run_dir_of(t):
     """Path de la run, el mismo que arma experimento.py."""
-    if t['kind'] == 'cmopso':
-        return cmopso_run_dir(t['pop'], t['gen'], t['es'], t['mutp'], t['vel'], t['run'])
     return ga_run_dir(t['alg'], t['cx'], t['mut'], t['cxp'], t['mutp'],
                       t['pop'], t['gen'], t['run'])
 
@@ -82,10 +67,8 @@ def is_done(t):
 
 
 def label(t):
-    cfg = f"pop{t['pop']}xgen{t['gen']}/run_{t['run'] + 1:02d}"
-    if t['kind'] == 'cmopso':
-        return f"CMOPSO[e{t['es']:g}_mut{t['mutp']:g}_vel{t['vel']:g}]/{cfg}"
-    return f"{t['alg']}[{t['cx']}{t['cxp']:g}+{t['mut']}{t['mutp']:g}]/{cfg}"
+    return (f"{t['alg']}[{t['cx']}{t['cxp']:g}+{t['mut']}{t['mutp']:g}]"
+            f"/pop{t['pop']}xgen{t['gen']}/run_{t['run'] + 1:02d}")
 
 
 # ─── Ejecución de una run (subproceso aislado) ────────────────────────────────
@@ -103,13 +86,9 @@ def run_one(t, device, threads):
 
     cmd = [PYTHON, os.path.join(ROOT, EXPERIMENTO), "--alg", t['alg'],
            "--pop_size", str(t['pop']), "--n_gen", str(t['gen']),
-           "--run_id", str(t['run']), "--device", device]
-    if t['kind'] == 'cmopso':
-        cmd += ["--elite_size", str(t['es']), "--mut_prob", str(t['mutp']),
-                "--vel_rate", str(t['vel'])]
-    else:
-        cmd += ["--crossover", t['cx'], "--mutation", t['mut'],
-                "--cx_prob", str(t['cxp']), "--mut_prob", str(t['mutp'])]
+           "--run_id", str(t['run']), "--device", device,
+           "--crossover", t['cx'], "--mutation", t['mut'],
+           "--cx_prob", str(t['cxp']), "--mut_prob", str(t['mutp'])]
 
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ROOT, env=env,
@@ -184,15 +163,16 @@ def main():
     tasks   = build_tasks(args.n_runs)
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
-    n_ga    = len(GA_ALGS) * len(POP_GEN) * len(OPERATORS) * len(CX_PROBS) * len(MUT_PROBS)
-    n_cmopso = len(POP_GEN) * len(ELITE_SIZES) * len(MUT_PROBS) * len(VEL_RATES)
+    n_configs = (len(GA_ALGS) * len(POP_GEN) * len(OPERATORS)
+                 * len(CX_PROBS) * len(MUT_PROBS))
 
     print("=" * 54)
     print(f"  Sensibilidad de hiperparámetros — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")
     print(f"  Máquina        : {os.uname().nodename}  ({os.cpu_count()} núcleos)")
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")
-    print(f"  Configs        : {n_ga} GA + {n_cmopso} CMOPSO = {n_ga + n_cmopso}")
+    print(f"  Configs        : {n_configs}  ({len(GA_ALGS)} algoritmos × "
+          f"{n_configs // len(GA_ALGS)})")
     print(f"  Total de runs  : {total}   (ya hechas: {done0}, pendientes: {len(pending)})")
     print("=" * 54)
 

@@ -83,18 +83,9 @@ def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
     return os.path.join(base, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
 
 
-def cmopso_run_dir(pop_size, n_gen, elite_size, mut_prob, vel_rate, run_id,
-                   results_dir=None):
-    """Directorio de una run CMOPSO: results/CMOPSO/<config>/run_k."""
-    base = results_dir if results_dir is not None else RESULTS_DIR
-    cfg = (f"pop{pop_size}_gen{n_gen}_e{_slug(elite_size)}"
-           f"_mut{_slug(mut_prob)}_vel{_slug(vel_rate)}")
-    return os.path.join(base, "CMOPSO", cfg, f"run_{run_id + 1:02d}")
-
-
 def get_ref_dirs(n_points):
-    """n_points direcciones Das-Dennis uniformes sobre el símplex, para NSGA-III
-    y MOEA/D.  Determinista y ~1 ms: no se cachea."""
+    """n_points direcciones Das-Dennis uniformes sobre el símplex, para NSGA-III.
+    Determinista y ~1 ms: no se cachea."""
     from pymoo.util.ref_dirs import get_reference_directions
     return get_reference_directions("uniform", 2, n_partitions=n_points - 1)
 
@@ -296,20 +287,6 @@ class MolecularLatentProblem(Problem):
         out["G"] = G
 
 
-class NormalizedMolecularLatentProblem(MolecularLatentProblem):
-    """MolecularLatentProblem con F normalizado a [0,1]^2.
-
-    Lo usan MOEA/D y CMOPSO, donde la escala cruda de SA domina.  G y eval_log
-    quedan crudos."""
-
-    _F_MIN   = F_MIN
-    _F_RANGE = F_RANGE
-
-    def _evaluate(self, x, out, *args, **kwargs):
-        super()._evaluate(x, out, *args, **kwargs)
-        out["F"] = (out["F"] - self._F_MIN) / self._F_RANGE
-
-
 class LatentSampling(Sampling):
     """Sampling inicial desde vectores μ de moléculas MOSES."""
     def __init__(self, mus):
@@ -357,10 +334,7 @@ class GenerationTracker(Callback):
         if len(pop_feasible) == 0:
             hv = 0.0
         else:
-            F = pop_feasible.get("F")
-            # El problema Normalized ya entrega F normalizado; el crudo no.
-            if not hasattr(self.problem, '_F_MIN'):
-                F = (F - F_MIN) / F_RANGE
+            F = (pop_feasible.get("F") - F_MIN) / F_RANGE
             try:
                 hv = float(HV(ref_point=HV_REF)(F))
             except Exception:

@@ -14,8 +14,8 @@
 #  Wrapper SLURM: corre el grid y deja un tar listo para bajar al PC.
 #
 #    1. run_experiments.py         el grid, en paralelo y reanudable.
-#    2. python -m analisis etapa1  elige las 17 configuraciones ganadoras.
-#    3. tar                        esas 17 + all_metrics.csv + las figuras.
+#    2. python -m analisis etapa1  elige las 12 configuraciones ganadoras.
+#    3. tar                        esas 12 + all_metrics.csv + las figuras.
 #
 #  La etapa 1 corre acá para no bajar el grid entero y volver al cluster a buscar
 #  las ganadoras.  El grid no entra en las 12 h de la partición: los jobs
@@ -89,19 +89,15 @@ fi
 echo
 echo "[$(date '+%F %T')] Grid completo: $HECHAS/$ESPERADAS runs. Exportando..."
 
-# Etapa 1: elige las 17 ganadoras y deja figuras, selected_configs.csv y la
+# Etapa 1: elige las 12 ganadoras y deja figuras, selected_configs.csv y la
 # tabla LaTeX en plots/hiperparametros/.
 "$PYTHON" -m analisis etapa1 --csv results/all_metrics.csv || exit 1
 
-# selected_configs.csv → las rutas de esas 17 dentro de results/.  El %g de awk
+# selected_configs.csv → las rutas de esas 12 dentro de results/.  El %g de awk
 # es el mismo formato con que utils_mo._slug nombró las carpetas.  LC_ALL=C no es
 # opcional: con un locale de coma decimal awk leería 0.7 como 0.
 CONFIGS=$(LC_ALL=C awk -F, '
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
-    $(col["algorithm"]) == "CMOPSO" {
-        printf "CMOPSO/pop%d_gen%d_e%g_mut%g_vel%g\n",
-               $(col["pop_size"]), $(col["n_gen"]), $(col["elite_size"]),
-               $(col["mut_prob"]), $(col["vel_rate"]); next }
     { printf "%s/%s_%s/cx%g_mut%g_pop%d_gen%d\n",
              $(col["algorithm"]), $(col["crossover"]), $(col["mutation"]),
              $(col["cx_prob"]), $(col["mut_prob"]),
@@ -112,7 +108,7 @@ CONFIGS=$(LC_ALL=C awk -F, '
 for c in $CONFIGS; do          # sin comillas a propósito: una ruta por línea, sin espacios
     [ -d "results/$c" ] || {
         echo "ERROR: la etapa 1 eligió 'results/$c', que no existe." >&2
-        echo "       ¿Cambiaron ga_run_dir/cmopso_run_dir en utils_mo.py?" >&2
+        echo "       ¿Cambió ga_run_dir en utils_mo.py?" >&2
         exit 1; }
 done
 

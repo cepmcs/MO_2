@@ -1,10 +1,9 @@
 """
-Los cinco algoritmos de la comparación y el cuerpo de una corrida.
+Los tres algoritmos de la comparación (NSGA-II, NSGA-III y AGE-MOEA) y el cuerpo
+de una corrida.
 
-Para agregar o cambiar un algoritmo se toca la tabla ALGORITMOS.  Las perillas
-dependen de la familia; --help muestra las del --alg que pases:
-  ga  (NSGA2, NSGA3, MOEAD, AGEMOEA)   --crossover --mutation --cx_prob --mut_prob
-  pso (CMOPSO)                         --elite_size --mut_prob --vel_rate
+Para agregar o cambiar un algoritmo se toca la tabla ALGORITMOS.  Las perillas son
+las mismas en los tres: --crossover --mutation --cx_prob --mut_prob.
 
 Corre UNA configuración por vez; el grid lo lanza run_experiments.py.
 """
@@ -17,70 +16,22 @@ from typing import Callable
 
 import numpy as np
 import torch
-from scipy.spatial.distance import cdist
 
 from pymoo.algorithms.moo.age import AGEMOEA
-from pymoo.algorithms.moo.cmopso import CMOPSO
-from pymoo.algorithms.moo.moead import ParallelMOEAD, default_decomp
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.moo.nsga3 import NSGA3
-from pymoo.operators.mutation.pm import PM
 from pymoo.optimize import minimize
-from pymoo.util.misc import parameter_less
 
 from utils_mo import (
     load_model, load_seed_mus, load_train_smiles, set_device,
-    MolecularLatentProblem, NormalizedMolecularLatentProblem,
-    LatentSampling, GenerationTracker,
+    MolecularLatentProblem, LatentSampling, GenerationTracker,
     postprocess_run, consolidate_all, get_operators, get_ref_dirs,
-    ga_run_dir, cmopso_run_dir, FSP3_MIN,
+    ga_run_dir, FSP3_MIN,
 )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#   1. MOEA/D con constraints
-# ═══════════════════════════════════════════════════════════════════════════
-
-class MOEADConstr(ParallelMOEAD):
-    """MOEA/D con dominancia de factibilidad.
-
-    El de pymoo aborta con un assert ante constraints.  Acá cada infactible vale
-    fmax + CV en el espacio escalarizado: peor que cualquier factible, y entre
-    infactibles gana el de menor violación."""
-
-    def _setup(self, problem, **kwargs):
-        # Igual que MOEAD._setup pero sin el assert que rechaza constraints.
-        if self.ref_dirs is None:
-            from pymoo.util.reference_direction import default_ref_dirs
-            self.ref_dirs = default_ref_dirs(problem.n_obj)
-        self.pop_size = len(self.ref_dirs)
-        self.neighbors = np.argsort(
-            cdist(self.ref_dirs, self.ref_dirs), axis=1, kind='quicksort'
-        )[:, :self.n_neighbors]
-        if self.decomposition is None:
-            self.decomposition = default_decomp(problem)
-
-    def _replace(self, k, off):
-        pop = self.pop
-        N = self.neighbors[k]
-        FV = self.decomposition.do(pop[N].get("F"), weights=self.ref_dirs[N, :],
-                                   ideal_point=self.ideal)
-        off_FV = self.decomposition.do(off.F[None, :], weights=self.ref_dirs[N, :],
-                                       ideal_point=self.ideal)
-
-        if self.problem.has_constraints():
-            CV = pop[N].get("CV")[:, 0]
-            off_CV = np.full(len(off_FV), off.CV[0])
-            fmax = max(FV.max(), off_FV.max())
-            FV = parameter_less(FV, CV, fmax=fmax)
-            off_FV = parameter_less(off_FV, off_CV, fmax=fmax)
-
-        I = np.where(off_FV < FV)[0]
-        pop[N[I]] = off
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#   2. Los cinco algoritmos
+#   1. Los tres algoritmos
 # ═══════════════════════════════════════════════════════════════════════════
 
 @dataclass(frozen=True)
@@ -88,14 +39,10 @@ class Algoritmo:
     """Lo que distingue a un algoritmo de los otros.
 
     construir     (args, sampling, operadores, ref_dirs) → algoritmo de pymoo.
-    familia       'ga' o 'pso'; decide las perillas del CLI y el run_dir.
-    normalizado   el problema entrega F normalizado a [0,1]^2.
     ref_dirs      necesita pop_size direcciones de referencia.
     nota          sale en su --help.
     """
     construir: Callable
-    familia: str
-    normalizado: bool
     ref_dirs: bool
     nota: str
 
@@ -118,67 +65,31 @@ def _agemoea(args, sampling, operadores, ref_dirs):
                    crossover=cruce, mutation=mutacion, eliminate_duplicates=True)
 
 
-def _moead(args, sampling, operadores, ref_dirs):
-    # Sin pop_size: sale de len(ref_dirs), un subproblema por dirección.
-    cruce, mutacion = operadores
-    return MOEADConstr(ref_dirs=ref_dirs, n_neighbors=20,
-                       prob_neighbor_mating=0.9, sampling=sampling,
-                       crossover=cruce, mutation=mutacion)
-
-
-def _cmopso(args, sampling, operadores, ref_dirs):
-    algoritmo = CMOPSO(pop_size=args.pop_size, elite_size=args.elite_size,
-                       max_velocity_rate=args.vel_rate, sampling=sampling)
-    # Se pisa la mutación para barrer la misma perilla que los GA.
-    algoritmo.mutation = PM(prob=1.0, prob_var=args.mut_prob)
-    return algoritmo
-
-
 ALGORITMOS = {
     'NSGA2': Algoritmo(
-        construir=_nsga2, familia='ga', normalizado=False, ref_dirs=False,
+        construir=_nsga2, ref_dirs=False,
         nota="Constraint nativo."),
 
     'NSGA3': Algoritmo(
-        construir=_nsga3, familia='ga', normalizado=False, ref_dirs=True,
+        construir=_nsga3, ref_dirs=True,
         nota="Usa pop_size direcciones Das-Dennis.  Constraint nativo."),
 
-    'MOEAD': Algoritmo(
-        construir=_moead, familia='ga', normalizado=True, ref_dirs=True,
-        nota="Necesita subclase (MOEADConstr): el de pymoo no acepta constraints. "
-             "Va normalizado: la escala de SA domina la descomposición "
-             "Tchebycheff."),
-
     'AGEMOEA': Algoritmo(
-        construir=_agemoea, familia='ga', normalizado=False, ref_dirs=False,
+        construir=_agemoea, ref_dirs=False,
         nota="Adapta la presión de selección a la geometría del frente.  "
              "Constraint nativo."),
-
-    'CMOPSO': Algoritmo(
-        construir=_cmopso, familia='pso', normalizado=True, ref_dirs=False,
-        nota="Reemplaza al MOPSO_CD anterior, que ignoraba el constraint.  Va "
-             "normalizado: la escala de SA domina la velocidad."),
 }
 
-# Los cuatro genéticos: los que tienen operadores que barrer.
-ALGS_GA = [nombre for nombre, a in ALGORITMOS.items() if a.familia == 'ga']
+# Los tres son genéticos, así que todos tienen operadores que barrer.
+ALGS_GA = list(ALGORITMOS)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#   3. El cuerpo de una corrida
+#   2. El cuerpo de una corrida
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _perillas(alg, args, latent_dim):
-    """(run_dir, label, hp, mut_prob) según la familia."""
-    if ALGORITMOS[alg].familia == 'pso':
-        run_dir = cmopso_run_dir(args.pop_size, args.n_gen, args.elite_size,
-                                 args.mut_prob, args.vel_rate, args.run_id)
-        label = (f"{alg}[e{args.elite_size:g}_mut{args.mut_prob:g}"
-                 f"_vel{args.vel_rate:g}]")
-        hp = {'elite_size': args.elite_size, 'mut_prob': args.mut_prob,
-              'vel_rate': args.vel_rate, 'fsp3_min': FSP3_MIN}
-        return run_dir, label, hp, args.mut_prob
-
+    """(run_dir, label, hp, mut_prob) de una corrida."""
     mut_prob = args.mut_prob if args.mut_prob is not None else 1.0 / latent_dim
     run_dir = ga_run_dir(alg, args.crossover, args.mutation, args.cx_prob,
                          mut_prob, args.pop_size, args.n_gen, args.run_id)
@@ -191,10 +102,10 @@ def _perillas(alg, args, latent_dim):
 
 
 def correr(alg, args):
-    """Una corrida completa de cualquiera de los cinco."""
+    """Una corrida completa de cualquiera de los tres."""
     spec = ALGORITMOS[alg]
 
-    # El run_id da la misma población inicial en los cinco: las semillas quedan
+    # El run_id da la misma población inicial en los tres: las semillas quedan
     # pareadas y el análisis puede tomarlas como bloque.
     np.random.seed(args.run_id)
     torch.manual_seed(args.run_id)
@@ -212,13 +123,10 @@ def correr(alg, args):
     print(f"[{label}] Iniciando...", flush=True)
 
     ref_dirs = get_ref_dirs(args.pop_size) if spec.ref_dirs else None
-    operadores = (get_operators(args.crossover, args.mutation,
-                                args.cx_prob, mut_prob)
-                  if spec.familia == 'ga' else None)
+    operadores = get_operators(args.crossover, args.mutation,
+                               args.cx_prob, mut_prob)
 
-    clase_problema = (NormalizedMolecularLatentProblem if spec.normalizado
-                      else MolecularLatentProblem)
-    problem = clase_problema(model, stoi, itos, latent_dim)
+    problem = MolecularLatentProblem(model, stoi, itos, latent_dim)
     tracker = GenerationTracker(problem, train_smiles)
     algoritmo = spec.construir(args, LatentSampling(mus), operadores, ref_dirs)
 
@@ -239,22 +147,17 @@ def correr(alg, args):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#   4. Línea de comandos
+#   3. Línea de comandos
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _parser(alg=None, ayuda=True):
-    """Perillas comunes y, si ya se sabe el algoritmo, las de su familia.
-
-    Se construye dos veces: primero sin ayuda, para averiguar el --alg.  Así una
-    perilla ajena es error."""
-    spec = ALGORITMOS[alg] if alg else None
+def _parser():
     ap = argparse.ArgumentParser(
-        prog="experimento.py", add_help=ayuda,
+        prog="experimento.py",
         description="Optimización multi-objetivo del espacio latente VAE.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(textwrap.fill(f"{alg}: {spec.nota}", 78, subsequent_indent='  ')
-                if spec else
-                "Pasá --alg <nombre> --help para ver las perillas de ese algoritmo."))
+        epilog="\n".join(textwrap.fill(f"{nombre}: {a.nota}", 78,
+                                       subsequent_indent='  ')
+                         for nombre, a in ALGORITMOS.items()))
 
     ap.add_argument('--alg', choices=list(ALGORITMOS), type=str.upper,
                     help="Algoritmo a correr.")
@@ -266,37 +169,22 @@ def _parser(alg=None, ayuda=True):
     ap.add_argument('--generate_summary', action='store_true',
                     help="No corre nada: consolida results/all_metrics.csv y sale.")
 
-    if spec is None:
-        return ap
-
-    if spec.familia == 'ga':
-        ap.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
-        ap.add_argument('--mutation', choices=['pm', 'gauss'], default='pm')
-        ap.add_argument('--cx_prob', type=float, default=0.9,
-                        help="Probabilidad de cruce (por apareamiento).")
-        ap.add_argument('--mut_prob', type=float, default=None,
-                        help="Probabilidad de mutación POR-GEN (default: 1/n_var).")
-    else:
-        ap.add_argument('--elite_size', type=int, default=10,
-                        help="Tamaño al que se poda el archivo de elites.")
-        ap.add_argument('--mut_prob', type=float, default=0.031,
-                        help="Probabilidad de mutación POR-GEN (prob_var), como "
-                             "en el grid GA.")
-        ap.add_argument('--vel_rate', type=float, default=0.2,
-                        help="max_velocity_rate: V_max = vel_rate · (xu − xl).")
+    ap.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
+    ap.add_argument('--mutation', choices=['pm', 'gauss'], default='pm')
+    ap.add_argument('--cx_prob', type=float, default=0.9,
+                    help="Probabilidad de cruce (por apareamiento).")
+    ap.add_argument('--mut_prob', type=float, default=None,
+                    help="Probabilidad de mutación POR-GEN (default: 1/n_var).")
     return ap
 
 
 def main():
-    # Sin ayuda propia: así '--alg X --help' llega al parser final.
-    conocidos, _ = _parser(ayuda=False).parse_known_args()
+    ap = _parser()
+    args = ap.parse_args()
 
-    if conocidos.generate_summary:
+    if args.generate_summary:
         consolidate_all()
         return
-
-    ap = _parser(conocidos.alg)
-    args = ap.parse_args()
     if args.alg is None:
         ap.error("se requiere --alg (o --generate_summary)")
     if args.pop_size is None:
