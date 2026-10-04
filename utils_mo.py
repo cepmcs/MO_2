@@ -34,6 +34,13 @@ RESULTS_DIR = os.path.join(ROOT_DIR, "results", "exp4")
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
+# El experimento: lo que corre run_experiments.py y los defaults de experimento.py.
+POP_SIZE = 100
+N_GEN    = 1000     # 100.000 evaluaciones
+CX_PROB  = 1.0
+MUTATION = 'pm'
+MUT_PROB = 0.1      # por gen
+
 # Constraint: factible si Fsp3 ≥ FSP3_MIN.
 FSP3_MIN = 0.3
 
@@ -50,7 +57,7 @@ SMILES_REGEX = re.compile(
 
 
 # ─── Operadores genéticos ────────────────────────────────────────────────────
-# Solo se barren las probabilidades; el resto queda en el default de pymoo.
+# Solo se parametrizan las probabilidades; el resto queda en el default de pymoo.
 # La mutación va por-gen (prob_var) con prob=1.0.
 
 CROSSOVERS = {
@@ -73,12 +80,11 @@ def _slug(x):
 
 
 def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
-               pop_size, n_gen, run_id, results_dir=None):
+               pop_size, n_gen, run_id):
     """Directorio de una run GA: results/exp4/<ALG>/<cruce_mut>/<config>/run_k."""
-    base = results_dir if results_dir is not None else RESULTS_DIR
     combo = f"{crossover}_{mutation}"
     cfg   = f"cx{_slug(cx_prob)}_mut{_slug(mut_prob)}_pop{pop_size}_gen{n_gen}"
-    return os.path.join(base, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
+    return os.path.join(RESULTS_DIR, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
 
 
 def get_ref_dirs(n_points):
@@ -479,17 +485,16 @@ def save_tracking(tracker, run_dir):
         index=False, compression='gzip', float_format='%.4f')
 
 
-def consolidate_all(results_dir=None):
+def consolidate_all():
     """Junta los run_*/metrics.csv en <results>/all_metrics.csv, una fila por run
     con sus hiperparámetros como columnas."""
-    base = results_dir if results_dir is not None else RESULTS_DIR
-    files = sorted(glob.glob(os.path.join(base, "**", "run_*", "metrics.csv"),
+    files = sorted(glob.glob(os.path.join(RESULTS_DIR, "**", "run_*", "metrics.csv"),
                              recursive=True))
     if not files:
-        print(f"ERROR: no hay run_*/metrics.csv bajo {base}")
+        print(f"ERROR: no hay run_*/metrics.csv bajo {RESULTS_DIR}")
         return None
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
-    out = os.path.join(base, "all_metrics.csv")
+    out = os.path.join(RESULTS_DIR, "all_metrics.csv")
     df.to_csv(out, index=False)
     print(f"Consolidado: {len(df)} runs de {len(files)} archivos → {out}")
     return df

@@ -1,9 +1,9 @@
 """
 Orquestador del experimento exp4.
 
-Corre las 6 configuraciones × N_RUNS semillas en paralelo, con presupuesto fijo
-de 100.000 evaluaciones (población 100 × 1000 generaciones) cada una: 2 por cada
-algoritmo (cruce SBX o PCX con probabilidad 1,0, y mutación PM con tasa 0,1).
+Corre las 6 configuraciones × N_RUNS semillas en paralelo: los tres algoritmos,
+cada uno con cruce SBX o PCX, y la configuración fija de utils_mo (población,
+generaciones y probabilidades de cruce y mutación).
 Reanudable: una run cuenta como completa si existe su molecules.csv.
 
 Cada configuración queda en el path (results/exp4/<ALG>/<slug>/run_k) y sus
@@ -20,8 +20,9 @@ import argparse
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from experimento import ALGS_GA
-from utils_mo import ga_run_dir, consolidate_all, FSP3_MIN
+from experimento import ALGORITMOS
+from utils_mo import (ga_run_dir, consolidate_all, FSP3_MIN,
+                      POP_SIZE, N_GEN, CX_PROB, MUTATION, MUT_PROB)
 
 ROOT   = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable   # el python del entorno actual
@@ -29,37 +30,21 @@ PYTHON = sys.executable   # el python del entorno actual
 EXPERIMENTO = "experimento.py"
 
 # ─── Configuración ───────────────────────────────────────────────
-POP_GEN   = [(100, 1000)]                            # 100.000 evaluaciones
-
-# GA: probabilidad de cruce, de mutación por-gen y combos de operadores.
-CX_PROBS  = [1.0]
-MUT_PROBS = [0.1]
-OPERATORS = [("sbx", "pm"), ("pcx", "pm")]
-
-GA_ALGS = ALGS_GA
+CRUCES = ["sbx", "pcx"]
 
 
 # ─── Definición de tareas ─────────────────────────────────────────────────────
 
 def build_tasks(n_runs):
     """Lista de tareas del grid."""
-    tasks = []
-    for alg in GA_ALGS:
-        for pop, gen in POP_GEN:
-            for cx, mut in OPERATORS:
-                for cxp in CX_PROBS:
-                    for mutp in MUT_PROBS:
-                        for run in range(n_runs):
-                            tasks.append(dict(alg=alg, pop=pop, gen=gen,
-                                              cx=cx, mut=mut, cxp=cxp,
-                                              mutp=mutp, run=run))
-    return tasks
+    return [dict(alg=alg, cx=cx, run=run)
+            for alg in ALGORITMOS for cx in CRUCES for run in range(n_runs)]
 
 
 def run_dir_of(t):
     """Path de la run, el mismo que arma experimento.py."""
-    return ga_run_dir(t['alg'], t['cx'], t['mut'], t['cxp'], t['mutp'],
-                      t['pop'], t['gen'], t['run'])
+    return ga_run_dir(t['alg'], t['cx'], MUTATION, CX_PROB, MUT_PROB,
+                      POP_SIZE, N_GEN, t['run'])
 
 
 def is_done(t):
@@ -68,8 +53,8 @@ def is_done(t):
 
 
 def label(t):
-    return (f"{t['alg']}[{t['cx']}{t['cxp']:g}+{t['mut']}{t['mutp']:g}]"
-            f"/pop{t['pop']}xgen{t['gen']}/run_{t['run'] + 1:02d}")
+    return (f"{t['alg']}[{t['cx']}{CX_PROB:g}+{MUTATION}{MUT_PROB:g}]"
+            f"/pop{POP_SIZE}xgen{N_GEN}/run_{t['run'] + 1:02d}")
 
 
 # ─── Ejecución de una run (subproceso aislado) ────────────────────────────────
@@ -86,10 +71,7 @@ def run_one(t, device, threads):
         env["CUDA_VISIBLE_DEVICES"] = ""   # evita inicializar la GPU
 
     cmd = [PYTHON, os.path.join(ROOT, EXPERIMENTO), "--alg", t['alg'],
-           "--pop_size", str(t['pop']), "--n_gen", str(t['gen']),
-           "--run_id", str(t['run']), "--device", device,
-           "--crossover", t['cx'], "--mutation", t['mut'],
-           "--cx_prob", str(t['cxp']), "--mut_prob", str(t['mutp'])]
+           "--crossover", t['cx'], "--run_id", str(t['run']), "--device", device]
 
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ROOT, env=env,
@@ -164,16 +146,15 @@ def main():
     tasks   = build_tasks(args.n_runs)
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
-    n_configs = (len(GA_ALGS) * len(POP_GEN) * len(OPERATORS)
-                 * len(CX_PROBS) * len(MUT_PROBS))
+    n_configs = len(ALGORITMOS) * len(CRUCES)
 
     print("=" * 54)
     print(f"  exp4 — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")
     print(f"  Máquina        : {os.uname().nodename}  ({os.cpu_count()} núcleos)")
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")
-    print(f"  Configs        : {n_configs}  ({len(GA_ALGS)} algoritmos × "
-          f"{n_configs // len(GA_ALGS)})")
+    print(f"  Configs        : {n_configs}  ({len(ALGORITMOS)} algoritmos × "
+          f"{len(CRUCES)})")
     print(f"  Total de runs  : {total}   (ya hechas: {done0}, pendientes: {len(pending)})")
     print("=" * 54)
 
