@@ -22,7 +22,7 @@ PYTHON=${PYTHON:-/home/cperez/miniconda3/envs/pymoo_env/bin/python}
 
 # ─── Parámetros (todos overrideables por variable de entorno al hacer sbatch) ──
 DEVICE=${DEVICE:-cuda}                              # cuda | auto | cpu
-PARALLEL=${PARALLEL:-8}                             # cuántas runs corren AL MISMO TIEMPO
+PARALLEL=${PARALLEL:-4}                             # cuántas runs corren AL MISMO TIEMPO
 N_RUNS=${N_RUNS:-20}                                # smoke test: N_RUNS=1 sbatch train.sh
 
 mkdir -p logs
@@ -36,7 +36,7 @@ fi
 
 export UNIDOCK_PREFIX=${UNIDOCK_PREFIX:-${PYTHON%/envs/*}/envs/unidock}
 "$PYTHON" docking.py --check >/dev/null \
-    || { echo "ERROR: Uni-Dock no funciona en $(hostname) ($UNIDOCK_PREFIX). Corre 'bash test.sh setup' en el login." >&2; exit 1; }
+    || { echo "ERROR: Uni-Dock no funciona en $(hostname) ($UNIDOCK_PREFIX). Env: conda create -p \$UNIDOCK_PREFIX -c conda-forge --override-channels python=3.12 unidock=1.2.0 meeko=0.8.0 rdkit" >&2; exit 1; }
 
 echo "======================================================"
 echo "  exp4 — QED(↑) SA(↓) Docking(↓) | constraint Fsp3"
