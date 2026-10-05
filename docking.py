@@ -32,7 +32,7 @@ BOX_CENTER  = (164.6835, 130.2140, 120.1165)
 BOX_SIZE    = (30.0, 30.0, 30.0)
 SPACING     = 0.375
 SEARCH_MODE = 'balance'
-SEED        = 42
+SEED        = 999
 
 
 # ─── Trabajador: corre en el entorno de Uni-Dock ─────────────────────────────
