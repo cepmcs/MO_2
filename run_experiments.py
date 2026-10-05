@@ -149,7 +149,7 @@ def main():
     n_configs = len(ALGORITMOS) * len(CRUCES)
 
     print("=" * 54)
-    print(f"  exp4 — QED(↑) SA(↓) | Fsp3 ≥ {FSP3_MIN}")
+    print(f"  exp4 — QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ {FSP3_MIN}")
     print(f"  Máquina        : {os.uname().nodename}  ({os.cpu_count()} núcleos)")
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")

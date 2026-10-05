@@ -1,8 +1,8 @@
 """
 Utilidades para optimización multi-objetivo de moléculas en espacio latente VAE.
 
-Objetivos: QED (↑) y SA (↓) → pymoo minimiza [-QED, SA].  Fsp3 va como
-constraint (Fsp3 ≥ FSP3_MIN).
+Objetivos: QED (↑), SA (↓) y docking (↓) → pymoo minimiza [-QED, SA, dock].
+Fsp3 va como constraint (Fsp3 ≥ FSP3_MIN).
 """
 
 import re, os, sys, glob, functools
@@ -24,6 +24,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(ROOT_DIR, 'SA_Score'))
 import sascorer
 from vae_model_lstm import MolecularVAE_LSTM
+from docking import DockingCache, DOCK_BEST, DOCK_WORST
 RDLogger.DisableLog('rdApp.*')
 
 # ─── Configuración ───────────────────────────────────────────────────────────
@@ -44,11 +45,11 @@ MUT_PROB = 0.1      # por gen
 # Constraint: factible si Fsp3 ≥ FSP3_MIN.
 FSP3_MIN = 0.3
 
-# Bounds de [-QED, SA] para normalizar el HV a [0,1]^2.
-F_MIN     = np.array([-1.0, 1.0])
-F_RANGE   = np.array([ 1.0, 9.0])
-HV_REF    = np.array([1.1, 1.1])   # 10% más allá del peor; HV ∈ [0, 1.21]
-INVALID_F = [1.0, 12.0]            # penalización de las inválidas
+# Bounds de [-QED, SA, dock] para normalizar el HV a [0,1]^3.
+F_MIN     = np.array([-1.0, 1.0, DOCK_BEST])
+F_RANGE   = np.array([ 1.0, 9.0, DOCK_WORST - DOCK_BEST])
+HV_REF    = np.array([1.1, 1.1, 1.1])   # 10% más allá del peor; HV ∈ [0, 1.331]
+INVALID_F = [1.0, 12.0, DOCK_WORST]     # penalización de las inválidas
 INVALID_G = 1.0                    # una inválida nunca es factible
 
 SMILES_REGEX = re.compile(
@@ -88,10 +89,10 @@ def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
 
 
 def get_ref_dirs(n_points):
-    """n_points direcciones Das-Dennis uniformes sobre el símplex, para NSGA-III.
-    Determinista y ~1 ms: no se cachea."""
+    """n_points direcciones sobre el símplex (método energy, seed fija), para NSGA-III.
+    Determinista y ~2 s: no se cachea."""
     from pymoo.util.ref_dirs import get_reference_directions
-    return get_reference_directions("uniform", 2, n_partitions=n_points - 1)
+    return get_reference_directions("energy", 3, n_points, seed=1)
 
 
 
@@ -256,18 +257,21 @@ def calc_properties(smi):
 # ─── Problema pymoo ──────────────────────────────────────────────────────────
 
 class MolecularLatentProblem(Problem):
-    """Optimización bi-objetivo con constraint en el espacio latente del VAE.
+    """Optimización de tres objetivos con constraint en el espacio latente del VAE.
 
-    F = [-QED, SA]         → minimizar.
-    G = [FSP3_MIN - Fsp3]  → factible si ≤ 0."""
+    F = [-QED, SA, dock]   → minimizar.
+    G = [FSP3_MIN - Fsp3]  → factible si ≤ 0.  Solo las factibles se dockean."""
 
     def __init__(self, model, stoi, itos, latent_dim):
         self.model, self.stoi, self.itos = model, stoi, itos
         self.eval_log = []
-        super().__init__(n_var=latent_dim, n_obj=2, n_ieq_constr=1, xl=-5.0, xu=5.0)
+        self.dock = DockingCache()
+        super().__init__(n_var=latent_dim, n_obj=3, n_ieq_constr=1, xl=-5.0, xu=5.0)
 
     def _evaluate(self, x, out, *args, **kwargs):
         smiles = decode_z_batch(self.model, x, self.stoi, self.itos)
+        feasibles = [s for s in smiles if (p := calc_properties(s)) and p['fsp3'] >= FSP3_MIN]
+        dock = dict(zip(feasibles, self.dock(feasibles)))
         F = np.empty((len(smiles), self.n_obj), dtype=float)
         G = np.empty((len(smiles), 1), dtype=float)
         for i, smi in enumerate(smiles):
@@ -277,14 +281,14 @@ class MolecularLatentProblem(Problem):
                 G[i] = INVALID_G
                 self.eval_log.append({
                     'smiles': None, 'qed': None, 'sa': None,
-                    'fsp3': None, 'valid': False, 'feasible': False,
+                    'fsp3': None, 'dock': None, 'valid': False, 'feasible': False,
                 })
             else:
-                F[i] = (-props['qed'], props['sa'])
+                F[i] = (-props['qed'], props['sa'], dock.get(smi, DOCK_WORST))
                 G[i] = FSP3_MIN - props['fsp3']
                 self.eval_log.append({
                     'smiles': props['smiles'], 'qed': props['qed'],
-                    'sa': props['sa'], 'fsp3': props['fsp3'],
+                    'sa': props['sa'], 'fsp3': props['fsp3'], 'dock': dock.get(smi),
                     'valid': True, 'feasible': bool(props['fsp3'] >= FSP3_MIN),
                 })
         out["F"] = F
@@ -394,15 +398,15 @@ def non_dominated(results):
     """Filtra las soluciones no-dominadas."""
     if not results:
         return []
-    F = np.array([[-r['qed'], r['sa']] for r in results], dtype=float)
+    F = np.array([[-r['qed'], r['sa'], r['dock']] for r in results], dtype=float)
     return [results[i] for i in _non_dominated_front(F)]
 
 
 def compute_hv(pareto):
-    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^2."""
+    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^3."""
     if not pareto:
         return 0.0
-    F = np.array([[-r['qed'], r['sa']] for r in pareto])
+    F = np.array([[-r['qed'], r['sa'], r['dock']] for r in pareto])
     F = (F - F_MIN) / F_RANGE
     try:
         return float(HV(ref_point=HV_REF)(F))
@@ -414,8 +418,8 @@ def compute_spacing(pareto):
     """Spacing de Schott normalizado (CV de distancias al vecino más cercano)."""
     if len(pareto) < 2:
         return 0.0
-    F = np.array([[-r['qed'], r['sa']] for r in pareto])
-    # Normalizar los ejes: SA y QED tienen escalas distintas.
+    F = np.array([[-r['qed'], r['sa'], r['dock']] for r in pareto])
+    # Normalizar los ejes: tienen escalas distintas.
     ranges = F.max(axis=0) - F.min(axis=0)
     ranges[ranges == 0] = 1.0
     F_norm = F / ranges
@@ -446,7 +450,7 @@ def build_pareto(eval_log):
         if smi not in seen:
             seen[smi] = {
                 'smiles': smi, 'qed': e['qed'],
-                'sa': e['sa'], 'fsp3': e['fsp3'],
+                'sa': e['sa'], 'fsp3': e['fsp3'], 'dock': e['dock'],
             }
     validity = round(n_valid / len(eval_log), 4) if eval_log else 0.0
     feasibility = round(n_feasible / n_valid, 4) if n_valid else 0.0
@@ -465,7 +469,7 @@ def save_metrics(path, row):
 def save_molecules(pareto, run_dir):
     """Frente de Pareto → molecules.csv, escritura atómica.  Se escribe aunque esté
     vacío: su existencia es la señal de run completa."""
-    cols = ['smiles', 'qed', 'sa', 'fsp3']
+    cols = ['smiles', 'qed', 'sa', 'fsp3', 'dock']
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
     if not pareto:
@@ -522,6 +526,9 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'validity': validity, 'feasibility': feasibility, 'novelty': novelty,
         'best_qed': round(max((r['qed'] for r in pareto), default=float('nan')), 4),
         'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
+        'best_dock': round(min((r['dock'] for r in pareto), default=float('nan')), 2),
+        'n_docked': problem.dock.n_docked,
+        'n_dock_fail': getattr(problem.dock.dock_fn, 'fallos', 0),
         'mean_fsp3': round(float(np.mean([r['fsp3'] for r in pareto])), 4) if pareto else float('nan'),
         'time_sec': round(elapsed, 1),
     }
