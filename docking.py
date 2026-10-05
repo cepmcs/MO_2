@@ -93,6 +93,7 @@ def _dockear(smiles, prep):
 
 def _trabajador():
     from meeko import MoleculePreparation
+    RDLogger.DisableLog('rdApp.*')
     prep = MoleculePreparation(rigid_macrocycles=True)
     for linea in sys.stdin:
         try:
