@@ -28,9 +28,7 @@ DOCK_WORST = 1.0
 
 UNIDOCK_PREFIX = os.path.expanduser(os.environ.get('UNIDOCK_PREFIX', '~/miniforge3/envs/unidock'))
 RECEPTOR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'receptor_8VUX_B.pdbqt')
-BOX_CENTER  = (164.6835, 130.2140, 120.1165)
-BOX_SIZE    = (30.0, 30.0, 30.0)
-SPACING     = 0.375
+CAJA        = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'caja.txt')
 SEARCH_MODE = 'balance'
 SEED        = 999
 
@@ -69,11 +67,7 @@ def _dockear(smiles, prep):
         if ligandos:
             salida = f'{d}/out'
             os.makedirs(salida)
-            cmd = [f'{UNIDOCK_PREFIX}/bin/unidock', '--receptor', RECEPTOR,
-                   '--center_x', str(BOX_CENTER[0]), '--center_y', str(BOX_CENTER[1]),
-                   '--center_z', str(BOX_CENTER[2]),
-                   '--size_x', str(BOX_SIZE[0]), '--size_y', str(BOX_SIZE[1]),
-                   '--size_z', str(BOX_SIZE[2]), '--spacing', str(SPACING),
+            cmd = [f'{UNIDOCK_PREFIX}/bin/unidock', '--receptor', RECEPTOR, '--config', CAJA,
                    '--search_mode', SEARCH_MODE, '--seed', str(SEED), '--num_modes', '1',
                    '--gpu_batch', *[ruta for _, ruta in ligandos], '--dir', salida]
             proc = subprocess.run(cmd, env={**os.environ, 'OMP_NUM_THREADS': '1'},
