@@ -158,4 +158,7 @@ class DockingCache:
 
 
 if __name__ == '__main__':
-    _trabajador()
+    if '--check' in sys.argv:
+        print(DockingCache()(['CCO', 'c1ccccc1O', 'CC(=O)Nc1ccc(O)cc1']))
+    else:
+        _trabajador()

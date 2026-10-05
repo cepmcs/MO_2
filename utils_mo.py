@@ -31,7 +31,7 @@ RDLogger.DisableLog('rdApp.*')
 MODEL_PATH  = os.path.join(ROOT_DIR, "SMILES_LSTM_2_256_300_lr1e4_b64.pth")
 MOSES_CSV   = os.path.join(ROOT_DIR, "data", "moses.csv")
 MOSES_TRAIN_CACHE = os.path.join(ROOT_DIR, "data", "moses_train_smiles.pkl.gz")
-RESULTS_DIR = os.path.join(ROOT_DIR, "results", "exp4")
+RESULTS_DIR = os.environ.get("RESULTS_DIR", os.path.join(ROOT_DIR, "results", "exp4"))
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 

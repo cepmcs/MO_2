@@ -34,8 +34,12 @@ if [ "$DEVICE" = "cuda" ]; then
     echo "[$(date '+%F %T')] CUDA OK: $("$PYTHON" -c 'import torch; print(torch.cuda.get_device_name(0))')"
 fi
 
+export UNIDOCK_PREFIX=${UNIDOCK_PREFIX:-${PYTHON%/envs/*}/envs/unidock}
+"$PYTHON" docking.py --check >/dev/null \
+    || { echo "ERROR: Uni-Dock no funciona en $(hostname) ($UNIDOCK_PREFIX). Corre 'bash test.sh setup' en el login." >&2; exit 1; }
+
 echo "======================================================"
-echo "  exp4 — QED(↑) SA(↓) | constraint Fsp3"
+echo "  exp4 — QED(↑) SA(↓) Docking(↓) | constraint Fsp3"
 echo "  Nodo         : $(hostname)   cores: $(nproc)   device: $DEVICE"
 echo "  Concurrencia : $PARALLEL runs   n_runs: $N_RUNS"
 echo "======================================================"
