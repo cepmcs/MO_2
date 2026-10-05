@@ -46,7 +46,10 @@ def _dockear(smiles, prep):
     with tempfile.TemporaryDirectory() as d:
         ligandos = []
         for i, smi in enumerate(smiles):
-            mol = Chem.AddHs(Chem.MolFromSmiles(smi))
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            mol = Chem.AddHs(mol)
             if (AllChem.EmbedMolecule(mol, randomSeed=SEED) != 0 and
                     AllChem.EmbedMolecule(mol, randomSeed=SEED, useRandomCoords=True) != 0):
                 continue
