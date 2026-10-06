@@ -1,16 +1,5 @@
 """
-Orquestador del experimento exp4.
-
-Corre las 6 configuraciones × N_RUNS semillas en paralelo: los tres algoritmos,
-cada uno con cruce SBX o PCX, y la configuración fija de utils_mo (población,
-generaciones y probabilidades de cruce y mutación).
-Reanudable: una run cuenta como completa si existe su molecules.csv.
-
-Cada configuración queda en el path (results/exp4/<ALG>/<slug>/run_k) y sus
-parámetros como columnas de metrics.csv; al final se consolida en
-results/exp4/all_metrics.csv.
-
-    python run_experiments.py
+Orquestador del experimento exp4: QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ 0.3
 """
 
 import os
