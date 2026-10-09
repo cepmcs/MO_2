@@ -35,54 +35,80 @@ SEED        = 999
 
 # ─── Trabajador: corre en el entorno de Uni-Dock ─────────────────────────────
 
+def _molecula_3d(smi):
+    """Molécula con hidrógenos y coordenadas 3D, o None si no se pudo generar."""
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None
+    mol = Chem.AddHs(mol)
+    if (AllChem.EmbedMolecule(mol, randomSeed=SEED) != 0 and
+            AllChem.EmbedMolecule(mol, randomSeed=SEED, useRandomCoords=True) != 0):
+        return None
+    try:
+        AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+    except Exception:
+        pass
+    return mol
+
+
+def _ligando_pdbqt(smi, prep):
+    """Texto PDBQT del ligando de un SMILES, o None si no se pudo preparar."""
+    from meeko import PDBQTWriterLegacy
+    mol = _molecula_3d(smi)
+    if mol is None:
+        return None
+    try:
+        texto, listo, _ = PDBQTWriterLegacy.write_string(prep.prepare(mol)[0])
+    except Exception:
+        return None
+    return texto if listo else None
+
+
+def _leer_puntaje(ruta):
+    """Energía de unión de la pose que Uni-Dock escribió en ruta, o None si no está."""
+    try:
+        with open(ruta) as f:
+            return float(next(linea for linea in f if 'VINA RESULT' in linea).split()[3])
+    except (OSError, StopIteration, ValueError):
+        return None
+
+
+def _correr_unidock(ligandos):
+    """Dockea en un solo lote {posición: texto PDBQT}.  Devuelve {posición: puntaje}
+    de los que salieron; si no sale ninguno, falla con el log de unidock."""
+    if not ligandos:
+        return {}
+    with tempfile.TemporaryDirectory() as d:
+        salida = f'{d}/out'
+        os.makedirs(salida)
+        rutas = {i: f'{d}/l{i}.pdbqt' for i in ligandos}
+        for i, texto in ligandos.items():
+            with open(rutas[i], 'w') as f:
+                f.write(texto)
+        cmd = [f'{UNIDOCK_PREFIX}/bin/unidock', '--receptor', RECEPTOR, '--config', CAJA,
+               '--search_mode', SEARCH_MODE, '--seed', str(SEED), '--num_modes', '1',
+               '--gpu_batch', *rutas.values(), '--dir', salida]
+        proc = subprocess.run(cmd, env={**os.environ, 'OMP_NUM_THREADS': '1'},
+                              capture_output=True, text=True)
+        puntajes = {i: _leer_puntaje(f'{salida}/l{i}_out.pdbqt') for i in ligandos}
+    puntajes = {i: p for i, p in puntajes.items() if p is not None}
+    if not puntajes:
+        raise RuntimeError("unidock no produjo resultados:\n"
+                           + (proc.stdout + proc.stderr)[-800:])
+    return puntajes
+
+
 def _dockear(smiles, prep):
     """Puntajes de una lista de SMILES (DOCK_WORST si alguno no se pudo preparar
     o dockear) y cuántos fallaron."""
-    from meeko import PDBQTWriterLegacy
-    puntajes = [DOCK_WORST] * len(smiles)
-    ok = set()
-    with tempfile.TemporaryDirectory() as d:
-        ligandos = []
-        for i, smi in enumerate(smiles):
-            mol = Chem.MolFromSmiles(smi)
-            if mol is None:
-                continue
-            mol = Chem.AddHs(mol)
-            if (AllChem.EmbedMolecule(mol, randomSeed=SEED) != 0 and
-                    AllChem.EmbedMolecule(mol, randomSeed=SEED, useRandomCoords=True) != 0):
-                continue
-            try:
-                AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
-            except Exception:
-                pass
-            try:
-                texto, listo, _ = PDBQTWriterLegacy.write_string(prep.prepare(mol)[0])
-            except Exception:
-                continue
-            if listo:
-                ruta = f'{d}/l{i}.pdbqt'
-                with open(ruta, 'w') as f:
-                    f.write(texto)
-                ligandos.append((i, ruta))
-        if ligandos:
-            salida = f'{d}/out'
-            os.makedirs(salida)
-            cmd = [f'{UNIDOCK_PREFIX}/bin/unidock', '--receptor', RECEPTOR, '--config', CAJA,
-                   '--search_mode', SEARCH_MODE, '--seed', str(SEED), '--num_modes', '1',
-                   '--gpu_batch', *[ruta for _, ruta in ligandos], '--dir', salida]
-            proc = subprocess.run(cmd, env={**os.environ, 'OMP_NUM_THREADS': '1'},
-                                  capture_output=True, text=True)
-            for i, _ in ligandos:
-                try:
-                    with open(f'{salida}/l{i}_out.pdbqt') as f:
-                        puntajes[i] = float(next(l for l in f if 'VINA RESULT' in l).split()[3])
-                    ok.add(i)
-                except (OSError, StopIteration, ValueError):
-                    pass
-            if not ok:
-                raise RuntimeError("unidock no produjo resultados:\n"
-                                   + (proc.stdout + proc.stderr)[-800:])
-    return puntajes, len(smiles) - len(ok)
+    ligandos = {}                       # posición en smiles → texto PDBQT
+    for i, smi in enumerate(smiles):
+        texto = _ligando_pdbqt(smi, prep)
+        if texto is not None:
+            ligandos[i] = texto
+    resultados = _correr_unidock(ligandos)
+    puntajes = [resultados.get(i, DOCK_WORST) for i in range(len(smiles))]
+    return puntajes, len(smiles) - len(resultados)
 
 
 def _trabajador():
