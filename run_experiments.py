@@ -20,19 +20,21 @@ EXPERIMENTO = "experimento.py"
 
 # ─── Configuración ───────────────────────────────────────────────
 CRUCES = ["sbx", "pcx"]
+MUT_PROBS = [MUT_PROB, 0.012]   # probabilidad de mutación por gen
 
 
 # ─── Definición de tareas ─────────────────────────────────────────────────────
 
 def build_tasks(n_runs):
     """Lista de tareas del grid."""
-    return [dict(alg=alg, cx=cx, run=run)
-            for alg in ALGORITMOS for cx in CRUCES for run in range(n_runs)]
+    return [dict(alg=alg, cx=cx, mut=mut, run=run)
+            for alg in ALGORITMOS for cx in CRUCES for mut in MUT_PROBS
+            for run in range(n_runs)]
 
 
 def run_dir_of(t):
     """Path de la run, el mismo que arma experimento.py."""
-    return ga_run_dir(t['alg'], t['cx'], MUTATION, CX_PROB, MUT_PROB,
+    return ga_run_dir(t['alg'], t['cx'], MUTATION, CX_PROB, t['mut'],
                       POP_SIZE, N_GEN, t['run'])
 
 
@@ -42,7 +44,7 @@ def is_done(t):
 
 
 def label(t):
-    return (f"{t['alg']}[{t['cx']}{CX_PROB:g}+{MUTATION}{MUT_PROB:g}]"
+    return (f"{t['alg']}[{t['cx']}{CX_PROB:g}+{MUTATION}{t['mut']:g}]"
             f"/pop{POP_SIZE}xgen{N_GEN}/run_{t['run'] + 1:02d}")
 
 
@@ -60,7 +62,8 @@ def run_one(t, device, threads):
         env["CUDA_VISIBLE_DEVICES"] = ""   # evita inicializar la GPU
 
     cmd = [PYTHON, os.path.join(ROOT, EXPERIMENTO), "--alg", t['alg'],
-           "--crossover", t['cx'], "--run_id", str(t['run']), "--device", device]
+           "--crossover", t['cx'], "--mut_prob", str(t['mut']),
+           "--run_id", str(t['run']), "--device", device]
 
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ROOT, env=env,
@@ -135,7 +138,7 @@ def main():
     tasks   = build_tasks(args.n_runs)
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
-    n_configs = len(ALGORITMOS) * len(CRUCES)
+    n_configs = len(ALGORITMOS) * len(CRUCES) * len(MUT_PROBS)
 
     print("=" * 54)
     print(f"  exp4 — QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ {FSP3_MIN}")
@@ -143,7 +146,7 @@ def main():
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")
     print(f"  Configs        : {n_configs}  ({len(ALGORITMOS)} algoritmos × "
-          f"{len(CRUCES)})")
+          f"{len(CRUCES)} cruces × {len(MUT_PROBS)} mutaciones)")
     print(f"  Total de runs  : {total}   (ya hechas: {done0}, pendientes: {len(pending)})")
     print("=" * 54)
 
