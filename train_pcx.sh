@@ -25,6 +25,7 @@ DEVICE=${DEVICE:-cuda}                              # cuda | auto | cpu
 PARALLEL=${PARALLEL:-4}                             # cuántas runs corren AL MISMO TIEMPO
 N_RUNS=${N_RUNS:-20}                                # smoke test: N_RUNS=1 sbatch train_pcx.sh
 CRUCE=pcx                                           # este script solo corre este cruce
+MUT=0.012                                           # y esta mutación por gen (sbx usa 0.1)
 
 mkdir -p logs
 
@@ -41,16 +42,17 @@ export UNIDOCK_PREFIX=${UNIDOCK_PREFIX:-${PYTHON%/envs/*}/envs/unidock}
 
 echo "======================================================"
 echo "  exp4 — QED(↑) SA(↓) Docking(↓) | constraint Fsp3"
-echo "  Cruce        : $CRUCE"
+echo "  Cruce        : $CRUCE   (mutación por gen: $MUT)"
 echo "  Nodo         : $(hostname)   cores: $(nproc)   device: $DEVICE"
 echo "  Concurrencia : $PARALLEL runs   n_runs: $N_RUNS"
 echo "======================================================"
 
 # ─── El grid, acotado a un solo cruce ─────────────────────────────────────────
 # run_experiments.py toma los cruces de la lista global CRUCES al armar las tareas:
-# acotarla acá reparte sbx y pcx en dos jobs sin tocar el orquestador.
+# acotarla (y MUT_PROBS) acá reparte sbx y pcx en dos jobs, cada uno con su mutación,
+# sin tocar el orquestador.
 # Al terminar, juntar las métricas de los dos jobs: python run_experiments.py --summary-only
-"$PYTHON" -c "import run_experiments as r; r.CRUCES[:] = ['$CRUCE']; r.main()" \
+"$PYTHON" -c "import run_experiments as r; r.CRUCES[:] = ['$CRUCE']; r.MUT_PROBS[:] = [$MUT]; r.main()" \
     --device "$DEVICE" \
     --parallel "$PARALLEL" \
     --n-runs "$N_RUNS"

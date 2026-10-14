@@ -1,23 +1,19 @@
 """
-Docking de exp4: puntaje por molécula y caché por run.
+Docking de exp4: puntaje por molécula.
 
 El puntaje es la energía de unión (kcal/mol, menor es mejor) que calcula Uni-Dock en
 modo balance.  DOCK_BEST y DOCK_WORST son las cotas con que utils_mo normaliza el
 hipervolumen.
 
-Uni-Dock y meeko viven en otro entorno conda (UNIDOCK_PREFIX), así que el docking
-corre en un proceso aparte: este mismo archivo, ejecutado con el python de ese
-entorno, es el trabajador.
+Todo corre en el entorno del optimizador (RDKit y meeko).  Del entorno de Uni-Dock
+(UNIDOCK_PREFIX) solo se usa el ejecutable unidock.
 """
 
-import atexit
-import json
 import os
 import subprocess
-import sys
 import tempfile
 
-import numpy as np
+from meeko import MoleculePreparation, PDBQTWriterLegacy
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 
@@ -32,8 +28,8 @@ CAJA        = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', '
 SEARCH_MODE = 'balance'
 SEED        = 999
 
+PREP = MoleculePreparation(rigid_macrocycles=True)
 
-# ─── Trabajador: corre en el entorno de Uni-Dock ─────────────────────────────
 
 def _molecula_3d(smi):
     """Molécula con hidrógenos y coordenadas 3D, o None si no se pudo generar."""
@@ -51,14 +47,13 @@ def _molecula_3d(smi):
     return mol
 
 
-def _ligando_pdbqt(smi, prep):
+def _ligando_pdbqt(smi):
     """Texto PDBQT del ligando de un SMILES, o None si no se pudo preparar."""
-    from meeko import PDBQTWriterLegacy
     mol = _molecula_3d(smi)
     if mol is None:
         return None
     try:
-        texto, listo, _ = PDBQTWriterLegacy.write_string(prep.prepare(mol)[0])
+        texto, listo, _ = PDBQTWriterLegacy.write_string(PREP.prepare(mol)[0])
     except Exception:
         return None
     return texto if listo else None
@@ -98,12 +93,12 @@ def _correr_unidock(ligandos):
     return puntajes
 
 
-def _dockear(smiles, prep):
+def dockear(smiles):
     """Puntajes de una lista de SMILES (DOCK_WORST si alguno no se pudo preparar
     o dockear) y cuántos fallaron."""
     ligandos = {}                       # posición en smiles → texto PDBQT
     for i, smi in enumerate(smiles):
-        texto = _ligando_pdbqt(smi, prep)
+        texto = _ligando_pdbqt(smi)
         if texto is not None:
             ligandos[i] = texto
     resultados = _correr_unidock(ligandos)
@@ -111,78 +106,27 @@ def _dockear(smiles, prep):
     return puntajes, len(smiles) - len(resultados)
 
 
-def _trabajador():
-    from meeko import MoleculePreparation
-    RDLogger.DisableLog('rdApp.*')
-    prep = MoleculePreparation(rigid_macrocycles=True)
-    for linea in sys.stdin:
-        try:
-            puntajes, fallos = _dockear(json.loads(linea), prep)
-            respuesta = {'scores': puntajes, 'fallos': fallos}
-        except Exception as e:
-            respuesta = {'error': str(e)}
-        sys.stdout.write(json.dumps(respuesta) + '\n')
-        sys.stdout.flush()
-
-
-# ─── Cliente y caché: corren en el entorno del optimizador ───────────────────
-
-class UnidockClient:
-    """dock_fn de Uni-Dock: un proceso trabajador que queda vivo toda la run.
-    fallos cuenta las moléculas que no se pudieron preparar o dockear."""
+class DockingCache:
+    """Dockea cada SMILES una sola vez por run.  Se llama con una lista de SMILES y
+    devuelve sus puntajes en el mismo orden.  fallos cuenta las moléculas que no se
+    pudieron preparar o dockear."""
 
     def __init__(self):
-        self.proceso = None
+        self.puntajes = {}
         self.fallos = 0
 
-    def __call__(self, smiles):
-        if self.proceso is None:
-            self.proceso = subprocess.Popen(
-                [f'{UNIDOCK_PREFIX}/bin/python', os.path.abspath(__file__)],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
-            atexit.register(self.cerrar)
-        self.proceso.stdin.write(json.dumps(list(smiles)) + '\n')
-        self.proceso.stdin.flush()
-        linea = self.proceso.stdout.readline()
-        if not linea:
-            raise RuntimeError("el trabajador de docking murió")
-        respuesta = json.loads(linea)
-        if 'error' in respuesta:
-            raise RuntimeError(respuesta['error'])
-        self.fallos += respuesta['fallos']
-        return respuesta['scores']
-
-    def cerrar(self):
-        if self.proceso is not None and self.proceso.poll() is None:
-            self.proceso.stdin.close()
-            try:
-                self.proceso.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.proceso.kill()
-
-
-class DockingCache:
-    """Dockea cada SMILES una sola vez.  Se llama con una lista de SMILES y devuelve
-    sus puntajes en el mismo orden."""
-
-    def __init__(self, dock_fn=None):
-        self.dock_fn = dock_fn or UnidockClient()
-        self.scores = {}
-        self.n_docked = 0
+    @property
+    def n_docked(self):
+        return len(self.puntajes)
 
     def __call__(self, smiles):
-        nuevas = list(dict.fromkeys(s for s in smiles if s not in self.scores))
+        nuevas = list(dict.fromkeys(s for s in smiles if s not in self.puntajes))
         if nuevas:
-            puntajes = np.asarray(self.dock_fn(nuevas), dtype=float)
-            if puntajes.shape != (len(nuevas),) or not np.isfinite(puntajes).all():
-                raise ValueError("dock_fn debe devolver un puntaje finito por molécula")
-            self.scores.update(zip(nuevas, puntajes.tolist()))
-            self.n_docked += len(nuevas)
-        return [self.scores[s] for s in smiles]
+            puntajes, fallos = dockear(nuevas)
+            self.puntajes.update(zip(nuevas, puntajes))
+            self.fallos += fallos
+        return [self.puntajes[s] for s in smiles]
 
 
 if __name__ == '__main__':
-    if '--check' in sys.argv:
-        print(DockingCache()(['CCO', 'c1ccccc1O', 'CC(=O)Nc1ccc(O)cc1']))
-    else:
-        _trabajador()
+    print(dockear(['CCO', 'c1ccccc1O', 'CC(=O)Nc1ccc(O)cc1'])[0])

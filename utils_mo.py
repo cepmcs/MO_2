@@ -528,7 +528,7 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'best_sa': round(min((r['sa'] for r in pareto), default=float('nan')), 2),
         'best_dock': round(min((r['dock'] for r in pareto), default=float('nan')), 2),
         'n_docked': problem.dock.n_docked,
-        'n_dock_fail': getattr(problem.dock.dock_fn, 'fallos', 0),
+        'n_dock_fail': problem.dock.fallos,
         'mean_fsp3': round(float(np.mean([r['fsp3'] for r in pareto])), 4) if pareto else float('nan'),
         'time_sec': round(elapsed, 1),
     }
