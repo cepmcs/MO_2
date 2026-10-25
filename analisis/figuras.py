@@ -20,6 +20,7 @@ from rdkit import Chem
 from rdkit.Chem.Draw import rdMolDraw2D
 
 from .comun import (
+    DOCK_WORST,
     FSP3_MIN,
     MARCADOR_DENSO,
     MARCADOR_NORMAL,
@@ -32,6 +33,7 @@ from .comun import (
     get_color,
     load_convergence_data,
     load_pareto_molecules,
+    unicas,
 )
 from .indicadores import (
     _atribucion_por_origen,
@@ -82,6 +84,9 @@ def _objective_curves(series, objective):
                 continue
             try:
                 df = pd.read_csv(gz_path, usecols=['gen', objective])
+                if objective == 'dock':
+                    # NaN: no se dockeó (inválida o infactible); ≥ DOCK_WORST: falló.
+                    df = df[df['dock'] < DOCK_WORST]
                 all_means.append(df.groupby('gen')[objective].mean())
             except Exception:
                 continue
@@ -112,6 +117,8 @@ PANELES_QUIM = [
     ('novelty',     'Tasa de Novedad',       'Convergencia de Novedad',       20),
     ('qed',         'Promedio de QED (↑)',   'Convergencia de QED (↑)',       20),
     ('sa',          'Promedio de SA (↓)',    'Convergencia de SA (↓)',        20),
+    ('dock',        'Promedio de docking (kcal/mol, ↓)',
+                    'Convergencia de Docking (↓)',                            20),
 ]
 
 
@@ -223,7 +230,9 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
-        ax.set_ylim(bottom=0)
+        # Las tasas parten de 0; el docking es negativo y se deja autoescalar.
+        if all(np.nanmin(v) >= 0 for _, v in curves.values()):
+            ax.set_ylim(bottom=0)
 
     for ax in axes[n_plots:]:
         ax.set_visible(False)
@@ -250,6 +259,7 @@ BOXPLOT_MO_CONFIGS = [
     ('igd_plus',    'IGD+ (↓)',          False),
     ('epsilon',     'ε+ Aditivo (↓)',    False),
     ('n_pareto',    'Tamaño de Pareto',  True),
+    ('best_dock',   'Mejor docking, kcal/mol (↓)', False),
 ]
 
 # Fsp3 va sin flecha: no se optimiza, se reporta.  Marcarla con (↑) haría leer
@@ -258,7 +268,8 @@ BOXPLOT_MO_CONFIGS = [
 BOXPLOT_CHEM_CONFIGS = [
     ('mean_qed',    'QED (↑)',              True),
     ('mean_sa',     'SA (↓)',               False),
-    ('mean_fsp3',   f'Fsp3 (restr. $\\geq$ {FSP3_MIN:g})', True),
+    ('mean_dock',   'Docking, kcal/mol (↓)', False),
+    ('mean_fsp3',  f'Fsp3 (restr. $\\geq$ {FSP3_MIN:g})', True),
     ('validity',    'Tasa de Validez',      True),
     ('uniqueness',  'Unicidad (↑)',         True),
     ('novelty',     'Novedad (↑)',          True),
@@ -352,13 +363,13 @@ def _pie_marker(ax, x, y, colors, size):
 
 
 
-# El frente es una curva en QED-SA: no hay más proyecciones que mirar.
-PARETO_PLANES = [('qed', 'sa')]
+# Con tres objetivos el frente es una superficie: se mira por sus tres proyecciones.
+PARETO_PLANES = [('qed', 'sa'), ('qed', 'dock'), ('sa', 'dock')]
 
 
-# Mismo plano que PARETO_PLANES: el frente conjunto solo dibuja el espacio de
+# Mismos planos que PARETO_PLANES: el frente conjunto solo dibuja el espacio de
 # objetivos.
-PLANOS_FRENTE = [('qed', 'sa')]
+PLANOS_FRENTE = PARETO_PLANES
 
 
 
@@ -446,8 +457,8 @@ def _combined_pareto_fronts(series):
         df_all = load_pareto_molecules(s.pop_dir)
         if df_all.empty:
             continue
-        # Eliminar SMILES duplicados, quedarse con la mejor versión
-        df_unique = df_all.drop_duplicates(subset='smiles', keep='first')
+        # Eliminar SMILES duplicados (dock = mediana, ver unicas)
+        df_unique = unicas(df_all)
         # Recalcular frente no-dominado global
         pareto = _compute_non_dominated(df_unique)
         if not pareto.empty:
@@ -623,6 +634,8 @@ GRID_COLOR_MODES = {
                   label='Nº de ejecuciones en que aparece', entero=True),
     'fsp3':  dict(col='fsp3', cmap='viridis',
                   label=f'Fsp3 (restricción $\\geq$ {FSP3_MIN:g})'),
+    'dock':  dict(col='dock', cmap='viridis',
+                  label='Docking, kcal/mol (más oscuro, mejor afinidad)'),
 }
 
 
@@ -645,7 +658,7 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         # Contar en cuántas runs aparece cada SMILES
         run_counts = df_all.groupby('smiles')['run'].nunique().reset_index()
         run_counts.columns = ['smiles', 'n_runs_appeared']
-        df_unique = df_all.drop_duplicates(subset='smiles', keep='first')
+        df_unique = unicas(df_all)
         pareto = _compute_non_dominated(df_unique)
         if pareto.empty or not {'qed', 'sa'}.issubset(pareto.columns):
             continue
@@ -669,6 +682,12 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         fsp3_max = max((p['fsp3'].max() for _, p, _ in paretos), default=1.0)
         norm = mcolors.Normalize(vmin=FSP3_MIN,
                                  vmax=max(float(fsp3_max), FSP3_MIN + 0.1))
+    elif color_by == 'dock':
+        # Escala común a todos los paneles; el mejor docking (más negativo) cae
+        # en el extremo oscuro de viridis.
+        norm = mcolors.Normalize(
+            vmin=min(float(p['dock'].min()) for _, p, _ in paretos),
+            vmax=max(float(p['dock'].max()) for _, p, _ in paretos))
     else:
         # 1 run → violeta, max_runs → amarillo
         global_max_runs = max(nr for _, _, nr in paretos)
@@ -752,21 +771,8 @@ def render(smiles, size=LIENZO_MOL):
 
 
 
-# Corte de sintetizabilidad de las figuras de moléculas.  Ordenar por QED sin él
-# no alcanza: decenas de moléculas empatan en el techo (~0.948) y la de más QED
-# puede costar 3.5 de SA.  Lo comparte la figura de moléculas representativas,
-# para que las dos usen el mismo corte.
-SA_MAX = 3.0
-
-
 # Cuántas moléculas se dibujan por cruce.
 N_MOLECULAS_OP = 2
-
-
-# Decimales con que el pie de las figuras publica el QED.  El desempate usa los
-# mismos: si dos estructuras se ven con el mismo QED en la figura, la que salga
-# tiene que ser la de menor SA.
-QED_DECIMALES = 3
 
 
 # Tamaño de cada celda de la grilla, en pulgadas.  Fijo, para que la figura no
@@ -781,53 +787,34 @@ def _frente_propio(serie):
     df = load_pareto_molecules(serie.pop_dir)
     if df.empty:
         return pd.DataFrame()
-    return _compute_non_dominated(df.drop_duplicates(subset='smiles'))
+    return _compute_non_dominated(unicas(df))
 
 
 
-def top_por_qed(frente, n, sa_max=SA_MAX):
-    """Las n moléculas de mayor QED del frente, entre las de SA < sa_max.
+def top_por_dock(frente, n):
+    """Las n moléculas de mejor docking (el más negativo) del frente.
 
-    Ordenar solo por QED no alcanza: decenas empatan en el techo (~0.948) con SA
-    que va de 1.7 a 3.5, y cuál queda arriba lo decidiría el orden en que vienen
-    las filas.  Dentro de un mismo QED —redondeado a los decimales que muestra el
-    pie— gana la de menor SA: con el otro objetivo igualado, es estrictamente la
-    mejor de las empatadas.
-
-    Si el corte de SA deja el frente vacío se cae al frente completo."""
+    Con el docking como objetivo ya no hace falta el corte de SA ni el desempate
+    por QED: el QED satura en ~0.948 y el docking no, así que ordena sin empates
+    prácticos.  SA y QED se publican junto a cada estructura."""
     if frente.empty:
         return frente
-    dentro = frente[frente['sa'] < sa_max]
-    base = dentro if not dentro.empty else frente
-    return (base.assign(_qed=base['qed'].round(QED_DECIMALES))
-                .sort_values(['_qed', 'sa'], ascending=[False, True])
-                .drop(columns='_qed')
-                .head(n))
+    return frente.sort_values('dock', ascending=True).head(n)
 
 
 
-def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
-                              sa_max=SA_MAX):
-    """Las n moléculas de mayor QED del frente de cada cruce, entre las de SA <
-    sa_max.  Una COLUMNA por cruce: la comparación es entre cruces, y leerlos de
-    izquierda a derecha es lo mismo que hace el resto de las figuras (leyendas,
-    boxplots y tablas los ordenan así).
+def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP):
+    """Las n moléculas de mejor docking del frente de cada cruce.  Una COLUMNA por
+    cruce: la comparación es entre cruces, y leerlos de izquierda a derecha es lo
+    mismo que hace el resto de las figuras (leyendas, boxplots y tablas los
+    ordenan así).
 
-    Es una figura ILUSTRATIVA, no comparativa.  Por debajo de SA 3 casi todo el
-    frente empata en el techo de QED, así que cuál molécula sale la decide la
-    semilla y no el operador.  Lo que compara operadores son las tablas de la
-    comparación de operadores, y el pie de figura del documento no debería
-    prometer más que «esto es lo que produce cada cruce».  El CSV publica la
-    columna 'semillas' por si hace falta citar en cuántas corridas apareció cada
-    elegida.
-
-    Se probaron y descartaron: el extremo de SA mínima (PCX lo alcanza con
-    alcanos lineales, que no se quieren en el documento) y el punto de compromiso
-    más cercano al ideal (reproducible, pero da la misma molécula en muchas
-    celdas)."""
+    Es una figura ILUSTRATIVA, no comparativa: lo que compara operadores son las
+    tablas de la comparación de operadores.  El CSV publica la columna 'semillas'
+    por si hace falta citar en cuántas corridas apareció cada elegida."""
     frentes = {s.label: _frente_propio(s) for s in series}
     frentes = {lab: f for lab, f in frentes.items()
-               if not f.empty and {'qed', 'sa', 'fsp3'}.issubset(f.columns)}
+               if not f.empty and {'qed', 'sa', 'dock', 'fsp3'}.issubset(f.columns)}
     if not frentes:
         print("  ⚠ Sin frentes para la figura de moléculas por operador")
         return
@@ -841,7 +828,7 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
     filas = []
     for i, s in enumerate(orden):
         frente = frentes[s.label]
-        elegidas = top_por_qed(frente, n, sa_max)
+        elegidas = top_por_dock(frente, n)
         # Solo para el CSV: en cuántas de las semillas apareció cada elegida.
         crudo = load_pareto_molecules(s.pop_dir)
         semillas = (crudo.groupby('smiles')['run'].nunique() if not crudo.empty
@@ -863,19 +850,21 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
-            # Los dos objetivos más Fsp3.  Fsp3 no seleccionó nada —es el
+            # Los tres objetivos más Fsp3.  Fsp3 no seleccionó nada —es el
             # constraint y todo lo que llega al frente lo cumple— pero deja ver
             # con cuánto margen sobre el umbral quedó cada estructura dibujada.
-            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
-                          f"·  Fsp3 {m['fsp3']:.2f}", fontsize=10, labelpad=3)
+            ax.set_xlabel(f"Dock {m['dock']:.2f}  ·  QED {m['qed']:.3f}  ·  "
+                          f"SA {m['sa']:.2f}  ·  Fsp3 {m['fsp3']:.2f}",
+                          fontsize=9, labelpad=3)
             filas.append({'algoritmo': alg, 'cruce': s.label, 'puesto': j + 1,
                           'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
+                          'dock': round(m['dock'], 3),
                           'fsp3': round(m['fsp3'], 3),
                           'semillas': int(semillas.get(m['smiles'], 0)),
                           'smiles': m['smiles']})
 
     fig.suptitle(f'Frente por cruce — {alg}\n'
-                 f'Las {n} moléculas de mayor QED con SA < {sa_max:g}',
+                 f'Las {n} moléculas de mejor docking',
                  fontsize=13, fontweight='bold', y=0.998)
     # h_pad explícito: el imshow fija el aspecto de la celda, así que el eje
     # queda más alto que la estructura y su pie se mete en el recuadro de abajo.
@@ -952,6 +941,7 @@ def _generate_report(series, pop_size, output_dir, report_label, frente=None):
         'novelty':     _conv_csv_curves(series, 'novelty'),
         'qed':         _objective_curves(series, 'qed'),
         'sa':          _objective_curves(series, 'sa'),
+        'dock':        _objective_curves(series, 'dock'),
     }
 
     # 3. Las curvas van SOLO contra evaluaciones.  La versión por generación se
@@ -981,7 +971,7 @@ def _generate_report(series, pop_size, output_dir, report_label, frente=None):
         plot_boxplots(series, output_dir, get_values, BOXPLOT_MO_CONFIGS,
                       f"boxplots_mo_pop{pop_size}.png",
                       "Distribución de Indicadores Multiobjetivo")
-        print("📊 Boxplots químicos (QED, SA, Fsp3, Validez, "
+        print("📊 Boxplots químicos (QED, SA, Docking, Fsp3, Validez, "
               "Unicidad, Novedad)...")
         plot_boxplots(series, output_dir, get_values, BOXPLOT_CHEM_CONFIGS,
                       f"boxplots_chemical_pop{pop_size}.png",

@@ -94,6 +94,7 @@ FSP3_MIN = 0.3
 OBJECTIVE_LABELS = {
     'qed':  'QED (↑)',
     'sa':   'SA (↓)',
+    'dock': 'Docking, kcal/mol (↓)',
     'fsp3': f'Fsp3 (restricción $\\geq$ {FSP3_MIN:g})',
 }
 
@@ -101,7 +102,13 @@ OBJECTIVE_LABELS = {
 # Los objetivos, en el orden de las columnas de la matriz F.  Es el único lugar
 # donde se declara cuáles son: _df_to_F arma F con ellos y las cargas comprueban
 # que estén antes de calcular nada.
-OBJECTIVES = ['qed', 'sa']
+OBJECTIVES = ['qed', 'sa', 'dock']
+
+
+# Puntaje que docking.py asigna a lo que no se pudo dockear (espejo de
+# docking.DOCK_WORST, que no se importa para no arrastrar meeko a las gráficas).
+# Un dock ≥ DOCK_WORST es un fallo o un puntaje sin sentido: no entra al análisis.
+DOCK_WORST = 1.0
 
 
 
@@ -193,14 +200,34 @@ def load_metrics(pop_dir):
 
 
 
+def dock_valido(df):
+    """Filas con un puntaje de docking real: sin NaN y por debajo de DOCK_WORST."""
+    if 'dock' not in df.columns:
+        return df
+    return df[df['dock'] < DOCK_WORST]
+
+
+
+def unicas(df):
+    """Una fila por SMILES.  Se queda con la primera aparición, salvo el dock, que
+    es la mediana de todas: Uni-Dock puntúa la misma molécula distinto según el
+    lote (~0.2 kcal/mol), así que el valor de la primera run sería arbitrario."""
+    out = df.drop_duplicates(subset='smiles', keep='first').copy()
+    if 'dock' in df.columns:
+        out['dock'] = out['smiles'].map(df.groupby('smiles')['dock'].median())
+    return out.reset_index(drop=True)
+
+
+
 def load_pareto_molecules(pop_dir):
-    """Carga molecules.csv de todas las runs de una serie."""
+    """Carga molecules.csv de todas las runs de una serie, sin las moléculas cuyo
+    docking falló (ver dock_valido)."""
     all_dfs = []
     for run_dir in sorted(glob.glob(os.path.join(pop_dir, "run_*"))):
         csv_path = os.path.join(run_dir, "molecules.csv")
         if not os.path.exists(csv_path):
             continue
-        df = pd.read_csv(csv_path)
+        df = dock_valido(pd.read_csv(csv_path))
         df['run'] = os.path.basename(run_dir)
         all_dfs.append(df)
     if not all_dfs:
@@ -251,7 +278,8 @@ def generate_statistical_table(series, pop_size, output_dir,
 
     cols = ['hypervolume', 'spacing', 'validity', 'feasibility', 'novelty',
             'igd_plus', 'epsilon',
-            'best_qed', 'best_sa', 'mean_fsp3', 'n_pareto', 'time_sec']
+            'best_qed', 'best_sa', 'best_dock', 'mean_fsp3', 'n_pareto',
+            'n_docked', 'n_dock_fail', 'time_sec']
     cols = [c for c in cols if all(c in df.columns for df in all_metrics.values())]
 
     # Generar CSV resumen
@@ -271,9 +299,9 @@ def generate_statistical_table(series, pop_size, output_dir,
 
 
 def _compute_chemical_means(series):
-    """Media por run de QED, SA y Fsp3 sobre el frente de Pareto final
+    """Media por run de QED, SA, docking y Fsp3 sobre el frente de Pareto final
     (molecules.csv).  Retorna dict[label] → DataFrame con columnas
-    [run, mean_qed, mean_sa, mean_fsp3].
+    [run, mean_qed, mean_sa, mean_dock, mean_fsp3].
 
     Nota: usa la MEDIA del frente final, no el mejor valor individual."""
     results = {}
@@ -286,10 +314,12 @@ def _compute_chemical_means(series):
             df = pd.read_csv(mol_path)
             if df.empty or not {'qed', 'sa', 'fsp3'}.issubset(df.columns):
                 continue
+            df_d = dock_valido(df)
             rows.append({
                 'run': os.path.basename(run_dir),
                 'mean_qed': df['qed'].mean(),
                 'mean_sa': df['sa'].mean(),
+                'mean_dock': df_d['dock'].mean() if len(df_d) else np.nan,
                 'mean_fsp3': df['fsp3'].mean(),
             })
         if rows:
@@ -428,7 +458,7 @@ def _write_latex_comparison_table(series, col_values, metrics_cfg,
 def _build_series_value_getter(series, indicator_data=None):
     """get(label, col) → array de valores per-run (o None), buscando en la fuente
     que corresponda:
-      - mean_qed/mean_sa/mean_fsp3 → medias del frente final (molecules.csv)
+      - mean_qed/mean_sa/mean_dock/mean_fsp3 → medias del frente final (molecules.csv)
       - igd_plus/epsilon           → indicadores vs frente de referencia
       - uniqueness                 → última generación (convergence.csv)
       - el resto                   → metrics.csv
@@ -440,7 +470,7 @@ def _build_series_value_getter(series, indicator_data=None):
     uniq_by_series = _compute_uniqueness(series)
 
     def get(label, col):
-        if col in ('mean_qed', 'mean_sa', 'mean_fsp3'):
+        if col in ('mean_qed', 'mean_sa', 'mean_dock', 'mean_fsp3'):
             df = chem_by_series.get(label)
         elif col in ('igd_plus', 'epsilon'):
             df = indicator_data.get(label)
@@ -472,6 +502,7 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
         ('IGD$^+$',          'igd_plus',    '.4f', False),
         (r'$\epsilon^+$',    'epsilon',     '.4f', False),
         ('Tamaño de Pareto', 'n_pareto',    '.1f', True),
+        ('Dockeadas',        'n_docked',    '.0f', None),
         ('Tiempo (s)',       'time_sec',    '.1f', False),
     ]
     # Fsp3 entra con higher_better=None: se reporta pero no se compite por ella,
@@ -480,6 +511,7 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
     chem_cfg = [
         ('QED',           'mean_qed',    '.4f', True),
         ('SA',            'mean_sa',     '.2f', False),
+        ('Docking',       'mean_dock',   '.2f', False),
         ('Factibilidad',  'feasibility', '.4f', True),
         ('Fsp3',          'mean_fsp3',   '.4f', None),
         ('Validez',       'validity',    '.4f', True),
@@ -511,8 +543,9 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
     # las evaluaciones, y unicidad solo de la última generación.
     _write_latex_comparison_table(
         series, col_values, chem_cfg,
-        f'Comparación de indicadores químicos{cap_ctx}.  QED, SA y Fsp3 son la '
-        f'media del frente no dominado acumulado sobre la corrida completa; '
+        f'Comparación de indicadores químicos{cap_ctx}.  QED, SA, docking '
+        f'(kcal/mol, energía de unión de Uni-Dock; más negativo es mejor) y Fsp3 '
+        f'son la media del frente no dominado acumulado sobre la corrida completa; '
         f'validez, factibilidad y novedad se calculan sobre las evaluaciones de '
         f'toda la corrida (factibilidad como fracción de las válidas que cumplen '
         f'Fsp3 $\\geq$ {FSP3_MIN:g}); unicidad corresponde a la población de la '

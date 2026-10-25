@@ -6,13 +6,13 @@ Cada comando lee results/exp4/ (--results) y escribe en plots/exp4/.
   operadores  PCX contra SBX, un reporte por algoritmo      →  plots/exp4/operadores/
   algoritmos  los tres algoritmos entre sí, por cruce       →  plots/exp4/comparacion_final/
               y el frente conjunto de las seis configs.     →  plots/exp4/frente_conjunto/
-  moleculas   las de mayor QED de cada algoritmo            →  plots/exp4/frente_conjunto/
+  moleculas   las 15 de mejor docking (top15_docking.csv)    →  plots/exp4/frente_conjunto/
   figuras     figuras comparativas de los algoritmos        →  plots/exp4/comparacion_final/
 
 Uso:
     python -m analisis operadores [--algorithms NSGA2 NSGA3] [--metric igd_plus]
     python -m analisis algoritmos [--crossovers pcx]
-    python -m analisis moleculas [--out figura.png]
+    python -m analisis moleculas [--csv top15.csv] [--out figura.png]
     python -m analisis figuras [--crossovers pcx sbx]
 """
 
@@ -87,9 +87,11 @@ def main():
     p2.set_defaults(func=algoritmos)
 
     pm = sub.add_parser('moleculas', parents=[base], formatter_class=fmt,
-                        help="Moléculas representativas del frente de cada "
-                             "algoritmo.")
+                        help="Las 15 moléculas de mejor docking.")
     pm.add_argument('--out', default=MOLECULAS_OUT)
+    pm.add_argument('--csv', default=None,
+                    help="CSV con rank,smiles,qed,sa,fsp3,dock "
+                         "(default: <results>/top15_docking.csv).")
     pm.set_defaults(func=moleculas)
 
     pf = sub.add_parser('figuras', parents=[base], formatter_class=fmt,

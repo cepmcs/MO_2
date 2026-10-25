@@ -26,11 +26,13 @@ from .comun import (
     _num,
     _write_tex,
     compare_indicator,
+    dock_valido,
     fmt_groups,
     get_color,
     homogeneous_groups,
     load_pareto_molecules,
     series_pool,
+    unicas,
 )
 
 
@@ -38,18 +40,20 @@ from .comun import (
 
 
 def _df_to_F(df):
-    """Convierte DataFrame con qed y sa a matriz F de minimización [-QED, SA].
+    """Convierte DataFrame con qed, sa y dock a matriz F de minimización
+    [-QED, SA, dock] (el mismo F que optimiza utils_mo).
 
-    Fsp3 no entra: es constraint, no objetivo.  Meterlo como tercera columna
-    cambiaría quién domina a quién: una molécula peor en los dos objetivos
+    Fsp3 no entra: es constraint, no objetivo.  Meterlo como columna
+    cambiaría quién domina a quién: una molécula peor en los objetivos
     sobreviviría por tener más Fsp3."""
     return np.column_stack([-df['qed'].to_numpy(dtype=float),
-                            df['sa'].to_numpy(dtype=float)])   # ver OBJECTIVES
+                            df['sa'].to_numpy(dtype=float),
+                            df['dock'].to_numpy(dtype=float)])   # ver OBJECTIVES
 
 
 
 def _compute_non_dominated(df):
-    """Recalcula el frente no-dominado de un DataFrame con qed y sa.
+    """Recalcula el frente no-dominado de un DataFrame con qed, sa y dock.
 
     Las filas que llegan acá ya pasaron el constraint: molecules.csv publica
     únicamente el frente factible (ver utils_mo.build_pareto), así que no hay
@@ -67,8 +71,8 @@ def _front_bounds(pf_F):
     """Ideal (mínimos) y escala (nadir − ideal) del frente de referencia.
 
     Se usan para normalizar los objetivos a [0,1] antes de IGD+ y ε+, de modo
-    que los dos objetivos pesen por igual (sin esto, SA domina por su rango
-    mayor).  Las dimensiones constantes (escala 0) se fijan a 1 para no dividir
+    que los tres objetivos pesen por igual (sin esto, SA y el docking dominan
+    por su rango mayor).  Las dimensiones constantes (escala 0) se fijan a 1 para no dividir
     por cero: tras normalizar quedan en 0 y no afectan las distancias."""
     ideal = pf_F.min(axis=0)
     nadir = pf_F.max(axis=0)
@@ -120,8 +124,7 @@ def build_reference_front(series):
     if not all_dfs:
         return None, None
 
-    combined = pd.concat(all_dfs, ignore_index=True)
-    combined = combined.drop_duplicates(subset='smiles', keep='first')
+    combined = unicas(pd.concat(all_dfs, ignore_index=True))
     pf_df = _compute_non_dominated(combined)
     if pf_df.empty:
         return None, None
@@ -161,6 +164,9 @@ def compute_indicators_per_run(series, pf_F):
                 continue
             df = pd.read_csv(mol_path)
             if df.empty or not set(OBJECTIVES).issubset(df.columns):
+                continue
+            df = dock_valido(df)
+            if df.empty:
                 continue
             F_run = _normalize_F(_df_to_F(df), ideal, scale)
             rows.append({
@@ -245,13 +251,14 @@ def _perfil(df):
     dónde cae y qué calidad tiene lo que aporta."""
     if df.empty:
         return {'n': 0, 'fsp3': np.nan, 'fsp3_borde': np.nan,
-                'qed': np.nan, 'qed_bajo': np.nan, 'sa': np.nan}
+                'qed': np.nan, 'qed_bajo': np.nan, 'sa': np.nan, 'dock': np.nan}
     return {'n': len(df),
             'fsp3': float(df.fsp3.mean()),
             'fsp3_borde': float((df.fsp3 < FSP3_MIN + FSP3_BORDE).mean()),
             'qed': float(df.qed.mean()),
             'qed_bajo': float((df.qed < 0.60).mean()),
-            'sa': float(df.sa.mean())}
+            'sa': float(df.sa.mean()),
+            'dock': float(df.dock.mean())}
 
 
 
@@ -321,7 +328,7 @@ def contribucion_por_semilla(series, grupo_de=_familia):
         # antes de la no-dominancia para no contarla dos veces.
         marca = junto.groupby('smiles')['grupo'].agg(
             lambda v: compartida if len(set(v)) > 1 else next(iter(set(v))))
-        unico = junto.drop_duplicates('smiles').set_index('smiles')
+        unico = unicas(junto).set_index('smiles')
         unico['origen'] = marca
         frente = _compute_non_dominated(unico.reset_index())
         if frente.empty:
@@ -397,12 +404,13 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
                 continue
             try:
                 df = pd.read_csv(gz_path, usecols=lambda c: c in {
-                    'gen', 'qed', 'sa', 'fsp3', 'valid', 'feasible'})
+                    'gen', 'qed', 'sa', 'dock', 'fsp3', 'valid', 'feasible'})
             except Exception:
                 continue
-            if not {'gen', 'qed', 'sa', 'valid'}.issubset(df.columns):
+            if not {'gen', 'valid', *OBJECTIVES}.issubset(df.columns):
                 continue
-            df = df[df['valid'].astype(bool)].dropna(subset=['qed', 'sa'])
+            df = df[df['valid'].astype(bool)].dropna(subset=OBJECTIVES)
+            df = dock_valido(df)
             # 'feasible' lo escribe el eval_log; si el log viniera de una corrida
             # sin constraint se cae a Fsp3 ≥ umbral, que es la misma condición
             # calculada desde la propiedad.
@@ -551,15 +559,15 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         f'se recalcula la no-dominancia global ({total} soluciones).  «Aporta» '
         f'cuenta toda molécula del frente hallada por esa serie, por lo que las '
         f'compartidas suman en cada fila que las encontró; «exclusivas» solo '
-        f'las que no halló ninguna otra.  Las tres últimas columnas son la media '
+        f'las que no halló ninguna otra.  Las cuatro últimas columnas son la media '
         f'sobre lo que cada serie aporta, y describen no cuánto sino qué aporta: '
-        f'QED y SA son los objetivos, y Fsp3 va sin flecha porque es la '
-        f'restricción ($\\geq$ {_num(FSP3_MIN, 2)}) y no algo que se '
+        f'QED, SA y docking (kcal/mol) son los objetivos, y Fsp3 va sin flecha '
+        f'porque es la restricción ($\\geq$ {_num(FSP3_MIN, 2)}) y no algo que se '
         f'optimice.{nota}}}',
         f'\\label{{tab:contribucion_{nombre.lower()}}}',
-        r'\begin{tabular}{llrrrrrr}', r'\toprule',
+        r'\begin{tabular}{llrrrrrrr}', r'\toprule',
         f'{etiqueta} & Operadores & Aporta & Exclusivas & \\% & QED $\\uparrow$ & '
-        f'SA $\\downarrow$ & Fsp3 \\\\',
+        f'SA $\\downarrow$ & Docking $\\downarrow$ & Fsp3 \\\\',
         r'\midrule',
     ]
     for i, (f, (alg, cruce)) in enumerate(zip(filas, partidas)):
@@ -581,7 +589,8 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         lines.append(
             f"{celda} & {_latex_escape(cruce)} & "
             f"{f['aporta']} & {f['exclusiva']} & {_num(100*f['frac'], 1)} & "
-            f"{num(f['qed'], 3)} & {num(f['sa'], 2)} & {num(f['fsp3'], 3)} \\\\")
+            f"{num(f['qed'], 3)} & {num(f['sa'], 2)} & {num(f['dock'], 2)} & "
+            f"{num(f['fsp3'], 3)} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, f'contribucion_{nombre}.tex'))
 

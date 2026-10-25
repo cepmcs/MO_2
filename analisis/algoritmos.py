@@ -7,8 +7,7 @@ Tres cosas que se leen juntas:
               por cruce (PCX y SBX).
   frente      junta las seis configuraciones —tres algoritmos por dos cruces— y mira
               qué sobrevive y de dónde sale.  Caracteriza el pool, no ordena.
-  moleculas   las de mayor QED del frente de cada algoritmo, con sus dos cruces
-              juntos.
+  moleculas   las 15 de mejor docking, leídas de top15_docking.csv.
 """
 
 import os
@@ -18,7 +17,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from .comun import (
-    ALGORITHM_ORDER,
     CRUCES,
     DISPLAY,
     FSP3_MIN,
@@ -28,25 +26,22 @@ from .comun import (
     _num,
     _num_es,
     _write_tex,
-    cfg_dir,
     compare_indicator,
     fmt_groups,
     homogeneous_groups,
     load_metrics,
-    load_pareto_molecules,
     rank_biserial,
     series_algoritmos,
     series_pool,
 )
 from .indicadores import (
-    _compute_non_dominated,
     _partir_etiqueta,
     _por_serie,
     atribuir_frente,
     build_reference_front,
     write_contribucion_table,
 )
-from .figuras import SA_MAX, plot_frente_conjunto, render, top_por_qed
+from .figuras import plot_frente_conjunto, render
 
 
 
@@ -219,94 +214,57 @@ def analisis_frente_conjunto(args):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Moléculas representativas
 #
-#   Las moléculas de mayor QED del frente de cada algoritmo.  El frente junta las
-#   ejecuciones de sus dos ramas de cruce, deduplica por SMILES y recalcula la
-#   dominancia.
+#   Las 15 moléculas de mejor docking que se eligieron de los frentes, leídas de
+#   results/exp4/top15_docking.csv (rank, smiles, qed, sa, fsp3, dock).
 # ═══════════════════════════════════════════════════════════════════════════
 
 MOLECULAS_OUT = os.path.join(OUT_FRENTE, "moleculas_representativas.png")
 
+MOLECULAS_CSV = 'top15_docking.csv'
 
-N_MOLECULAS = 5      # por algoritmo
-
-
-
-def load_front(alg, results):
-    """Frente no dominado de un algoritmo sobre sus dos cruces juntos."""
-    dfs = []
-    for cruce in CRUCES:
-        d = cfg_dir(results, alg, cruce)
-        if d:
-            dfs.append(load_pareto_molecules(d))
-    if not dfs:
-        return pd.DataFrame()
-    df = pd.concat(dfs, ignore_index=True)
-    return _compute_non_dominated(df.drop_duplicates(subset='smiles'))
-
-
-
-def pick(front, n=N_MOLECULAS):
-    """Las n moléculas de mayor QED con SA por debajo de SA_MAX, desempatando por
-    SA entre las que comparten QED.  Mismo criterio que la figura de moléculas
-    por operador: ver figuras.top_por_qed."""
-    return top_por_qed(front, n).reset_index(drop=True)
+COLUMNAS_MOLECULAS = 5      # por fila de la figura
 
 
 
 def moleculas(args):
-    fronts = {a: load_front(a, args.results) for a in ALGORITHM_ORDER}
-    fronts = {a: f for a, f in fronts.items() if not f.empty}
-    if not fronts:
-        print(f"No se encontraron frentes en {args.results}")
+    path = args.csv or os.path.join(args.results, MOLECULAS_CSV)
+    if not os.path.exists(path):
+        print(f"No existe {path}")
         return
+    sel = pd.read_csv(path).sort_values('rank').reset_index(drop=True)
 
-    seleccion = {a: pick(f) for a, f in fronts.items()}
-
-    nrows, ncols = len(fronts), N_MOLECULAS
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.0 * ncols, 2.7 * nrows),
+    ncols = COLUMNAS_MOLECULAS
+    nrows = int(np.ceil(len(sel) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.2 * ncols, 3.0 * nrows),
                              squeeze=False)
     fig.patch.set_facecolor('white')
 
-    for i, (alg, sel) in enumerate(seleccion.items()):
-        for j in range(ncols):
-            ax = axes[i][j]
-            ax.set_xticks([]); ax.set_yticks([])
-            for sp in ax.spines.values():
-                sp.set_edgecolor('#cccccc')
-            if j >= len(sel):
-                ax.set_visible(False)
-                continue
+    for k, ax in enumerate(axes.flatten()):
+        ax.set_xticks([]); ax.set_yticks([])
+        for sp in ax.spines.values():
+            sp.set_edgecolor('#cccccc')
+        if k >= len(sel):
+            ax.set_visible(False)
+            continue
+        m = sel.iloc[k]
+        img = render(m['smiles'])
+        if img is not None:
+            ax.imshow(img)
+        ax.set_title(f"#{int(m['rank'])}  Dock {m['dock']:.2f}", fontsize=11,
+                     fontweight='bold', pad=4)
+        ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
+                      f"·  Fsp3 {m['fsp3']:.2f}", fontsize=9, labelpad=3)
 
-            m = sel.iloc[j]
-            img = render(m['smiles'])
-            if img is not None:
-                ax.imshow(img)
-            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
-                          f"·  Fsp3 {m['fsp3']:.2f}",
-                          fontsize=9, labelpad=3)
-            if j == 0:
-                ax.set_ylabel(DISPLAY.get(alg, alg), fontsize=13,
-                              fontweight='bold', labelpad=10)
-
-    fig.suptitle(f'Las {N_MOLECULAS} moléculas de mayor QED del frente de cada '
-                 f'algoritmo, con SA < {SA_MAX:g} '
+    fig.suptitle(f'Las {len(sel)} moléculas de mejor docking '
                  f'(todas cumplen Fsp3 ≥ {FSP3_MIN:g})',
                  fontsize=14, fontweight='bold', y=0.995)
-    plt.tight_layout(rect=[0, 0, 1, 0.985])
+    plt.tight_layout(rect=[0, 0, 1, 0.97], h_pad=1.5)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     plt.savefig(args.out, dpi=200, bbox_inches='tight', facecolor='white')
     plt.close(fig)
     print(f"✓ {args.out}")
 
-    # Detalle de las moléculas elegidas
-    rows = []
-    for alg, sel in seleccion.items():
-        for j, m in sel.iterrows():
-            rows.append({'algoritmo': DISPLAY.get(alg, alg), 'puesto': j + 1,
-                         'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
-                         'fsp3': m['fsp3'], 'smiles': m['smiles']})
-    out = pd.DataFrame(rows)
     csv = os.path.splitext(args.out)[0] + '.csv'
-    out.to_csv(csv, index=False)
+    sel.to_csv(csv, index=False)
     print(f"✓ {csv}\n")
-    print(out.to_string(index=False))
+    print(sel.drop(columns='smiles').to_string(index=False))
