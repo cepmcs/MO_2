@@ -21,6 +21,7 @@ from rdkit import Chem
 from rdkit.Chem.Draw import rdMolDraw2D
 
 from .comun import (
+    DISPLAY,
     FSP3_MIN,
     MARCADOR_DENSO,
     MARCADOR_NORMAL,
@@ -222,11 +223,12 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
             if s.label not in curves:
                 continue
             x, vals = curves[s.label]
+            nombre = DISPLAY.get(s.label, s.label)
             line, = ax.plot(x, vals, color=get_color(s.color_key, idx),
-                            linewidth=1.2, label=s.label, zorder=3)
-            if s.label not in legend_labels:
+                            linewidth=1.2, label=nombre, zorder=3)
+            if nombre not in legend_labels:
                 legend_handles.append(line)
-                legend_labels.append(s.label)
+                legend_labels.append(nombre)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
@@ -329,9 +331,10 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
     # Usamos series original para que la leyenda esté en el orden de definición
     for idx, s in enumerate(series):
         color = get_color(s.color_key, idx)
-        patch = mpatches.Patch(color=color, alpha=0.6, label=s.label)
+        nombre = DISPLAY.get(s.label, s.label)
+        patch = mpatches.Patch(color=color, alpha=0.6, label=nombre)
         legend_handles.append(patch)
-        legend_labels.append(s.label)
+        legend_labels.append(nombre)
         
     if legend_handles:
         fig.legend(handles=legend_handles, labels=legend_labels, loc='lower center',
@@ -411,7 +414,8 @@ def _plot_pareto_plane(ax, series_order, combined_paretos, counts, xcol, ycol,
         sc = ax.scatter(df[xcol], df[ycol], c=color, marker=PARETO_MARKER,
                         s=MARCADOR_DENSO, alpha=0.55,
                         edgecolors='none', linewidths=0,
-                        label=f'{s.label} ({counts[s.label]})', zorder=3)
+                        label=f'{DISPLAY.get(s.label, s.label)} '
+                              f'({counts[s.label]})', zorder=3)
         handles.append(sc)
         all_x.extend(df[xcol].values)
         all_y.extend(df[ycol].values)
@@ -701,7 +705,8 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
                         edgecolors='none', linewidths=0, zorder=3)
         ax.set_xlabel('QED (↑)', fontsize=11)
         ax.set_ylabel('SA (↓)', fontsize=11)
-        ax.set_title(f'{s.label}  ({n_runs} ejecuciones, {len(pareto)} no-dom.)',
+        ax.set_title(f'{DISPLAY.get(s.label, s.label)}  '
+                     f'({n_runs} ejecuciones, {len(pareto)} no-dom.)',
                      fontsize=12, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.25, color='grey')
 
@@ -883,7 +888,7 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
                           'semillas': int(semillas.get(m['smiles'], 0)),
                           'smiles': m['smiles']})
 
-    fig.suptitle(f'Frente por combinación de operadores — {alg}\n'
+    fig.suptitle(f'Frente por combinación de operadores — {DISPLAY.get(alg, alg)}\n'
                  f'Las {n} moléculas de mayor QED con SA < {sa_max:g}',
                  fontsize=13, fontweight='bold', y=0.998)
     # h_pad explícito: el imshow fija el aspecto de la celda, así que el eje

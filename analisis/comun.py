@@ -220,9 +220,9 @@ def load_pareto_molecules(pop_dir):
 
 # Okabe-Ito: naranja/azul se distinguen bajo los tres tipos de daltonismo.
 # CMOPSO entra acá porque en el frente conjunto de candidatos convive con las dos
-# familias de cruce sin pertenecer a ninguna: no tiene operadores.  Su rojo va
-# oscurecido para que no se confunda con el naranja de PCX.
-CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'CMOPSO': '#B01818'}
+# familias de cruce sin pertenecer a ninguna: no tiene operadores.  Va en verde
+# azulado, el tercer color de Okabe-Ito, para que se distinga de las dos familias.
+CRUCE_COLORS = {'PCX': '#D55E00', 'SBX': '#0072B2', 'CMOPSO': '#009E73'}
 
 COMPARTIDA_COLOR = '#7F7F7F'
 

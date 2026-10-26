@@ -54,7 +54,7 @@ from .comun import (
 # panel salía sin estructura —los tres tonos mezclados a lo largo de toda la
 # columna—, que es justamente lo que la figura tiene que dejar ver.
 # Rampa secuencial porque el factor es ordinal: más claro, menos velocidad.
-VEL_COLORS = {0.1: '#9ECAE1', 0.2: '#4292C6', 0.35: '#08519C'}
+VEL_COLORS = {0.1: '#99D8C5', 0.2: '#009E73', 0.35: '#005F45'}
 
 
 # columna: (etiqueta, higher_better)
@@ -86,11 +86,13 @@ COMBO_FACTORS = ['crossover', 'mutation']
 SUB_FACTORS_GA = ['budget', 'cx_prob', 'mut_prob']
 
 
+# Mismo reparto que EFECTO_COLOR: PCX en bermellón y SBX en azul (Okabe-Ito); el
+# tono oscuro es PM y el claro, gaussiana.
 OPERATOR_COLORS = {
-    'pcx/pm':    '#1F4E79',
-    'pcx/gauss': '#6FA8DC',
-    'sbx/pm':    '#B45F06',
-    'sbx/gauss': '#F6B26B',
+    'pcx/pm':    '#D55E00',
+    'pcx/gauss': '#F2A878',
+    'sbx/pm':    '#0072B2',
+    'sbx/gauss': '#7DB8DE',
 }
 
 # Combos tal como aparecen en el CSV del grid (la etapa 2 los lee de winners/,
@@ -298,10 +300,10 @@ EFECTO_COMBOS = [('pcx', 'pm'), ('pcx', 'gauss'), ('sbx', 'pm'), ('sbx', 'gauss'
 
 EFECTO_TRAMA = {'pm': None, 'gauss': '///'}
 
-# Naranja y azul de Okabe-Ito (los mismos con que figuras.py separa PCX de
-# SBX) y el rojo de CMOPSO oscurecido: el rojo puro queda cerca del naranja en
-# pantallas de gama amplia, y bajar la luminosidad los separa igual.
-EFECTO_COLOR = {'pcx': '#D55E00', 'sbx': '#0072B2', 'pso': '#B01818'}
+# Bermellón y azul de Okabe-Ito (los mismos con que figuras.py separa PCX de
+# SBX) y el verde azulado de CMOPSO, que es el que lleva su familia en las demás
+# figuras de esta etapa.
+EFECTO_COLOR = {'pcx': '#D55E00', 'sbx': '#0072B2', 'pso': '#009E73'}
 
 
 # Perillas de cada familia de algoritmo: (columna, etiqueta corta).
