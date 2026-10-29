@@ -136,30 +136,28 @@ class Series:
 
       label     → texto en leyendas y títulos.
       pop_dir   → ruta absoluta a .../pop{N} de donde se cargan los datos.
-      color_key → clave para color/marcador (default: label).
+      color_key → clave para el color (default: label).
+      linestyle → trazo en las curvas de convergencia.
+      hatch     → relleno de las cajas de los boxplots.
+      marker    → marcador en los frentes superpuestos.
+
+    Las seis configuraciones se distinguen por color (el algoritmo) y por trazo,
+    relleno y marcador (el cruce).
     """
-    def __init__(self, label, pop_dir, color_key=None):
+    def __init__(self, label, pop_dir, color_key=None, linestyle='-', hatch=None,
+                 marker=PARETO_MARKER):
         self.label = label
         self.pop_dir = pop_dir
         self.color_key = color_key if color_key is not None else label
+        self.linestyle = linestyle
+        self.hatch = hatch
+        self.marker = marker
 
 
 
 def _has_runs(pop_dir):
     """True si pop_dir contiene al menos un run con convergence.csv."""
     return bool(glob.glob(os.path.join(pop_dir, "run_*", "convergence.csv")))
-
-
-
-def _alg_from_output_dir(output_dir):
-    """Nombre del algoritmo en un reporte de operadores: el componente que sigue
-    a 'operadores' en la ruta de salida.  None si no es un reporte de ese modo."""
-    parts = output_dir.replace('\\', '/').rstrip('/').split('/')
-    if 'operadores' in parts:
-        i = parts.index('operadores')
-        if i + 1 < len(parts):
-            return parts[i + 1]
-    return None
 
 
 
@@ -250,8 +248,7 @@ COMPARTIDA_COLOR = '#7F7F7F'
 
 
 
-def generate_statistical_table(series, pop_size, output_dir,
-                               indicator_data=None):
+def generate_statistical_table(series, output_dir, indicator_data=None):
     """Genera tabla resumen (media ± std) de todas las métricas por serie.
     Incluye métricas per-run (metrics.csv) e indicadores basados en frente de
     referencia (IGD+, ε+) si están disponibles."""
@@ -292,9 +289,9 @@ def generate_statistical_table(series, pop_size, output_dir,
         rows.append(row)
 
     summary_df = pd.DataFrame(rows)
-    summary_path = os.path.join(output_dir, f"comparison_summary_pop{pop_size}.csv")
+    summary_path = os.path.join(output_dir, "resumen_estadistico.csv")
     summary_df.to_csv(summary_path, index=False)
-    print(f"  ✓ comparison_summary_pop{pop_size}.csv")
+    print("  ✓ resumen_estadistico.csv")
 
 
 
@@ -378,8 +375,7 @@ def _latex_escape(s):
 
 
 def _write_latex_comparison_table(series, col_values, metrics_cfg,
-                                  caption, tex_label, output_dir, fname,
-                                  pop_size):
+                                  caption, tex_label, output_dir, fname):
     """Escribe una tabla LaTeX comparando algoritmos (filas) por métricas
     (columnas), con media ± std.  Resalta en negrita el mejor por columna.
 
@@ -418,18 +414,13 @@ def _write_latex_comparison_table(series, col_values, metrics_cfg,
     arrow = lambda hb: '' if hb is None else (r'$\uparrow$' if hb
                                               else r'$\downarrow$')
     col_spec = 'l' + 'c' * len(cols)
-    header_cells = ['Algoritmo'] + [f'{h} {arrow(hb)}'.strip()
+    header_cells = ['Configuración'] + [f'{h} {arrow(hb)}'.strip()
                                     for h, _, _, hb in cols]
-
-    # pop_size llega como etiqueta del reporte (el algoritmo al comparar
-    # operadores, 'final' al comparar algoritmos), no siempre como tamaño de
-    # población: solo tiene sentido anunciarlo como N si es un número.
-    sufijo = f' ($N={pop_size}$)' if str(pop_size).isdigit() else ''
 
     lines = [
         r'\begin{table}[htbp]',
         r'\centering',
-        f'\\caption{{{caption}{sufijo}}}',
+        f'\\caption{{{caption}}}',
         f'\\label{{{tex_label}}}',
         f'\\begin{{tabular}}{{{col_spec}}}',
         r'\toprule',
@@ -444,7 +435,8 @@ def _write_latex_comparison_table(series, col_values, metrics_cfg,
                 continue
             m, sd = means[(s.label, col)], stds[(s.label, col)]
             body = f'{_num_es(m, fmt)} \\pm {_num_es(sd, fmt)}'
-            cell = f'$\\mathbf{{{body}}}$' if best.get(col) == s.label else f'${body}$'
+            cell = (f'$\\mathbf{{{body}}}$' if best.get(col) == s.label
+                    else f'${body}$')
             cells.append(cell)
         lines.append(' & '.join(cells) + r' \\')
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
@@ -487,10 +479,11 @@ def _build_series_value_getter(series, indicator_data=None):
 
 
 
-def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
-    """Genera dos tablas LaTeX de comparación entre algoritmos:
+def generate_latex_comparison_tables(series, output_dir, col_values):
+    """Genera tres tablas LaTeX de comparación entre configuraciones:
       1) indicadores multiobjetivo (HV, Spacing, IGD+, ε+, Pareto size)
-      2) indicadores químicos (QED, SA, Fsp3 medios, Validez, Unicidad, Novedad)
+      2) propiedades del frente (QED, SA, Fsp3 y docking medios)
+      3) generación (Validez, Novedad, Unicidad)
     col_values(label, col) → array de valores per-run (de _build_series_value_getter).
     """
     if len(series) < 2:
@@ -508,52 +501,39 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
     # Fsp3 entra con higher_better=None: se reporta pero no se compite por ella,
     # así que la tabla no debe poner en negrita a «la mejor».  El resto de las
     # columnas sí tienen dirección y la conservan.
-    chem_cfg = [
+    prop_cfg = [
         ('QED',           'mean_qed',    '.4f', True),
         ('SA',            'mean_sa',     '.2f', False),
-        ('Docking',       'mean_dock',   '.2f', False),
-        ('Factibilidad',  'feasibility', '.4f', True),
         ('Fsp3',          'mean_fsp3',   '.4f', None),
-        ('Validez',       'validity',    '.4f', True),
-        ('Unicidad',      'uniqueness',  '.4f', True),
-        ('Novedad',       'novelty',     '.4f', True),
+        ('Docking',       'mean_dock',   '.2f', False),
     ]
-
-    # El contexto sale de pop_size, que es la etiqueta del reporte: el nombre
-    # del algoritmo al comparar operadores y 'final' al comparar algoritmos.
-    # Antes se derivaba del directorio padre, que con la estructura actual da
-    # 'plots' y no dice nada.  El \label mantiene la forma anterior para no
-    # romper referencias ya escritas.
-    ctx = str(pop_size)
-    cap_ctx = ('' if ctx == 'final'
-               else f' — {_latex_escape(DISPLAY.get(ctx, ctx))}')
-    # Directo bajo PLOTS_DIR la etiqueta sigue diciendo 'plots', como antes de que
-    # cada experimento tuviera su subcarpeta (plots/main).
-    dir_ctx = ('plots' if os.path.dirname(output_dir) == PLOTS_DIR
-               else os.path.basename(os.path.dirname(output_dir)))
-    lab_ctx = '' if dir_ctx == 'comparison' else f'_{dir_ctx.lower()}'
+    gen_cfg = [
+        ('Validez',       'validity',    '.4f', True),
+        ('Novedad',       'novelty',     '.4f', True),
+        ('Unicidad',      'uniqueness',  '.4f', True),
+    ]
 
     _write_latex_comparison_table(
         series, col_values, multiobj_cfg,
-        f'Comparación de indicadores multiobjetivo{cap_ctx}',
-        f'tab:comparison_multiobjective{lab_ctx}_pop{pop_size}',
-        output_dir, f'comparison_multiobjective_pop{pop_size}.tex', pop_size)
-    # El alcance no es el mismo en todas las columnas y conviene decirlo: QED, SA
-    # y Fsp3 son del frente acumulado, validez, factibilidad y novedad de todas
-    # las evaluaciones, y unicidad solo de la última generación.
+        'Comparación de indicadores multiobjetivo',
+        'tab:multiobjetivo', output_dir, '1_multiobjetivo.tex')
     _write_latex_comparison_table(
-        series, col_values, chem_cfg,
-        f'Comparación de indicadores químicos{cap_ctx}.  QED, SA, docking '
-        f'(kcal/mol, energía de unión de Uni-Dock; más negativo es mejor) y Fsp3 '
-        f'son la media del frente no dominado acumulado sobre la corrida completa; '
-        f'validez, factibilidad y novedad se calculan sobre las evaluaciones de '
-        f'toda la corrida (factibilidad como fracción de las válidas que cumplen '
-        f'Fsp3 $\\geq$ {FSP3_MIN:g}); unicidad corresponde a la población de la '
-        f'última generación.  Fsp3 se informa sin dirección de optimización: es '
-        f'la restricción, no un objetivo, y su valor dice dónde se estacionó la '
-        f'búsqueda respecto del umbral',
-        f'tab:comparison_chemical{lab_ctx}_pop{pop_size}',
-        output_dir, f'comparison_chemical_pop{pop_size}.tex', pop_size)
+        series, col_values, prop_cfg,
+        f'Comparación de las propiedades del frente.  QED, SA, Fsp3 y '
+        f'docking (kcal/mol, energía de unión de Uni-Dock; más negativo es mejor) '
+        f'son la media del frente no dominado acumulado sobre la corrida completa.  '
+        f'Fsp3 se informa sin dirección de optimización: es la restricción, no un '
+        f'objetivo, y su valor dice dónde se estacionó la búsqueda respecto del '
+        f'umbral ({FSP3_MIN:g})',
+        'tab:propiedades', output_dir, '2_propiedades.tex')
+    # El alcance difiere: validez y novedad son de las evaluaciones de toda la
+    # corrida; la unicidad, de las moléculas evaluadas en la última generación.
+    _write_latex_comparison_table(
+        series, col_values, gen_cfg,
+        'Comparación de validez, novedad y unicidad.  Validez y novedad '
+        'se calculan sobre las evaluaciones de toda la corrida; la unicidad, sobre '
+        'las moléculas válidas evaluadas en la última generación',
+        'tab:generacion', output_dir, '3_generacion.tex')
 
 
 
@@ -577,25 +557,9 @@ def cfg_dir(results, alg, cruce):
 
 
 
-def series_operadores(results, alg):
-    """Los dos cruces de un algoritmo, PCX y SBX."""
-    series = []
-    for cruce in CRUCES:
-        d = cfg_dir(results, alg, cruce)
-        if d:
-            series.append(Series(cruce.upper(), d))
-    return series
-
-
-
-def series_algoritmos(results, cruce):
-    """Los algoritmos con un mismo cruce."""
-    series = []
-    for alg in ALGORITHM_ORDER:
-        d = cfg_dir(results, alg, cruce)
-        if d:
-            series.append(Series(alg, d, color_key=alg))
-    return series
+# Trazo y relleno de cada cruce: el color lo pone el algoritmo.
+ESTILO_CRUCE = {'pcx': dict(linestyle='-', hatch=None, marker='o'),
+                'sbx': dict(linestyle='--', hatch='//', marker='^')}
 
 
 
@@ -606,7 +570,8 @@ def series_pool(results):
         for cruce in CRUCES:
             d = cfg_dir(results, alg, cruce)
             if d:
-                series.append(Series(f'{DISPLAY.get(alg, alg)} ({cruce.upper()})', d))
+                series.append(Series(f'{DISPLAY.get(alg, alg)} ({cruce.upper()})', d,
+                                     color_key=alg, **ESTILO_CRUCE[cruce]))
     return series
 
 
@@ -616,14 +581,12 @@ def series_pool(results):
 #   <ALG>/<cruce>_<mutacion>/<config>/run_XX/
 RESULTADOS_DIR = os.path.join(ROOT_DIR, "results", "exp4")
 
-OUT_OPERADORES = os.path.join(PLOTS_DIR, "operadores")
-
-OUT_ALGORITMOS = os.path.join(PLOTS_DIR, "comparacion_final")
-
-# El frente conjunto va aparte: no compara algoritmos entre sí como el resto de
-# la comparación, sino que caracteriza qué moléculas sobreviven al unirlos y de
-# dónde salen.  Son preguntas distintas y conviene que no se mezclen en la lectura.
-OUT_FRENTE     = os.path.join(PLOTS_DIR, "frente_conjunto")
+# El análisis son dos comandos sobre las seis configuraciones juntas, que escriben
+# en la misma carpeta (tablas/, figuras/ y frentes/):
+#   comparacion  tablas, cajas, convergencia, frentes y el contraste entre todos
+#                los pares
+#   candidatos   frente conjunto y moléculas representativas
+OUT_DIR = os.path.join(PLOTS_DIR, "resultados")
 
 
 
@@ -729,21 +692,23 @@ def compare_indicator(get_values, labels, col):
 
 def homogeneous_groups(res, labels, medians, higher_better):
     """Grupos de métodos que el post-hoc no logra separar, ordenados de mejor a
-    peor.  Notación estándar para resumir las comparaciones en una línea."""
+    peor.  Notación estándar para resumir las comparaciones en una línea.  Un
+    método que no se separa de los de dos grupos seguidos aparece en los dos."""
     order = sorted(labels, key=lambda l: -medians[l] if higher_better else medians[l])
     sep = {(p['a'], p['b']): p['p_holm'] < 0.05 for p in res['pairs']}
 
     def differ(a, b):
         return sep.get((a, b), sep.get((b, a), False))
 
-    groups, cur = [], [order[0]]
-    for lab in order[1:]:
-        if any(differ(lab, m) for m in cur):
-            groups.append(cur)
-            cur = [lab]
-        else:
-            cur.append(lab)
-    groups.append(cur)
+    groups, fin = [], -1
+    for i in range(len(order)):
+        j = i
+        while j + 1 < len(order) and not any(differ(order[j + 1], m)
+                                             for m in order[i:j + 1]):
+            j += 1
+        if j > fin:         # una ventana contenida en la anterior no agrega nada
+            groups.append(order[i:j + 1])
+            fin = j
     return groups
 
 

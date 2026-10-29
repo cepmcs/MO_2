@@ -94,3 +94,6 @@ Thumbs.db
 
 # Notas internas
 justificacion_operadores.md
+
+# Entrenamiento de la GAN (va al cluster, incluye 3 GB de vectores)
+GAN/

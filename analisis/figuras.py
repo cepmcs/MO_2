@@ -15,18 +15,19 @@ import matplotlib.image as mpimg
 import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
+from scipy.stats import gaussian_kde
 import matplotlib.pyplot as plt
 from rdkit import Chem
 from rdkit.Chem.Draw import rdMolDraw2D
 
 from .comun import (
+    CRUCES,
     DOCK_WORST,
     FSP3_MIN,
     MARCADOR_DENSO,
     MARCADOR_NORMAL,
     OBJECTIVE_LABELS,
     PARETO_MARKER,
-    _alg_from_output_dir,
     _build_series_value_getter,
     generate_latex_comparison_tables,
     generate_statistical_table,
@@ -156,7 +157,7 @@ def _a_evaluaciones(curvas, mapas, escala=1000.0):
 
 
 
-def escribir_curvas_csv(series, curvas, mapas, output_dir, pop_size):
+def escribir_curvas_csv(series, curvas, mapas, output_dir):
     """CSV con las curvas de convergencia en formato largo: una fila por serie y
     generación, con las evaluaciones acumuladas y una columna por métrica.
 
@@ -178,10 +179,10 @@ def escribir_curvas_csv(series, curvas, mapas, output_dir, pop_size):
             filas.append(fila)
     if not filas:
         return
-    out = os.path.join(output_dir, f"convergence_curves_pop{pop_size}.csv")
+    out = os.path.join(output_dir, "curvas_convergencia.csv")
     pd.DataFrame(filas, columns=['series', 'gen', 'evaluaciones'] + cols
                  ).to_csv(out, index=False)
-    print(f"  ✓ convergence_curves_pop{pop_size}.csv  ({len(filas)} filas)")
+    print(f"  ✓ curvas_convergencia.csv  ({len(filas)} filas)")
 
 
 
@@ -223,7 +224,8 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
                 continue
             x, vals = curves[s.label]
             line, = ax.plot(x, vals, color=get_color(s.color_key, idx),
-                            linewidth=1.2, label=s.label, zorder=3)
+                            linestyle=s.linestyle, linewidth=1.4,
+                            label=s.label, zorder=3)
             if s.label not in legend_labels:
                 legend_handles.append(line)
                 legend_labels.append(s.label)
@@ -296,13 +298,14 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
     axes = axes.flatten()
 
     for ax, (col, label, _) in zip(axes, available):
-        data, labels, colors = [], [], []
+        data, labels, colors, hatches = [], [], [], []
         for idx, s in enumerate(series):
             vals = get_values(s.label, col)
             if vals is not None and len(vals):
                 data.append(vals)
                 labels.append(s.label)
                 colors.append(get_color(s.color_key, idx))
+                hatches.append(s.hatch)
 
         if not data:
             ax.set_visible(False)
@@ -312,9 +315,10 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
                         widths=0.6, showmeans=True,
                         meanprops=dict(marker='D', markerfacecolor='white',
                                        markeredgecolor='black', markersize=6))
-        for patch, color in zip(bp['boxes'], colors):
+        for patch, color, hatch in zip(bp['boxes'], colors, hatches):
             patch.set_facecolor(color)
             patch.set_alpha(0.6)
+            patch.set_hatch(hatch)
         for median in bp['medians']:
             median.set_color('black')
             median.set_linewidth(2)
@@ -333,7 +337,8 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
     # Usamos series original para que la leyenda esté en el orden de definición
     for idx, s in enumerate(series):
         color = get_color(s.color_key, idx)
-        patch = mpatches.Patch(color=color, alpha=0.6, label=s.label)
+        patch = mpatches.Patch(facecolor=color, edgecolor='black', alpha=0.6,
+                               hatch=s.hatch, label=s.label)
         legend_handles.append(patch)
         legend_labels.append(s.label)
         
@@ -412,7 +417,7 @@ def _plot_pareto_plane(ax, series_order, combined_paretos, counts, xcol, ycol,
         if xcol not in df.columns or ycol not in df.columns:
             continue
         color = get_color(s.color_key, idx)
-        sc = ax.scatter(df[xcol], df[ycol], c=color, marker=PARETO_MARKER,
+        sc = ax.scatter(df[xcol], df[ycol], c=color, marker=s.marker,
                         s=MARCADOR_DENSO, alpha=0.55,
                         edgecolors='none', linewidths=0,
                         label=f'{s.label} ({counts[s.label]})', zorder=3)
@@ -470,7 +475,7 @@ def _combined_pareto_fronts(series):
 
 
 
-def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
+def _leyenda_y_titulo_origen(fig, atr, leyenda_y, titulo_y):
     """Leyenda de grupos y título de las figuras del frente conjunto.  Las dos
     coordenadas verticales dependen de cuántos paneles lleve la figura.
 
@@ -491,14 +496,12 @@ def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
                    framealpha=0.9, edgecolor='#cccccc', fontsize=11,
                    bbox_to_anchor=(0.5, leyenda_y))
 
-    alg = _alg_from_output_dir(output_dir)
-    fig.suptitle(f'Frente no dominado conjunto por {atr["por"]}'
-                 + (f' - {alg}' if alg else ''),
+    fig.suptitle(f'Frente no dominado conjunto por {atr["por"]}',
                  fontsize=14, fontweight='bold', y=titulo_y)
 
 
 
-def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia):
+def plot_frente_conjunto(series, output_dir, fname, pf_df, grupo_de=_familia):
     """El frente no dominado conjunto en el espacio de objetivos (ver
     PLANOS_FRENTE): un scatter por grupo en su color, con un marcador
     'pastel' donde una misma molécula la aportaron dos o más grupos —igual
@@ -530,9 +533,8 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
         ax.set_xlim(*_pad_lim(at[xcol].values))
         ax.set_ylim(*_pad_lim(at[ycol].values))
 
-    _leyenda_y_titulo_origen(fig, atr, output_dir, 0.01, 1.0)
+    _leyenda_y_titulo_origen(fig, atr, 0.01, 1.0)
     plt.tight_layout(rect=[0, 0.09, 1, 0.97])
-    fname = f"frente_conjunto_pop{pop_size}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -540,7 +542,7 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
 
 
 
-def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
+def plot_pareto_comparison(series, output_dir, fname, groups=None):
     """Superpone los frentes combinados de cada serie, un panel por plano de
     objetivos.  Con groups —(nombre de fila, [labels])— la figura se parte en una
     fila por grupo, con límites comunes para poder compararlas.
@@ -588,23 +590,60 @@ def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
                    framealpha=0.9, edgecolor='#cccccc', fontsize=11,
                    bbox_to_anchor=(0.5, 0.01))
 
-    title = 'Frentes de Pareto Globales'
-    alg = _alg_from_output_dir(output_dir)
-    if alg:
-        title += f' - {alg}'
-
-    fig.suptitle(title,
+    fig.suptitle('Frentes de Pareto Globales',
                  fontsize=14, fontweight='bold', y=1.0)
     # El aire para leyenda y título es una altura fija, no una fracción: al
     # partir en filas la figura crece y el porcentaje reservaría de más.
     margen = 0.09 / len(filas)
     plt.tight_layout(rect=[0, margen, 1, 1 - margen / 3])
-    fname = f"pareto_comparison_pop{pop_size}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
 
 
+
+
+
+# Propiedades de las curvas de densidad: (columna, etiqueta, (mínimo, máximo) del eje;
+# None = el de los datos con un margen).  QED llega a 1 y SA no baja de 1.
+KDE_PROPIEDADES = [
+    ('qed',  'QED (↑)',               (None, 1.0)),
+    ('sa',   'SA (↓)',                (1.0, None)),
+    ('dock', 'Docking, kcal/mol (↓)', (None, None)),
+]
+
+
+
+def plot_kde_propiedades(series, output_dir, fname):
+    """Curvas de densidad (KDE) de QED, SA y docking en el frente de cada serie:
+    cómo se reparten las moléculas del frente, no su calidad."""
+    paretos, _, _ = _combined_pareto_fronts(series)
+    if not paretos:
+        print("  ⚠ Sin datos de Pareto para las curvas de densidad")
+        return
+    fig, axes = plt.subplots(1, len(KDE_PROPIEDADES),
+                             figsize=(6.4 * len(KDE_PROPIEDADES), 5.2))
+    for ax, (col, etiqueta, (lo, hi)) in zip(axes, KDE_PROPIEDADES):
+        todo = np.concatenate([df[col].values for df in paretos.values()])
+        pad = 0.05 * (todo.max() - todo.min())
+        x = np.linspace(todo.min() - pad if lo is None else lo,
+                        todo.max() + pad if hi is None else hi, 600)
+        for idx, s in enumerate(series):
+            if s.label not in paretos:
+                continue
+            ax.plot(x, gaussian_kde(paretos[s.label][col].values)(x),
+                    color=get_color(s.color_key, idx), linestyle=s.linestyle,
+                    linewidth=2, label=s.label)
+        ax.set_xlabel(etiqueta)
+        ax.set_ylabel('Densidad')
+        ax.grid(True, linestyle='--', alpha=0.3)
+    axes[0].legend(frameon=True, fontsize=10)
+    fig.suptitle('Distribución de QED, SA y docking en el frente de cada configuración',
+                 fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  ✓ {fname}")
 
 
 
@@ -640,7 +679,7 @@ GRID_COLOR_MODES = {
 
 
 
-def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
+def plot_pareto_qed_sa_grid(series, output_dir, fname, color_by='nruns', ncols=3):
     """Un panel por serie (separados, no superpuestos) con el frente QED vs SA.
     Cada serie combina las moléculas de sus runs, deduplica por SMILES y
     recalcula el frente.  color_by elige qué va en el color (GRID_COLOR_MODES)."""
@@ -694,7 +733,7 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         norm = mcolors.Normalize(vmin=1, vmax=max(global_max_runs, 2))
 
     n_plots = len(paretos)
-    ncols = min(3, n_plots)
+    ncols = min(ncols, n_plots)
     nrows = math.ceil(n_plots / ncols)
     fig, axes = plt.subplots(nrows, ncols,
                              figsize=(6.5 * ncols, 5.5 * nrows),
@@ -715,6 +754,12 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
                      fontsize=12, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.25, color='grey')
 
+    # Mismos límites en todos los paneles: es lo que deja ver qué región cubre cada
+    # configuración.
+    todos = pd.concat([p for _, p, _ in paretos])
+    for ax in axes_flat[:n_plots]:
+        ax.set_xlim(*_pad_lim(todos['qed'].values))
+        ax.set_ylim(*_pad_lim(todos['sa'].values))
     for ax in axes_flat[n_plots:]:
         ax.axis('off')
 
@@ -732,16 +777,12 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
             cbar.set_ticks(sorted({1, hi} | set(range(paso, hi, paso)) - {0}))
         cbar.set_label(modo['label'], fontsize=11)
 
-    title = 'Frentes de Pareto QED vs SA por algoritmo'
-    alg = _alg_from_output_dir(output_dir)
-    if alg:
-        title = f'Frentes de Pareto QED vs SA por operador - {alg}'
+    title = 'Frentes de Pareto QED vs SA por configuración'
     # Qué codifica el color no va en el título: lo dice la colorbar, y el detalle
     # va en el pie de figura del documento.
 
     fig.suptitle(title,
                  fontsize=14, fontweight='bold')
-    fname = f"pareto_qed_sa_grid_{color_by}_pop{pop_size}.png"
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -771,130 +812,29 @@ def render(smiles, size=LIENZO_MOL):
 
 
 
-# Cuántas moléculas se dibujan por cruce.
-N_MOLECULAS_OP = 2
-
-
-# Tamaño de cada celda de la grilla, en pulgadas.  Fijo, para que la figura no
-# encoja las estructuras al sumar columnas.  Sigue la proporción de LIENZO_MOL.
-CELDA_MOL = (4.2, 3.4)
-
-
-
-def _frente_propio(serie):
-    """Frente no dominado de una serie sobre la unión de sus runs, deduplicado
-    por SMILES."""
-    df = load_pareto_molecules(serie.pop_dir)
-    if df.empty:
-        return pd.DataFrame()
-    return _compute_non_dominated(unicas(df))
-
-
-
-def top_por_dock(frente, n):
-    """Las n moléculas de mejor docking (el más negativo) del frente.
-
-    Con el docking como objetivo ya no hace falta el corte de SA ni el desempate
-    por QED: el QED satura en ~0.948 y el docking no, así que ordena sin empates
-    prácticos.  SA y QED se publican junto a cada estructura."""
-    if frente.empty:
-        return frente
-    return frente.sort_values('dock', ascending=True).head(n)
-
-
-
-def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP):
-    """Las n moléculas de mejor docking del frente de cada cruce.  Una COLUMNA por
-    cruce: la comparación es entre cruces, y leerlos de izquierda a derecha es lo
-    mismo que hace el resto de las figuras (leyendas, boxplots y tablas los
-    ordenan así).
-
-    Es una figura ILUSTRATIVA, no comparativa: lo que compara operadores son las
-    tablas de la comparación de operadores.  El CSV publica la columna 'semillas'
-    por si hace falta citar en cuántas corridas apareció cada elegida."""
-    frentes = {s.label: _frente_propio(s) for s in series}
-    frentes = {lab: f for lab, f in frentes.items()
-               if not f.empty and {'qed', 'sa', 'dock', 'fsp3'}.issubset(f.columns)}
-    if not frentes:
-        print("  ⚠ Sin frentes para la figura de moléculas por operador")
-        return
-
-    orden = [s for s in series if s.label in frentes]
-    ancho, alto = CELDA_MOL
-    fig, axes = plt.subplots(n, len(orden), squeeze=False,
-                             figsize=(ancho * len(orden), alto * n))
-    fig.patch.set_facecolor('white')
-
-    filas = []
-    for i, s in enumerate(orden):
-        frente = frentes[s.label]
-        elegidas = top_por_dock(frente, n)
-        # Solo para el CSV: en cuántas de las semillas apareció cada elegida.
-        crudo = load_pareto_molecules(s.pop_dir)
-        semillas = (crudo.groupby('smiles')['run'].nunique() if not crudo.empty
-                    else pd.Series(dtype=int))
-
-        for j in range(n):
-            # El cruce va en la columna i, las n moléculas bajan por sus filas.
-            ax = axes[j][i]
-            ax.set_xticks([]); ax.set_yticks([])
-            for sp in ax.spines.values():
-                sp.set_edgecolor('#cccccc')
-            if j == 0:
-                ax.set_title(s.label, fontsize=12, fontweight='bold', pad=8)
-            if j >= len(elegidas):
-                ax.set_visible(False)
-                continue
-
-            m = elegidas.iloc[j]
-            img = render(m['smiles'])
-            if img is not None:
-                ax.imshow(img)
-            # Los tres objetivos más Fsp3.  Fsp3 no seleccionó nada —es el
-            # constraint y todo lo que llega al frente lo cumple— pero deja ver
-            # con cuánto margen sobre el umbral quedó cada estructura dibujada.
-            ax.set_xlabel(f"Dock {m['dock']:.2f}  ·  QED {m['qed']:.3f}  ·  "
-                          f"SA {m['sa']:.2f}  ·  Fsp3 {m['fsp3']:.2f}",
-                          fontsize=9, labelpad=3)
-            filas.append({'algoritmo': alg, 'cruce': s.label, 'puesto': j + 1,
-                          'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
-                          'dock': round(m['dock'], 3),
-                          'fsp3': round(m['fsp3'], 3),
-                          'semillas': int(semillas.get(m['smiles'], 0)),
-                          'smiles': m['smiles']})
-
-    fig.suptitle(f'Frente por cruce — {alg}\n'
-                 f'Las {n} moléculas de mejor docking',
-                 fontsize=13, fontweight='bold', y=0.998)
-    # h_pad explícito: el imshow fija el aspecto de la celda, así que el eje
-    # queda más alto que la estructura y su pie se mete en el recuadro de abajo.
-    plt.tight_layout(rect=[0, 0, 1, 0.95], h_pad=2.5)
-    fname = f"moleculas_operadores_{alg}.png"
-    plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight',
-                facecolor='white')
-    plt.close(fig)
-    print(f"  ✓ {fname}")
-
-    if filas:
-        csv = os.path.join(output_dir, f"moleculas_operadores_{alg}.csv")
-        pd.DataFrame(filas).to_csv(csv, index=False)
-        print(f"  ✓ moleculas_operadores_{alg}.csv")
-
-
-
 # ─── Generación de gráficas para un grupo de series ─────────────────────────
 
-def _generate_report(series, pop_size, output_dir, report_label, frente=None):
-    """Genera el conjunto completo de gráficas para un grupo de series.
+def _generate_report(series, out_dir, report_label, frente=None, completo=False):
+    """Genera las gráficas y tablas de un grupo de series, en out_dir/tablas y
+    out_dir/figuras.
+
+    Por defecto es el reporte breve: las tres tablas LaTeX, la convergencia
+    multiobjetivo y química, los frentes de cada serie por separado y la
+    distribución (KDE) de sus propiedades.
+    completo=True agrega las cajas, los frentes superpuestos, el grid QED-SA con
+    sus colores y los CSV intermedios.
 
     frente es el frente de referencia común, (pf_F, pf_df), contra el que se
     miden IGD+ y ε+; sin él se omiten esos indicadores."""
-    os.makedirs(output_dir, exist_ok=True)
+    tablas = os.path.join(out_dir, "tablas")
+    figuras = os.path.join(out_dir, "figuras")
+    os.makedirs(tablas, exist_ok=True)
+    os.makedirs(figuras, exist_ok=True)
 
     print(f"\n{'─'*60}")
     print(f"  {report_label}")
     print(f"  Series: {', '.join(s.label for s in series)}")
-    print(f"  Salida: {output_dir}")
+    print(f"  Salida: {out_dir}")
     print(f"{'─'*60}\n")
 
     # 1. Indicadores basados en frente de referencia (IGD+, ε+).
@@ -907,24 +847,24 @@ def _generate_report(series, pop_size, output_dir, report_label, frente=None):
         print(f"📐 Frente de referencia común: {len(pf_F)} soluciones no-dominadas")
         indicator_data = compute_indicators_per_run(series, pf_F)
 
-        # Guardar frente de referencia
-        pf_path = os.path.join(output_dir, f"reference_front_pop{pop_size}.csv")
-        pf_df.to_csv(pf_path, index=False)
-        print(f"  ✓ reference_front_pop{pop_size}.csv")
+        if completo:
+            # Guardar frente de referencia
+            pf_df.to_csv(os.path.join(tablas, "frente_referencia.csv"), index=False)
+            print("  ✓ frente_referencia.csv")
 
-        # Guardar indicadores por run
-        ind_rows = []
-        for label, df_ind in indicator_data.items():
-            for _, row in df_ind.iterrows():
-                ind_rows.append({'series': label, **row.to_dict()})
-        if ind_rows:
-            ind_path = os.path.join(output_dir, f"indicators_pop{pop_size}.csv")
-            pd.DataFrame(ind_rows).to_csv(ind_path, index=False)
-            print(f"  ✓ indicators_pop{pop_size}.csv")
+            # Guardar indicadores por run
+            ind_rows = []
+            for label, df_ind in indicator_data.items():
+                for _, row in df_ind.iterrows():
+                    ind_rows.append({'series': label, **row.to_dict()})
+            if ind_rows:
+                pd.DataFrame(ind_rows).to_csv(
+                    os.path.join(tablas, "indicadores_por_corrida.csv"), index=False)
+                print("  ✓ indicadores_por_corrida.csv")
 
         # Curvas de convergencia de indicadores por generación (sin re-entrenar)
         print("📈 Curvas de convergencia de indicadores (IGD+, ε+)...")
-        ind_curves = _indicator_curves(series, pop_size, output_dir, pf_F)
+        ind_curves = _indicator_curves(series, tablas, pf_F, guardar_csv=completo)
 
     # 2. Todas las curvas de convergencia, crudas y en un solo diccionario
     #    indexado por el nombre de columna: de acá salen las cuatro figuras y el
@@ -954,45 +894,52 @@ def _generate_report(series, pop_size, output_dir, report_label, frente=None):
         print("  ⚠ sin n_eval en convergence.csv: se omiten las curvas de "
               "convergencia (el eje de evaluaciones sale de ahí)")
     else:
-        for specs, base, titulo in [
-                (PANELES_MO, 'mo', 'Convergencia de Indicadores Multiobjetivo'),
-                (PANELES_QUIM, 'chemical', 'Convergencia de Indicadores Químicos')]:
-            _plot_convergence_grid(
-                series, output_dir, specs, curvas, mapas_eval,
-                f"convergence_{base}_evals_pop{pop_size}.png", titulo)
-        escribir_curvas_csv(series, curvas, mapas_eval, output_dir, pop_size)
+        paneles = [(PANELES_MO, '1_convergencia_multiobjetivo.png',
+                    'Convergencia de Indicadores Multiobjetivo'),
+                   (PANELES_QUIM, '2_convergencia_quimica.png',
+                    'Convergencia de Indicadores Químicos')]
+        for specs, fname, titulo in paneles:
+            _plot_convergence_grid(series, figuras, specs, curvas, mapas_eval,
+                                   fname, titulo)
+        if completo:
+            escribir_curvas_csv(series, curvas, mapas_eval, tablas)
 
     # 5. Boxplots + tablas (requiere ≥2 series).  Comparten un único getter
     #    de valores per-run (metrics + indicadores + medias químicas + unicidad).
     if len(series) >= 2:
         get_values = _build_series_value_getter(series, indicator_data)
 
-        print("📊 Boxplots multiobjetivo (HV, Espaciamiento, IGD+, ε+, Pareto)...")
-        plot_boxplots(series, output_dir, get_values, BOXPLOT_MO_CONFIGS,
-                      f"boxplots_mo_pop{pop_size}.png",
-                      "Distribución de Indicadores Multiobjetivo")
-        print("📊 Boxplots químicos (QED, SA, Docking, Fsp3, Validez, "
-              "Unicidad, Novedad)...")
-        plot_boxplots(series, output_dir, get_values, BOXPLOT_CHEM_CONFIGS,
-                      f"boxplots_chemical_pop{pop_size}.png",
-                      "Distribución de Indicadores Químicos")
+        if completo:
+            print("📊 Boxplots multiobjetivo (HV, Espaciamiento, IGD+, ε+, Pareto)...")
+            plot_boxplots(series, figuras, get_values, BOXPLOT_MO_CONFIGS,
+                          "cajas_multiobjetivo.png",
+                          "Distribución de Indicadores Multiobjetivo")
+            print("📊 Boxplots químicos (QED, SA, Docking, Fsp3, Validez, "
+                  "Unicidad, Novedad)...")
+            plot_boxplots(series, figuras, get_values, BOXPLOT_CHEM_CONFIGS,
+                          "cajas_quimicas.png",
+                          "Distribución de Indicadores Químicos")
 
-        print("📋 Tabla estadística...")
-        generate_statistical_table(series, pop_size, output_dir,
-                                   indicator_data=indicator_data)
+            print("📋 Tabla estadística...")
+            generate_statistical_table(series, tablas,
+                                       indicator_data=indicator_data)
 
         print("📋 Tablas LaTeX de comparación...")
-        generate_latex_comparison_tables(series, pop_size, output_dir, get_values)
+        generate_latex_comparison_tables(series, tablas, get_values)
 
-    # 7. Superposición de frentes de Pareto
-    if len(series) >= 2:
-        print("🔀 Frentes de Pareto superpuestos...")
-        plot_pareto_comparison(series, pop_size, output_dir)
-
-
-
-    # 9. Grid QED vs SA: los N algoritmos separados en una sola imagen, en sus
-    #    dos variantes de color (reproducibilidad entre semillas y la restricción).
-    print("🧩 Grid QED vs SA por algoritmo (una imagen por variante de color)...")
-    for modo in GRID_COLOR_MODES:
-        plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by=modo)
+    # 7. Los frentes de cada serie por separado: un panel por configuración, en
+    #    pares (una fila por algoritmo: PCX a la izquierda, SBX a la derecha), QED
+    #    vs SA con el docking en el color.  Con completo, también los otros colores
+    #    del grid y las seis superpuestas.
+    print("🧩 Frentes por configuración...")
+    plot_pareto_qed_sa_grid(series, figuras, "3_frentes_por_configuracion.png",
+                            color_by='dock', ncols=len(CRUCES))
+    print("📈 Distribución de las propiedades del frente (KDE)...")
+    plot_kde_propiedades(series, figuras, "4_distribucion_propiedades.png")
+    if completo:
+        for modo in GRID_COLOR_MODES:
+            if modo != 'dock':
+                plot_pareto_qed_sa_grid(series, figuras, f"grid_qed_sa_{modo}.png",
+                                        color_by=modo, ncols=len(CRUCES))
+        if len(series) >= 2:
+            plot_pareto_comparison(series, figuras, "frentes_superpuestos.png")

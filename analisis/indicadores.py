@@ -368,7 +368,8 @@ def _atribucion_por_origen(series, pf_df, grupo_de):
 
 
 
-def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
+def _indicator_curves(series, output_dir, pf_F, gen_stride=10,
+                      guardar_csv=True):
     """Curvas de IGD+ y ε+ por generación, SIN re-entrenar.
 
     Mide el frente ACUMULADO hasta cada generación, no el de esa generación
@@ -462,14 +463,17 @@ def _indicator_curves(series, pop_size, output_dir, pf_F, gen_stride=10):
         for col in out:
             out[col][label] = (curve.index.values, curve[col].values)
 
+    if not guardar_csv:
+        return out
+
     # Guardar las curvas en CSV (formato largo)
     long_rows = []
     for label, curve in series_curves.items():
         for g, row in curve.iterrows():
             long_rows.append({'series': label, 'gen': g, **row.to_dict()})
-    csv_path = os.path.join(output_dir, f"convergence_indicators_pop{pop_size}.csv")
+    csv_path = os.path.join(output_dir, "convergencia_indicadores.csv")
     pd.DataFrame(long_rows).to_csv(csv_path, index=False)
-    print(f"  ✓ convergence_indicators_pop{pop_size}.csv")
+    print("  ✓ convergencia_indicadores.csv")
 
     return out
 
@@ -529,7 +533,7 @@ def _partir_etiqueta(nombre):
 
 
 
-def write_contribucion_table(series, pf_df, nombre, out_dir,
+def write_contribucion_table(series, pf_df, out_dir,
                              grupo_de=None, etiqueta='Operador', nota=''):
     """Tabla LaTeX de la contribución al frente no dominado conjunto.
 
@@ -553,8 +557,7 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
     total = filas[0]['total'] if filas else 0
     lines = [
         r'\begin{table}[htbp]', r'\centering',
-        f'\\caption{{Contribución al frente no dominado conjunto en '
-        f'{_latex_escape(nombre)}.  Se unen las soluciones de las series '
+        f'\\caption{{Contribución al frente no dominado conjunto.  Se unen las soluciones de las series '
         f'comparadas sobre las {len(runs)} semillas, se deduplica por SMILES y '
         f'se recalcula la no-dominancia global ({total} soluciones).  «Aporta» '
         f'cuenta toda molécula del frente hallada por esa serie, por lo que las '
@@ -564,12 +567,15 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         f'QED, SA y docking (kcal/mol) son los objetivos, y Fsp3 va sin flecha '
         f'porque es la restricción ($\\geq$ {_num(FSP3_MIN, 2)}) y no algo que se '
         f'optimice.{nota}}}',
-        f'\\label{{tab:contribucion_{nombre.lower()}}}',
+        r'\label{tab:contribucion_frente}',
         r'\begin{tabular}{llrrrrrrr}', r'\toprule',
-        f'{etiqueta} & Operadores & Aporta & Exclusivas & \\% & QED $\\uparrow$ & '
+        f'{etiqueta} & Cruce & Aporta & Exclusivas & \\% & QED $\\uparrow$ & '
         f'SA $\\downarrow$ & Docking $\\downarrow$ & Fsp3 \\\\',
         r'\midrule',
     ]
+    # Los separadores entre algoritmos solo aportan si algún algoritmo tiene más
+    # de una rama.
+    hay_ramas = any(sum(1 for a, _ in partidas if a == x) > 1 for x, _ in partidas)
     for i, (f, (alg, cruce)) in enumerate(zip(filas, partidas)):
         # Las filas de grupo, si las hay, van separadas: agregan sobre las
         # anteriores y no son sumables con ellas.
@@ -579,7 +585,7 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
         n_ramas = sum(1 for a, _ in partidas if a == alg)
         primera = i == 0 or partidas[i - 1][0] != alg
         if primera:
-            if i:
+            if i and hay_ramas:
                 lines.append(r'\midrule')
             celda = (r'\multirow{%d}{*}{%s}' % (n_ramas, _latex_escape(alg))
                      if n_ramas > 1 else _latex_escape(alg))
@@ -592,10 +598,10 @@ def write_contribucion_table(series, pf_df, nombre, out_dir,
             f"{num(f['qed'], 3)} & {num(f['sa'], 2)} & {num(f['dock'], 2)} & "
             f"{num(f['fsp3'], 3)} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
-    _write_tex(lines, os.path.join(out_dir, f'contribucion_{nombre}.tex'))
+    _write_tex(lines, os.path.join(out_dir, '5_contribucion_frente.tex'))
 
     pd.DataFrame(filas).to_csv(
-        os.path.join(out_dir, f'contribucion_{nombre}.csv'), index=False)
+        os.path.join(out_dir, '5_contribucion_frente.csv'), index=False)
 
     resumen_filas = filas[len(series):] or filas
     for f in resumen_filas:
