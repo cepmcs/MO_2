@@ -631,14 +631,27 @@ def plot_kde_propiedades(series, output_dir, fname):
         for idx, s in enumerate(series):
             if s.label not in paretos:
                 continue
-            ax.plot(x, gaussian_kde(paretos[s.label][col].values)(x),
-                    color=get_color(s.color_key, idx), linestyle=s.linestyle,
-                    linewidth=2, label=s.label)
+            valores = paretos[s.label][col].values
+            y = gaussian_kde(valores)(x)
+            color = get_color(s.color_key, idx)
+            ax.plot(x, y, color=color, linestyle=s.linestyle, linewidth=2.2,
+                    label=s.label, zorder=3)
+            # Solo las discontinuas (SBX) llevan sombra: seis rellenos superpuestos
+            # se mezclan en un gris, y así el cruce se distingue también por el
+            # relleno.
+            if s.linestyle != '-':
+                ax.fill_between(x, y, color=color, alpha=0.08, linewidth=0, zorder=2)
+            # La mediana, con el marcador del cruce, sobre el eje.
+            ax.plot(np.median(valores), 0, marker=s.marker, color=color, markersize=9,
+                    markeredgecolor='white', markeredgewidth=0.8, linestyle='none',
+                    clip_on=False, zorder=5)
         ax.set_xlabel(etiqueta)
         ax.set_ylabel('Densidad')
         ax.grid(True, linestyle='--', alpha=0.3)
+        ax.set_ylim(-0.025 * ax.get_ylim()[1], None)
     axes[0].legend(frameon=True, fontsize=10)
-    fig.suptitle('Distribución de QED, SA y docking en el frente de cada configuración',
+    fig.suptitle('Distribución de QED, SA y docking en el frente de cada configuración '
+                 '(los marcadores sobre el eje son la mediana)',
                  fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
@@ -821,8 +834,9 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
     Por defecto es el reporte breve: las tres tablas LaTeX, la convergencia
     multiobjetivo y química, los frentes de cada serie por separado y la
     distribución (KDE) de sus propiedades.
+    Además escribe los números de las curvas de convergencia (curvas_convergencia.csv).
     completo=True agrega las cajas, los frentes superpuestos, el grid QED-SA con
-    sus colores y los CSV intermedios.
+    sus colores y los demás CSV intermedios.
 
     frente es el frente de referencia común, (pf_F, pf_df), contra el que se
     miden IGD+ y ε+; sin él se omiten esos indicadores."""
@@ -901,8 +915,7 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
         for specs, fname, titulo in paneles:
             _plot_convergence_grid(series, figuras, specs, curvas, mapas_eval,
                                    fname, titulo)
-        if completo:
-            escribir_curvas_csv(series, curvas, mapas_eval, tablas)
+        escribir_curvas_csv(series, curvas, mapas_eval, tablas)
 
     # 5. Boxplots + tablas (requiere ≥2 series).  Comparten un único getter
     #    de valores per-run (metrics + indicadores + medias químicas + unicidad).

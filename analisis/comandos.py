@@ -5,9 +5,9 @@ Las seis configuraciones son tres algoritmos (NSGA-II, NSGA-III y AGE-MOEA) por 
 cruces (PCX y SBX).  Se analizan juntas:
 
   comparacion  las seis en una sola comparación: las tablas, la convergencia
-               de los indicadores, el contraste sobre el hipervolumen
-               entre todos los pares, los frentes de cada configuración y la distribución
-               de sus propiedades.
+               de los indicadores, el contraste sobre el hipervolumen (Friedman y
+               grupos homogéneos, por consola), los frentes de cada configuración y la
+               distribución de sus propiedades.
   candidatos   el frente conjunto de las seis, de dónde sale y las 15 de mejor
                docking.  Escribe además los frentes en CSV (carpeta frentes).
 
@@ -24,17 +24,11 @@ import matplotlib.pyplot as plt
 from .comun import (
     FSP3_MIN,
     _build_series_value_getter,
-    _fmt_p,
-    _latex_escape,
-    _num,
     _num_es,
-    _write_tex,
     compare_indicator,
-    fmt_groups,
     homogeneous_groups,
     load_metrics,
     load_pareto_molecules,
-    rank_biserial,
     series_pool,
 )
 from .indicadores import (
@@ -93,56 +87,9 @@ def _texto_mutacion(series):
 
 
 
-def _aviso_mutacion(series):
-    """Frase para los captions que comparan cruces: cada uno corre con su propia
-    mutación, así que no se separa el efecto del cruce del de la mutación."""
-    mut = _texto_mutacion(series)
-    return (f'  Cada cruce corre con su probabilidad de mutación por gen ({mut}), '
-            f'así que la comparación no separa el efecto del cruce del de la '
-            f'mutación.' if mut else '')
-
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 #   Comparación — las seis configuraciones
 # ═══════════════════════════════════════════════════════════════════════════
-
-def write_tabla_pares(res, groups, out_dir, get_values, labels, series):
-    """Las comparaciones por pares, con el $p$ de Holm, el tamaño de efecto y el
-    ganador.  Donde el post-hoc no separa no se declara ganador, aunque las
-    medianas ordenen."""
-    vals = {l: np.asarray(get_values(l, METRICA), dtype=float) for l in labels}
-    n = min(len(v) for v in vals.values())
-    solape = ('  Una configuración en dos grupos no se separa de ninguna de las de '
-              'esos grupos.' if sum(map(len, groups)) > len(labels) else '')
-    lines = [
-        r'\begin{table}[htbp]', r'\centering',
-        f'\\caption{{Comparación entre las {len(labels)} configuraciones sobre '
-        f'{METRICA_LABEL}.  Test de Friedman con las {n} semillas como bloques '
-        f'($p$ = {_fmt_p(res["p_omnibus"])}), seguido de las {len(res["pairs"])} '
-        f'comparaciones por pares con Wilcoxon de rangos con signo y corrección de '
-        f'Holm ($\\alpha = {_num(0.05, 2)}$); $r_{{rb}}$ es la correlación '
-        f'rango-biserial de pares emparejados, con signo positivo cuando gana el '
-        f'primero del par.  Grupos homogéneos, de mejor a peor: '
-        f'{fmt_groups(groups)}.{solape}{_aviso_mutacion(series)}}}',
-        r'\label{tab:pares_hipervolumen}',
-        r'\begin{tabular}{lrrl}', r'\toprule',
-        r'Par & $p$ (Holm) & $r_{rb}$ & Mejor \\', r'\midrule',
-    ]
-    for p in res['pairs']:
-        a, b = p['a'], p['b']
-        r = rank_biserial(vals[a], vals[b])
-        gana_a = res['medians'][a] > res['medians'][b]
-        mejor = _latex_escape(a if gana_a else b) if p['p_holm'] < 0.05 else '---'
-        lines.append(
-            f"{_latex_escape(a)} vs {_latex_escape(b)} & "
-            f"{_fmt_p(p['p_holm'])} & "
-            f"{('$+$' if r >= 0 else '$-$') + _num(abs(r), 3)} & {mejor} \\\\")
-    lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
-    print()
-    _write_tex(lines, os.path.join(out_dir, '4_pares_hipervolumen.tex'))
-
-
 
 def comparacion(args):
     series = series_pool(args.results)
@@ -170,7 +117,6 @@ def comparacion(args):
         print(f"    {lab:16s} mediana = {res['medians'][lab]:.5f}")
     print("  grupos: " + ' > '.join('{' + ', '.join(g) + '}' for g in groups))
 
-    write_tabla_pares(res, groups, os.path.join(out, 'tablas'), get, labels, series)
     if args.completo:
         pd.DataFrame([{'a': p['a'], 'b': p['b'], 'p_raw': p['p_raw'],
                        'p_holm': p['p_holm'], 'significativo': p['p_holm'] < 0.05}
