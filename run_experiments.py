@@ -1,5 +1,6 @@
 """
-Orquestador del experimento exp4: QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ 0.3
+Orquestador de los experimentos: por defecto exp4, QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ 0.3.
+Con --exp-name, --vae, --pchembl y --logp corre las variantes (ver experimento.py).
 """
 
 import os
@@ -10,7 +11,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from experimento import ALGORITMOS
-from utils_mo import (ga_run_dir, consolidate_all, FSP3_MIN,
+from utils_mo import (ga_run_dir, consolidate_all, FSP3_MIN, VAE_PATHS,
                       POP_SIZE, N_GEN, CX_PROB, MUTATION, MUT_PROB)
 
 ROOT   = os.path.dirname(os.path.abspath(__file__))
@@ -25,9 +26,9 @@ MUT_PROBS = [MUT_PROB, 0.012]   # probabilidad de mutación por gen
 
 # ─── Definición de tareas ─────────────────────────────────────────────────────
 
-def build_tasks(n_runs):
-    """Lista de tareas del grid."""
-    return [dict(alg=alg, cx=cx, mut=mut, run=run)
+def build_tasks(n_runs, opciones):
+    """Lista de tareas del grid.  opciones (exp_name, vae, pchembl, logp) va en cada tarea."""
+    return [dict(alg=alg, cx=cx, mut=mut, run=run, **opciones)
             for alg in ALGORITMOS for cx in CRUCES for mut in MUT_PROBS
             for run in range(n_runs)]
 
@@ -35,7 +36,7 @@ def build_tasks(n_runs):
 def run_dir_of(t):
     """Path de la run, el mismo que arma experimento.py."""
     return ga_run_dir(t['alg'], t['cx'], MUTATION, CX_PROB, t['mut'],
-                      POP_SIZE, N_GEN, t['run'])
+                      POP_SIZE, N_GEN, t['run'], t['exp_name'])
 
 
 def is_done(t):
@@ -63,7 +64,9 @@ def run_one(t, device, threads):
 
     cmd = [PYTHON, os.path.join(ROOT, EXPERIMENTO), "--alg", t['alg'],
            "--crossover", t['cx'], "--mut_prob", str(t['mut']),
-           "--run_id", str(t['run']), "--device", device]
+           "--run_id", str(t['run']), "--device", device,
+           "--exp_name", t['exp_name'], "--vae", t['vae']]
+    cmd += [f"--{op}" for op in ("pchembl", "logp") if t[op]]
 
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ROOT, env=env,
@@ -113,7 +116,7 @@ def prewarm_caches():
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Orquestador del experimento exp4.",
+        description="Orquestador de los experimentos (por defecto, exp4).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--n-runs",  type=int, default=20, help="Semillas por configuración.")
     ap.add_argument("--device",  choices=["auto", "cpu", "cuda"], default="auto",
@@ -121,27 +124,36 @@ def main():
     ap.add_argument("-p", "--parallel", type=int, default=None,
                     help="Runs concurrentes (default: 4 en GPU, ~núcleos-1 en CPU).")
     ap.add_argument("--summary-only", action="store_true",
-                    help="No corre experimentos; solo consolida results/exp4/all_metrics.csv.")
+                    help="No corre experimentos; solo consolida results/<exp-name>/all_metrics.csv.")
+    ap.add_argument("--exp-name", default="exp4", help="Carpeta de resultados: results/<exp-name>.")
+    ap.add_argument("--vae", choices=list(VAE_PATHS), default="original",
+                    help="VAE cuyo espacio latente se optimiza.")
+    ap.add_argument("--pchembl", action="store_true", help="Suma pChEMBL como cuarto objetivo.")
+    ap.add_argument("--logp", action="store_true", help="Suma el constraint 1 <= logP <= 4.")
     args = ap.parse_args()
 
     # Line-buffering: mantiene el orden con la salida de los subprocesos.
     sys.stdout.reconfigure(line_buffering=True)
 
     if args.summary_only:
-        consolidate_all()
+        consolidate_all(args.exp_name)
         return
 
     device   = resolve_device(args.device)
     parallel = args.parallel or default_parallel(device)
     threads  = max(1, (os.cpu_count() or 1) // parallel)
 
-    tasks   = build_tasks(args.n_runs)
+    opciones = dict(exp_name=args.exp_name, vae=args.vae, pchembl=args.pchembl, logp=args.logp)
+    tasks   = build_tasks(args.n_runs, opciones)
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
     n_configs = len(ALGORITMOS) * len(CRUCES) * len(MUT_PROBS)
 
     print("=" * 54)
-    print(f"  exp4 — QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ {FSP3_MIN}")
+    objetivos = "QED(↑) SA(↓) Docking(↓)" + (" pChEMBL(↑)" if args.pchembl else "")
+    restricciones = f"Fsp3 ≥ {FSP3_MIN}" + (" y 1 ≤ logP ≤ 4" if args.logp else "")
+    print(f"  {args.exp_name} — {objetivos} | {restricciones}")
+    print(f"  VAE            : {args.vae}")
     print(f"  Máquina        : {os.uname().nodename}  ({os.cpu_count()} núcleos)")
     print(f"  Dispositivo    : {device}")
     print(f"  Concurrencia   : {parallel} runs  ({threads} hilos/run)")
@@ -152,7 +164,7 @@ def main():
 
     if not pending:
         print("Todas las runs ya estaban completas.")
-        consolidate_all()
+        consolidate_all(args.exp_name)
         return
 
     prewarm_caches()
@@ -187,7 +199,7 @@ def main():
         print("  Todas las runs completas.")
     print("=" * 54)
 
-    consolidate_all()
+    consolidate_all(args.exp_name)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,9 @@ Utilidades para optimización multi-objetivo de moléculas en espacio latente VA
 
 Objetivos: QED (↑), SA (↓) y docking (↓) → pymoo minimiza [-QED, SA, dock].
 Fsp3 va como constraint (Fsp3 ≥ FSP3_MIN).
+
+Dos opciones, apagadas por defecto (así el experimento es el de exp4): pChEMBL como cuarto
+objetivo (↑, se minimiza -pChEMBL) y logP como constraint (LOGP_MIN ≤ logP ≤ LOGP_MAX).
 """
 
 import re, os, sys, glob, functools
@@ -25,6 +28,7 @@ sys.path.append(os.path.join(ROOT_DIR, 'SA_Score'))
 import sascorer
 from vae_model_lstm import MolecularVAE_LSTM
 from docking import DockingCache, DOCK_BEST, DOCK_WORST
+from pchembl import PChEMBLPredictor, PCHEMBL_MIN, PCHEMBL_MAX
 RDLogger.DisableLog('rdApp.*')
 
 # ─── Configuración ───────────────────────────────────────────────────────────
@@ -32,6 +36,16 @@ MODEL_PATH  = os.path.join(ROOT_DIR, "SMILES_LSTM_2_256_300_lr1e4_b64.pth")
 MOSES_CSV   = os.path.join(ROOT_DIR, "data", "moses.csv")
 MOSES_TRAIN_CACHE = os.path.join(ROOT_DIR, "data", "moses_train_smiles.pkl.gz")
 RESULTS_DIR = os.path.join(ROOT_DIR, "results", "exp4")
+# Las dos VAE entre las que elige experimento.py (--vae): la original y la ajustada con ligandos de MRP1.
+VAE_PATHS = {
+    'original': MODEL_PATH,
+    'mrp1': os.path.join(ROOT_DIR, "SMILES_LSTM_2_256_300_lr1e4_b64_mrp1.pth"),
+}
+
+
+def results_dir(exp_name):
+    """Carpeta de resultados de un experimento: results/<exp_name>."""
+    return os.path.join(ROOT_DIR, "results", exp_name)
 DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN     = 100
 
@@ -44,6 +58,9 @@ MUT_PROB = 0.1      # por gen
 
 # Constraint: factible si Fsp3 ≥ FSP3_MIN.
 FSP3_MIN = 0.3
+# Constraint opcional de logP (el alogp de RDKit): factible si LOGP_MIN ≤ logP ≤ LOGP_MAX.
+LOGP_MIN = 1.0
+LOGP_MAX = 4.0
 
 # Bounds de [-QED, SA, dock] para normalizar el HV a [0,1]^3.
 F_MIN     = np.array([-1.0, 1.0, DOCK_BEST])
@@ -51,6 +68,13 @@ F_RANGE   = np.array([ 1.0, 9.0, DOCK_WORST - DOCK_BEST])
 HV_REF    = np.array([1.1, 1.1, 1.1])   # 10% más allá del peor; HV ∈ [0, 1.331]
 INVALID_F = [1.0, 12.0, DOCK_WORST]     # penalización de las inválidas
 INVALID_G = 1.0                    # una inválida nunca es factible
+
+# Con pChEMBL como cuarto objetivo (se minimiza -pChEMBL): las mismas cotas con una dimensión más.
+F_MIN_4     = np.append(F_MIN, -PCHEMBL_MAX)
+F_RANGE_4   = np.append(F_RANGE, PCHEMBL_MAX - PCHEMBL_MIN)
+HV_REF_4    = np.append(HV_REF, 1.1)    # HV ∈ [0, 1.4641]
+INVALID_F_4 = INVALID_F + [-PCHEMBL_MIN]
+ESCALAS = {3: (F_MIN, F_RANGE, HV_REF), 4: (F_MIN_4, F_RANGE_4, HV_REF_4)}   # por nº de objetivos
 
 SMILES_REGEX = re.compile(
     r"(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|\=|#|-|\+|\\\\|\/|:|~|@|\?|>|<|\*|\$|%[0-9]{2}|[0-9])"
@@ -81,18 +105,18 @@ def _slug(x):
 
 
 def ga_run_dir(alg_name, crossover, mutation, cx_prob, mut_prob,
-               pop_size, n_gen, run_id):
-    """Directorio de una run GA: results/exp4/<ALG>/<cruce_mut>/<config>/run_k."""
+               pop_size, n_gen, run_id, exp_name='exp4'):
+    """Directorio de una run GA: results/<exp_name>/<ALG>/<cruce_mut>/<config>/run_k."""
     combo = f"{crossover}_{mutation}"
     cfg   = f"cx{_slug(cx_prob)}_mut{_slug(mut_prob)}_pop{pop_size}_gen{n_gen}"
-    return os.path.join(RESULTS_DIR, alg_name, combo, cfg, f"run_{run_id + 1:02d}")
+    return os.path.join(results_dir(exp_name), alg_name, combo, cfg, f"run_{run_id + 1:02d}")
 
 
-def get_ref_dirs(n_points):
-    """n_points direcciones sobre el símplex (método energy, seed fija), para NSGA-III.
-    Determinista y ~2 s: no se cachea."""
+def get_ref_dirs(n_points, n_obj=3):
+    """n_points direcciones sobre el símplex de n_obj objetivos (método energy, seed fija),
+    para NSGA-III.  Determinista y ~2 s: no se cachea."""
     from pymoo.util.ref_dirs import get_reference_directions
-    return get_reference_directions("energy", 3, n_points, seed=1)
+    return get_reference_directions("energy", n_obj, n_points, seed=1)
 
 
 
@@ -104,9 +128,9 @@ def set_device(name):
     DEVICE = torch.device(name)
 
 
-def load_model():
+def load_model(path=MODEL_PATH):
     """Carga modelo VAE desde checkpoint y retorna (model, stoi, itos, latent_dim)."""
-    ckpt = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
+    ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
     h    = ckpt['hyperparams']
     model = MolecularVAE_LSTM(
         vocab_size=h['vocab_size'], embed_size=h['embed'],
@@ -257,39 +281,58 @@ def calc_properties(smi):
 # ─── Problema pymoo ──────────────────────────────────────────────────────────
 
 class MolecularLatentProblem(Problem):
-    """Optimización de tres objetivos con constraint en el espacio latente del VAE.
+    """Optimización multiobjetivo con constraints en el espacio latente del VAE.
 
-    F = [-QED, SA, dock]   → minimizar.
-    G = [FSP3_MIN - Fsp3]  → factible si ≤ 0.  Solo las factibles se dockean."""
+    F = [-QED, SA, dock]          → minimizar.  Con pchembl=True se suma -pChEMBL.
+    G = [FSP3_MIN - Fsp3]         → factible si ≤ 0.  Con logp=True se suman
+        [LOGP_MIN - logP, logP - LOGP_MAX].  Solo las factibles se dockean."""
 
-    def __init__(self, model, stoi, itos, latent_dim):
+    def __init__(self, model, stoi, itos, latent_dim, pchembl=False, logp=False):
         self.model, self.stoi, self.itos = model, stoi, itos
         self.eval_log = []
         self.dock = DockingCache()
-        super().__init__(n_var=latent_dim, n_obj=3, n_ieq_constr=1, xl=-5.0, xu=5.0)
+        self.pchembl = PChEMBLPredictor() if pchembl else None
+        self.logp = logp
+        super().__init__(n_var=latent_dim, n_obj=3 + bool(pchembl),
+                         n_ieq_constr=1 + 2 * bool(logp), xl=-5.0, xu=5.0)
+
+    def _factible(self, props):
+        """Cumple Fsp3 y, si el constraint de logP está activo, también el rango de logP."""
+        return props['fsp3'] >= FSP3_MIN and (
+            not self.logp or LOGP_MIN <= props['alogp'] <= LOGP_MAX)
 
     def _evaluate(self, x, out, *args, **kwargs):
         smiles = decode_z_batch(self.model, x, self.stoi, self.itos)
-        feasibles = [s for s in smiles if (p := calc_properties(s)) and p['fsp3'] >= FSP3_MIN]
+        feasibles = [s for s in smiles if (p := calc_properties(s)) and self._factible(p)]
         dock = dict(zip(feasibles, self.dock(feasibles)))
+        validos = [s for s in smiles if calc_properties(s)]
+        pchembl = dict(zip(validos, self.pchembl(validos))) if self.pchembl else {}
         F = np.empty((len(smiles), self.n_obj), dtype=float)
-        G = np.empty((len(smiles), 1), dtype=float)
+        G = np.empty((len(smiles), self.n_ieq_constr), dtype=float)
         for i, smi in enumerate(smiles):
             props = calc_properties(smi)
             if props is None:
-                F[i] = INVALID_F
+                F[i] = INVALID_F_4 if self.pchembl else INVALID_F
                 G[i] = INVALID_G
                 self.eval_log.append({
                     'smiles': None, 'qed': None, 'sa': None,
                     'fsp3': None, 'dock': None, 'valid': False, 'feasible': False,
+                    **({'pchembl': None} if self.pchembl else {}),
+                    **({'logp': None} if self.logp else {}),
                 })
             else:
-                F[i] = (-props['qed'], props['sa'], dock.get(smi, DOCK_WORST))
-                G[i] = FSP3_MIN - props['fsp3']
+                F[i, :3] = (-props['qed'], props['sa'], dock.get(smi, DOCK_WORST))
+                G[i, 0] = FSP3_MIN - props['fsp3']
+                if self.pchembl:
+                    F[i, 3] = -pchembl[smi]
+                if self.logp:
+                    G[i, 1:] = (LOGP_MIN - props['alogp'], props['alogp'] - LOGP_MAX)
                 self.eval_log.append({
                     'smiles': props['smiles'], 'qed': props['qed'],
                     'sa': props['sa'], 'fsp3': props['fsp3'], 'dock': dock.get(smi),
-                    'valid': True, 'feasible': bool(props['fsp3'] >= FSP3_MIN),
+                    'valid': True, 'feasible': bool(self._factible(props)),
+                    **({'pchembl': pchembl[smi]} if self.pchembl else {}),
+                    **({'logp': props['alogp']} if self.logp else {}),
                 })
         out["F"] = F
         out["G"] = G
@@ -342,9 +385,10 @@ class GenerationTracker(Callback):
         if len(pop_feasible) == 0:
             hv = 0.0
         else:
-            F = (pop_feasible.get("F") - F_MIN) / F_RANGE
+            f_min, f_range, hv_ref = ESCALAS[self.problem.n_obj]
+            F = (pop_feasible.get("F") - f_min) / f_range
             try:
-                hv = float(HV(ref_point=HV_REF)(F))
+                hv = float(HV(ref_point=hv_ref)(F))
             except Exception:
                 hv = 0.0
 
@@ -394,22 +438,30 @@ def _non_dominated_front(F):
     return np.array(kept_idx, dtype=int)
 
 
+def _objetivos(results):
+    """Matriz [-QED, SA, dock] de los resultados, con -pChEMBL al final si lo traen."""
+    return np.array([[-r['qed'], r['sa'], r['dock']] + ([-r['pchembl']] if 'pchembl' in r else [])
+                     for r in results], dtype=float)
+
+
 def non_dominated(results):
     """Filtra las soluciones no-dominadas."""
     if not results:
         return []
-    F = np.array([[-r['qed'], r['sa'], r['dock']] for r in results], dtype=float)
+    F = _objetivos(results)
     return [results[i] for i in _non_dominated_front(F)]
 
 
 def compute_hv(pareto):
-    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^3."""
+    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^n
+    (n = 3, o 4 si el frente trae pChEMBL)."""
     if not pareto:
         return 0.0
-    F = np.array([[-r['qed'], r['sa'], r['dock']] for r in pareto])
-    F = (F - F_MIN) / F_RANGE
+    F = _objetivos(pareto)
+    f_min, f_range, hv_ref = ESCALAS[F.shape[1]]
+    F = (F - f_min) / f_range
     try:
-        return float(HV(ref_point=HV_REF)(F))
+        return float(HV(ref_point=hv_ref)(F))
     except Exception:
         return 0.0
 
@@ -418,7 +470,7 @@ def compute_spacing(pareto):
     """Spacing de Schott normalizado (CV de distancias al vecino más cercano)."""
     if len(pareto) < 2:
         return 0.0
-    F = np.array([[-r['qed'], r['sa'], r['dock']] for r in pareto])
+    F = _objetivos(pareto)
     # Normalizar los ejes: tienen escalas distintas.
     ranges = F.max(axis=0) - F.min(axis=0)
     ranges[ranges == 0] = 1.0
@@ -451,6 +503,7 @@ def build_pareto(eval_log):
             seen[smi] = {
                 'smiles': smi, 'qed': e['qed'],
                 'sa': e['sa'], 'fsp3': e['fsp3'], 'dock': e['dock'],
+                **{k: e[k] for k in ('pchembl', 'logp') if k in e},
             }
     validity = round(n_valid / len(eval_log), 4) if eval_log else 0.0
     feasibility = round(n_feasible / n_valid, 4) if n_valid else 0.0
@@ -466,10 +519,11 @@ def save_metrics(path, row):
     pd.DataFrame([row]).to_csv(path, index=False)
 
 
-def save_molecules(pareto, run_dir):
+def save_molecules(pareto, run_dir, extras=()):
     """Frente de Pareto → molecules.csv, escritura atómica.  Se escribe aunque esté
-    vacío: su existencia es la señal de run completa."""
-    cols = ['smiles', 'qed', 'sa', 'fsp3', 'dock']
+    vacío: su existencia es la señal de run completa.  extras: columnas de más
+    ('pchembl', 'logp') cuando el experimento las usa."""
+    cols = ['smiles', 'qed', 'sa', 'fsp3', 'dock', *extras]
     out = os.path.join(run_dir, "molecules.csv")
     tmp = out + ".tmp"
     if not pareto:
@@ -489,16 +543,17 @@ def save_tracking(tracker, run_dir):
         index=False, compression='gzip', float_format='%.4f')
 
 
-def consolidate_all():
+def consolidate_all(exp_name='exp4'):
     """Junta los run_*/metrics.csv en <results>/all_metrics.csv, una fila por run
     con sus hiperparámetros como columnas."""
-    files = sorted(glob.glob(os.path.join(RESULTS_DIR, "**", "run_*", "metrics.csv"),
+    base = results_dir(exp_name)
+    files = sorted(glob.glob(os.path.join(base, "**", "run_*", "metrics.csv"),
                              recursive=True))
     if not files:
-        print(f"ERROR: no hay run_*/metrics.csv bajo {RESULTS_DIR}")
+        print(f"ERROR: no hay run_*/metrics.csv bajo {base}")
         return None
     df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
-    out = os.path.join(RESULTS_DIR, "all_metrics.csv")
+    out = os.path.join(base, "all_metrics.csv")
     df.to_csv(out, index=False)
     print(f"Consolidado: {len(df)} runs de {len(files)} archivos → {out}")
     return df
@@ -532,11 +587,19 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'mean_fsp3': round(float(np.mean([r['fsp3'] for r in pareto])), 4) if pareto else float('nan'),
         'time_sec': round(elapsed, 1),
     }
+    # columnas de más cuando el experimento usa pChEMBL (objetivo) o logP (constraint)
+    extras = []
+    if problem.pchembl:
+        extras.append('pchembl')
+        metrics['best_pchembl'] = round(max(r['pchembl'] for r in pareto), 4) if pareto else float('nan')
+    if problem.logp:
+        extras.append('logp')
+        metrics['mean_logp'] = round(float(np.mean([r['logp'] for r in pareto])), 4) if pareto else float('nan')
 
     # molecules.csv al final: es la señal de run completa.
     save_metrics(os.path.join(run_dir, "metrics.csv"), metrics)
     save_tracking(tracker, run_dir)
-    save_molecules(pareto, run_dir)
+    save_molecules(pareto, run_dir, extras)
 
     return metrics, pareto, hv, spacing, validity
 

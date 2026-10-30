@@ -24,7 +24,7 @@ from utils_mo import (
     load_model, load_seed_mus, load_train_smiles, set_device,
     MolecularLatentProblem, LatentSampling, GenerationTracker,
     postprocess_run, consolidate_all, get_operators, get_ref_dirs,
-    ga_run_dir, FSP3_MIN, POP_SIZE, N_GEN, CX_PROB, MUTATION, MUT_PROB,
+    ga_run_dir, VAE_PATHS, FSP3_MIN, POP_SIZE, N_GEN, CX_PROB, MUTATION, MUT_PROB,
 )
 
 
@@ -49,12 +49,13 @@ def correr(alg, args):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.run_id)
 
-    model, stoi, itos, latent_dim = load_model()
+    model, stoi, itos, latent_dim = load_model(VAE_PATHS[args.vae])
     mus = load_seed_mus(model, stoi, args.pop_size, args.run_id)
     train_smiles = load_train_smiles()
 
     run_dir = ga_run_dir(alg, args.crossover, args.mutation, args.cx_prob,
-                         args.mut_prob, args.pop_size, args.n_gen, args.run_id)
+                         args.mut_prob, args.pop_size, args.n_gen, args.run_id,
+                         args.exp_name)
     os.makedirs(run_dir, exist_ok=True)
     label = (f"{alg}[{args.crossover}{args.cx_prob:g}"
              f"+{args.mutation}{args.mut_prob:g}]"
@@ -63,12 +64,16 @@ def correr(alg, args):
     hp = {'crossover': args.crossover, 'mutation': args.mutation,
           'cx_prob': args.cx_prob, 'mut_prob': round(args.mut_prob, 6),
           'fsp3_min': FSP3_MIN}
+    if args.exp_name != 'exp4':     # con los defaults el experimento es el de exp4 y sus columnas no cambian
+        hp.update(exp_name=args.exp_name, vae=args.vae, pchembl=args.pchembl, logp=args.logp)
 
     cruce, mutacion = get_operators(args.crossover, args.mutation,
                                     args.cx_prob, args.mut_prob)
-    extra = {'ref_dirs': get_ref_dirs(args.pop_size)} if alg == 'NSGA3' else {}
+    n_obj = 3 + args.pchembl
+    extra = {'ref_dirs': get_ref_dirs(args.pop_size, n_obj)} if alg == 'NSGA3' else {}
 
-    problem = MolecularLatentProblem(model, stoi, itos, latent_dim)
+    problem = MolecularLatentProblem(model, stoi, itos, latent_dim,
+                                     pchembl=args.pchembl, logp=args.logp)
     tracker = GenerationTracker(problem, train_smiles)
     algoritmo = ALGORITMOS[alg](pop_size=args.pop_size, sampling=LatentSampling(mus),
                                 crossover=cruce, mutation=mutacion,
@@ -109,6 +114,15 @@ def _parser():
     ap.add_argument('--generate_summary', action='store_true',
                     help="No corre nada: consolida results/exp4/all_metrics.csv y sale.")
 
+    ap.add_argument('--exp_name', default='exp4',
+                    help="Carpeta de resultados: results/<exp_name>.")
+    ap.add_argument('--vae', choices=list(VAE_PATHS), default='original',
+                    help="VAE cuyo espacio latente se optimiza: la original o la ajustada con ligandos de MRP1.")
+    ap.add_argument('--pchembl', action='store_true',
+                    help="Suma pChEMBL (modelo de MRP1) como cuarto objetivo.")
+    ap.add_argument('--logp', action='store_true',
+                    help="Suma el constraint 1 <= logP <= 4.")
+
     ap.add_argument('--crossover', choices=['sbx', 'pcx'], default='sbx')
     ap.add_argument('--mutation', choices=['pm'], default=MUTATION)
     ap.add_argument('--cx_prob', type=float, default=CX_PROB,
@@ -123,7 +137,7 @@ def main():
     args = ap.parse_args()
 
     if args.generate_summary:
-        consolidate_all()
+        consolidate_all(args.exp_name)
         return
     if args.alg is None:
         ap.error("se requiere --alg (o --generate_summary)")

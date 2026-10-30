@@ -7,6 +7,8 @@ pymoo
 rdkit
 pandas
 numpy
+scikit-learn   # modelo de pChEMBL (pchembl.py); se guardó con la 1.9.1
+joblib
 
 # Análisis y gráficas (analisis.py, plot_comparison.py)
 scipy          # tests de Friedman y Wilcoxon; también cdist en algoritmos_mo
