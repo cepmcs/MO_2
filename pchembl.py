@@ -9,7 +9,6 @@ redondeadas, con las que utils_mo normaliza el hipervolumen.
 
 import os
 
-import joblib
 import numpy as np
 import pandas as pd
 from rdkit import Chem, DataStructs
@@ -27,6 +26,7 @@ class PChEMBLPredictor:
     Cada SMILES se predice una sola vez: la población converge y los repite."""
 
     def __init__(self):
+        import joblib   # acá y no arriba: solo lo necesitan los experimentos que usan pChEMBL
         self.model = joblib.load(MODEL_PATH)['model']
         self.cache = {}
 
