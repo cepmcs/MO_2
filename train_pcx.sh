@@ -1,21 +1,21 @@
 #!/bin/bash
-#SBATCH --job-name=MO_exp5
-#SBATCH --output=logs/mo_exp5_%A_%a.out
-#SBATCH --error=logs/mo_exp5_%A_%a.err
+#SBATCH --job-name=MO_exp5_pcx
+#SBATCH --output=logs/mo_exp5_pcx_%j.out
+#SBATCH --error=logs/mo_exp5_pcx_%j.err
 #SBATCH --partition=gpu
-#SBATCH --array=0-1              # tarea 0 = sbx, tarea 1 = pcx: dos jobs, cada uno en el nodo que SLURM tenga libre
+#SBATCH --nodelist=gpu2          # sbx en gpu1, pcx en gpu2 (train_sbx.sh): corren a la vez
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16       # el nodo entero (16 cores)
 #SBATCH --exclusive              # reserva el nodo completo: nadie más corre en paralelo
-#SBATCH --time=12:00:00          # límite de la partición GPU (12 h); relanzar para continuar
+#SBATCH --time=12:00:00          # límite de la partición GPU (12 h)
 
-# Los cinco experimentos de exp5, uno tras otro, con un solo cruce por job (sbx con mutación 0.1,
-# pcx con 0.012, como en exp4).  Sin --nodelist: SLURM elige el nodo libre.
-#   sbatch train.sh                          # las dos tareas del array (sbx y pcx)
-#   sbatch --array=0 train.sh                # solo sbx
-#   N_RUNS=1 SOLO=exp5_vaeft_pchembl_logp sbatch train.sh   # prueba rápida de un experimento
-#   PREFLIGHT_ONLY=1 bash train.sh           # en el nodo de login: instala y revisa todo, sin correr nada
+# Los cuatro primeros experimentos de exp5 con el cruce pcx (mutación por gen 0.012), uno tras otro.
+# El quinto (exp5_vaeft_pchembl_logp) lo hace train_pcx_gpu1.sh en gpu1, para repartir el trabajo sin pisarse.
+#   sbatch train_pcx.sh      # se puede lanzar varias veces seguidas: todas hacen cola en gpu2 y, por el
+#                              # --exclusive, corren de a una, sin pisarse; cada una sigue con lo que falte
+#   N_RUNS=1 SOLO=exp5_vaeft_pchembl_logp sbatch train_pcx.sh   # prueba rápida de un experimento
+#   PREFLIGHT_ONLY=1 bash train_pcx.sh   # en el nodo de login: instala y revisa todo, sin correr nada
 # Todo se reanuda: las runs con molecules.csv se saltan, así que relanzar continúa donde quedó.
 # (logs/ tiene que existir antes del sbatch: SLURM no lo crea.)
 
@@ -26,27 +26,17 @@ source /etc/profile
 export PYTHONDONTWRITEBYTECODE=1     # /home NFS casi lleno: no escribir .pyc
 # No fijar CUDA_VISIBLE_DEVICES acá: dejaría a torch sin GPU.
 
-# python del env directo (NO `conda activate`). Override: PYTHON=/otra/ruta sbatch train.sh
+# python del env directo (NO `conda activate`). Override: PYTHON=/otra/ruta sbatch train_pcx.sh
 PYTHON=${PYTHON:-/home/cperez/miniconda3/envs/pymoo_env/bin/python}
 
 # ─── Parámetros (todos overrideables por variable de entorno al hacer sbatch) ──
 DEVICE=${DEVICE:-cuda}                              # cuda | auto | cpu
 PARALLEL=${PARALLEL:-4}                             # cuántas runs corren AL MISMO TIEMPO
 N_RUNS=${N_RUNS:-5}                                 # semillas por configuración (exp4 usó 20)
-PREFLIGHT_ONLY=${PREFLIGHT_ONLY:-0}                 # 1: solo instalar y revisar
 SOLO=${SOLO:-}                                      # texto que debe contener el nombre del experimento
-
-# Cruce de este job: la tarea del array decide; fuera del array, CRUCE=sbx|pcx.
-CRUCE=${CRUCE:-}
-if [ -z "$CRUCE" ]; then
-    case "${SLURM_ARRAY_TASK_ID:-}" in 0) CRUCE=sbx ;; 1) CRUCE=pcx ;; esac
-fi
-[ "$PREFLIGHT_ONLY" = 1 ] && CRUCE=${CRUCE:-sbx}
-case "$CRUCE" in
-    sbx) MUT=0.1 ;;                                 # mutación por gen de cada cruce
-    pcx) MUT=0.012 ;;
-    *) echo "ERROR: sin cruce. Usa sbatch (array 0-1) o CRUCE=sbx|pcx (con SLURM_ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID)." >&2; exit 1 ;;
-esac
+PREFLIGHT_ONLY=${PREFLIGHT_ONLY:-0}                 # 1: solo instalar y revisar
+CRUCE=pcx                                       # este script solo corre este cruce
+MUT=0.012                                           # y esta mutación por gen (sbx usa 0.1)
 
 # ─── Los experimentos: carpeta de resultados | argumentos de run_experiments.py ─
 EXPERIMENTOS=(
@@ -54,7 +44,6 @@ EXPERIMENTOS=(
     "exp5_vae_pchembl_logp|--vae original --pchembl --logp"
     "exp5_vaeft|--vae mrp1"
     "exp5_vaeft_pchembl|--vae mrp1 --pchembl"
-    "exp5_vaeft_pchembl_logp|--vae mrp1 --pchembl --logp"
 )
 SELECCION=()
 for exp in "${EXPERIMENTOS[@]}"; do
