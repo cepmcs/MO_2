@@ -34,6 +34,7 @@ from .comun import (
     get_color,
     load_convergence_data,
     load_pareto_molecules,
+    tiene_pchembl,
     unicas,
 )
 from .indicadores import (
@@ -120,6 +121,8 @@ PANELES_QUIM = [
     ('sa',          'Promedio de SA (↓)',    'Convergencia de SA (↓)',        20),
     ('dock',        'Promedio de docking (kcal/mol, ↓)',
                     'Convergencia de Docking (↓)',                            20),
+    # Solo hay curva si el experimento optimizó pChEMBL (ver tiene_pchembl).
+    ('pchembl',     'Promedio de pChEMBL (↑)', 'Convergencia de pChEMBL (↑)', 20),
 ]
 
 
@@ -164,7 +167,7 @@ def escribir_curvas_csv(series, curvas, mapas, output_dir):
     Valores CRUDOS (promedio sobre las runs, sin la media móvil de las figuras),
     para citar números en el documento.  IGD+ y ε+ quedan vacíos en las
     generaciones fuera del submuestreo con que se calculan (cada 10)."""
-    cols = [c for c, *_ in PANELES_MO + PANELES_QUIM]
+    cols = [c for c, *_ in PANELES_MO + PANELES_QUIM if curvas.get(c)]
     filas = []
     for s in series:
         m = mapas.get(s.label)
@@ -232,8 +235,9 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
-        # Las tasas parten de 0; el docking es negativo y se deja autoescalar.
-        if all(np.nanmin(v) >= 0 for _, v in curves.values()):
+        # Las tasas parten de 0; el docking es negativo y se deja autoescalar, y el
+        # pChEMBL (4 a 8) también: desde 0 la curva queda aplastada arriba.
+        if 'pChEMBL' not in ylabel and all(np.nanmin(v) >= 0 for _, v in curves.values()):
             ax.set_ylim(bottom=0)
 
     for ax in axes[n_plots:]:
@@ -262,6 +266,7 @@ BOXPLOT_MO_CONFIGS = [
     ('epsilon',     'ε+ Aditivo (↓)',    False),
     ('n_pareto',    'Tamaño de Pareto',  True),
     ('best_dock',   'Mejor docking, kcal/mol (↓)', False),
+    ('best_pchembl', 'Mejor pChEMBL (↑)',   True),     # solo si lo optimizó
 ]
 
 # Fsp3 va sin flecha: no se optimiza, se reporta.  Marcarla con (↑) haría leer
@@ -271,6 +276,7 @@ BOXPLOT_CHEM_CONFIGS = [
     ('mean_qed',    'QED (↑)',              True),
     ('mean_sa',     'SA (↓)',               False),
     ('mean_dock',   'Docking, kcal/mol (↓)', False),
+    ('mean_pchembl', 'pChEMBL (↑)',         True),     # solo si lo optimizó
     ('mean_fsp3',  f'Fsp3 (restr. $\\geq$ {FSP3_MIN:g})', True),
     ('validity',    'Tasa de Validez',      True),
     ('uniqueness',  'Unicidad (↑)',         True),
@@ -610,6 +616,7 @@ KDE_PROPIEDADES = [
     ('qed',  'QED (↑)',               (None, 1.0)),
     ('sa',   'SA (↓)',                (1.0, None)),
     ('dock', 'Docking, kcal/mol (↓)', (None, None)),
+    ('pchembl', 'pChEMBL (↑)',        (None, None)),     # solo si lo optimizó
 ]
 
 
@@ -621,9 +628,13 @@ def plot_kde_propiedades(series, output_dir, fname):
     if not paretos:
         print("  ⚠ Sin datos de Pareto para las curvas de densidad")
         return
-    fig, axes = plt.subplots(1, len(KDE_PROPIEDADES),
-                             figsize=(6.4 * len(KDE_PROPIEDADES), 5.2))
-    for ax, (col, etiqueta, (lo, hi)) in zip(axes, KDE_PROPIEDADES):
+    props = [p for p in KDE_PROPIEDADES
+             if all(p[0] in df.columns for df in paretos.values())]
+    nombres = {'qed': 'QED', 'sa': 'SA', 'dock': 'docking', 'pchembl': 'pChEMBL'}
+    lista = [nombres[p[0]] for p in props]
+    fig, axes = plt.subplots(1, len(props), figsize=(6.4 * len(props), 5.2), squeeze=False)
+    axes = axes.flatten()
+    for ax, (col, etiqueta, (lo, hi)) in zip(axes, props):
         todo = np.concatenate([df[col].values for df in paretos.values()])
         pad = 0.05 * (todo.max() - todo.min())
         x = np.linspace(todo.min() - pad if lo is None else lo,
@@ -650,8 +661,8 @@ def plot_kde_propiedades(series, output_dir, fname):
         ax.grid(True, linestyle='--', alpha=0.3)
         ax.set_ylim(-0.025 * ax.get_ylim()[1], None)
     axes[0].legend(frameon=True, fontsize=10)
-    fig.suptitle('Distribución de QED, SA y docking en el frente de cada configuración '
-                 '(los marcadores sobre el eje son la mediana)',
+    fig.suptitle(f'Distribución de {", ".join(lista[:-1])} y {lista[-1]} en el frente de cada '
+                 'configuración (los marcadores sobre el eje son la mediana)',
                  fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
@@ -897,6 +908,8 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
         'sa':          _objective_curves(series, 'sa'),
         'dock':        _objective_curves(series, 'dock'),
     }
+    if tiene_pchembl(series):
+        curvas['pchembl'] = _objective_curves(series, 'pchembl')
 
     # 3. Las curvas van SOLO contra evaluaciones.  La versión por generación se
     #    eliminó: con repartos distintos de pob×gen la generación no es un eje

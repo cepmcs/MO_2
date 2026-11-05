@@ -205,6 +205,12 @@ FRENTES_COLS = ['smiles', 'qed', 'sa', 'fsp3', 'dock']
 
 
 
+def _cols_frente(df):
+    """FRENTES_COLS, más pChEMBL si el experimento lo optimizó."""
+    return FRENTES_COLS + (['pchembl'] if 'pchembl' in df.columns else [])
+
+
+
 def _n_corridas(series):
     """En cuántas corridas de las series apareció cada molécula."""
     partes = []
@@ -226,14 +232,14 @@ def frentes(series, pf_df, out_dir):
     for s in series:
         if s.label not in por_serie:
             continue
-        f = por_serie[s.label][FRENTES_COLS].copy()
+        f = por_serie[s.label][_cols_frente(por_serie[s.label])].copy()
         f['n_runs'] = f['smiles'].map(_n_corridas([s]))
         nombre = f'frente_{s.color_key}_{_cruce(s.label).lower()}.csv'
         f.sort_values('dock').to_csv(os.path.join(out_dir, nombre), index=False)
 
     at = atribuir_frente(series, pf_df, _por_serie)
     at['n_runs'] = at['smiles'].map(_n_corridas(series))
-    cols = (FRENTES_COLS + ['n_runs'] + [c for c in at.columns if c.startswith('en_')]
+    cols = (_cols_frente(at) + ['n_runs'] + [c for c in at.columns if c.startswith('en_')]
             + ['origen'])
     at.sort_values('dock')[cols].to_csv(
         os.path.join(out_dir, 'frente_general.csv'), index=False)

@@ -70,6 +70,8 @@ MO2_analisis.tar
 # lo que se baja del cluster al PC para analizar: grid, winners, finalistas.
 # baselines/ NO viene del cluster: se corre y se analiza acá.
 resultados/
+# copia local de los resultados de exp5 (294 MB, vienen del cluster)
+resultados_exp5/
 # tablas y figuras que produce analisis.py
 plots/
 # campañas viejas congeladas (p. ej. archivo/lipinski/)

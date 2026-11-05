@@ -31,6 +31,7 @@ from .comun import (
     get_color,
     homogeneous_groups,
     load_pareto_molecules,
+    objetivos_de,
     series_pool,
     unicas,
 )
@@ -45,10 +46,16 @@ def _df_to_F(df):
 
     Fsp3 no entra: es constraint, no objetivo.  Meterlo como columna
     cambiaría quién domina a quién: una molécula peor en los objetivos
-    sobreviviría por tener más Fsp3."""
-    return np.column_stack([-df['qed'].to_numpy(dtype=float),
-                            df['sa'].to_numpy(dtype=float),
-                            df['dock'].to_numpy(dtype=float)])   # ver OBJECTIVES
+    sobreviviría por tener más Fsp3.
+
+    Si el DataFrame trae pChEMBL (experimentos que lo optimizan) va de cuarta
+    columna, como -pChEMBL: se maximiza."""
+    cols = [-df['qed'].to_numpy(dtype=float),
+            df['sa'].to_numpy(dtype=float),
+            df['dock'].to_numpy(dtype=float)]                    # ver OBJECTIVES
+    if 'pchembl' in df.columns:
+        cols.append(-df['pchembl'].to_numpy(dtype=float))
+    return np.column_stack(cols)
 
 
 
@@ -405,12 +412,13 @@ def _indicator_curves(series, output_dir, pf_F, gen_stride=10,
                 continue
             try:
                 df = pd.read_csv(gz_path, usecols=lambda c: c in {
-                    'gen', 'qed', 'sa', 'dock', 'fsp3', 'valid', 'feasible'})
+                    'gen', 'qed', 'sa', 'dock', 'pchembl', 'fsp3', 'valid', 'feasible'})
             except Exception:
                 continue
             if not {'gen', 'valid', *OBJECTIVES}.issubset(df.columns):
                 continue
-            df = df[df['valid'].astype(bool)].dropna(subset=OBJECTIVES)
+            objs = objetivos_de(df)
+            df = df[df['valid'].astype(bool)].dropna(subset=objs)
             df = dock_valido(df)
             # 'feasible' lo escribe el eval_log; si el log viniera de una corrida
             # sin constraint se cae a Fsp3 ≥ umbral, que es la misma condición
@@ -431,8 +439,8 @@ def _indicator_curves(series, output_dir, pf_F, gen_stride=10,
             ultima = df['gen'].max()
             rows, acum = [], None
             for k, (g, df_g) in enumerate(df.groupby('gen', sort=True)):
-                nuevo = (df_g[OBJECTIVES] if acum is None else
-                         pd.concat([acum, df_g[OBJECTIVES]], ignore_index=True))
+                nuevo = (df_g[objs] if acum is None else
+                         pd.concat([acum, df_g[objs]], ignore_index=True))
                 acum = _compute_non_dominated(nuevo.drop_duplicates())
                 # La última generación va siempre: es la que tiene que cerrar con
                 # el valor que publica la tabla de indicadores por run.

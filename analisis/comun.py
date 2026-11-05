@@ -95,6 +95,7 @@ OBJECTIVE_LABELS = {
     'qed':  'QED (↑)',
     'sa':   'SA (↓)',
     'dock': 'Docking, kcal/mol (↓)',
+    'pchembl': 'pChEMBL (↑)',
     'fsp3': f'Fsp3 (restricción $\\geq$ {FSP3_MIN:g})',
 }
 
@@ -103,6 +104,20 @@ OBJECTIVE_LABELS = {
 # donde se declara cuáles son: _df_to_F arma F con ellos y las cargas comprueban
 # que estén antes de calcular nada.
 OBJECTIVES = ['qed', 'sa', 'dock']
+
+
+def objetivos_de(df):
+    """Objetivos que trae df: los de OBJECTIVES y, si el experimento los optimizó,
+    pChEMBL (se maximiza: F lleva -pChEMBL, como en utils_mo)."""
+    return OBJECTIVES + (['pchembl'] if 'pchembl' in df.columns else [])
+
+
+def tiene_pchembl(series):
+    """True si el experimento de las series optimizó pChEMBL (columna de molecules.csv)."""
+    for s in series:
+        for f in sorted(glob.glob(os.path.join(s.pop_dir, 'run_*', 'molecules.csv')))[:1]:
+            return 'pchembl' in pd.read_csv(f, nrows=0).columns
+    return False
 
 
 # Puntaje que docking.py asigna a lo que no se pudo dockear (espejo de
@@ -275,7 +290,7 @@ def generate_statistical_table(series, output_dir, indicator_data=None):
 
     cols = ['hypervolume', 'spacing', 'validity', 'feasibility', 'novelty',
             'igd_plus', 'epsilon',
-            'best_qed', 'best_sa', 'best_dock', 'mean_fsp3', 'n_pareto',
+            'best_qed', 'best_sa', 'best_dock', 'best_pchembl', 'mean_fsp3', 'n_pareto',
             'n_docked', 'n_dock_fail', 'time_sec']
     cols = [c for c in cols if all(c in df.columns for df in all_metrics.values())]
 
@@ -312,13 +327,16 @@ def _compute_chemical_means(series):
             if df.empty or not {'qed', 'sa', 'fsp3'}.issubset(df.columns):
                 continue
             df_d = dock_valido(df)
-            rows.append({
+            fila = {
                 'run': os.path.basename(run_dir),
                 'mean_qed': df['qed'].mean(),
                 'mean_sa': df['sa'].mean(),
                 'mean_dock': df_d['dock'].mean() if len(df_d) else np.nan,
                 'mean_fsp3': df['fsp3'].mean(),
-            })
+            }
+            if 'pchembl' in df.columns:
+                fila['mean_pchembl'] = df['pchembl'].mean()
+            rows.append(fila)
         if rows:
             results[s.label] = pd.DataFrame(rows)
     return results
@@ -462,7 +480,7 @@ def _build_series_value_getter(series, indicator_data=None):
     uniq_by_series = _compute_uniqueness(series)
 
     def get(label, col):
-        if col in ('mean_qed', 'mean_sa', 'mean_dock', 'mean_fsp3'):
+        if col in ('mean_qed', 'mean_sa', 'mean_dock', 'mean_fsp3', 'mean_pchembl'):
             df = chem_by_series.get(label)
         elif col in ('igd_plus', 'epsilon'):
             df = indicator_data.get(label)
@@ -506,6 +524,7 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
         ('SA',            'mean_sa',     '.2f', False),
         ('Fsp3',          'mean_fsp3',   '.4f', None),
         ('Docking',       'mean_dock',   '.2f', False),
+        ('pChEMBL',       'mean_pchembl', '.2f', True),    # solo si el experimento lo optimizó
     ]
     gen_cfg = [
         ('Validez',       'validity',    '.4f', True),
