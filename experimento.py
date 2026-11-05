@@ -65,15 +65,13 @@ def correr(alg, args):
           'cx_prob': args.cx_prob, 'mut_prob': round(args.mut_prob, 6),
           'fsp3_min': FSP3_MIN}
     if args.exp_name != 'exp4':     # con los defaults el experimento es el de exp4 y sus columnas no cambian
-        hp.update(exp_name=args.exp_name, vae=args.vae, pchembl=args.pchembl, logp=args.logp)
+        hp.update(exp_name=args.exp_name, vae=args.vae, logp=args.logp)
 
     cruce, mutacion = get_operators(args.crossover, args.mutation,
                                     args.cx_prob, args.mut_prob)
-    n_obj = 3 + args.pchembl
-    extra = {'ref_dirs': get_ref_dirs(args.pop_size, n_obj)} if alg == 'NSGA3' else {}
+    extra = {'ref_dirs': get_ref_dirs(args.pop_size, 3)} if alg == 'NSGA3' else {}
 
-    problem = MolecularLatentProblem(model, stoi, itos, latent_dim,
-                                     pchembl=args.pchembl, logp=args.logp)
+    problem = MolecularLatentProblem(model, stoi, itos, latent_dim, logp=args.logp)
     tracker = GenerationTracker(problem, train_smiles)
     algoritmo = ALGORITMOS[alg](pop_size=args.pop_size, sampling=LatentSampling(mus),
                                 crossover=cruce, mutation=mutacion,
@@ -90,8 +88,9 @@ def correr(alg, args):
 
     print(f"[{label}] HV={hv:.4f}  Spacing={spacing:.4f}  "
           f"Valid={validity:.0%}  Feas={metrics['feasibility']:.0%}  "
-          f"n={len(pareto)}  QED={metrics['best_qed']}  SA={metrics['best_sa']}  "
-          f"Fsp3={metrics['mean_fsp3']}  t={metrics['time_sec']}s", flush=True)
+          f"n={len(pareto)}  SA={metrics['best_sa']}  Dock={metrics['best_dock']}  "
+          f"pChEMBL={metrics['best_pchembl']}  Fsp3={metrics['mean_fsp3']}  "
+          f"t={metrics['time_sec']}s", flush=True)
     return metrics
 
 
@@ -118,8 +117,6 @@ def _parser():
                     help="Carpeta de resultados: results/<exp_name>.")
     ap.add_argument('--vae', choices=list(VAE_PATHS), default='original',
                     help="VAE cuyo espacio latente se optimiza: la original o la ajustada con ligandos de MRP1.")
-    ap.add_argument('--pchembl', action='store_true',
-                    help="Suma pChEMBL (modelo de MRP1) como cuarto objetivo.")
     ap.add_argument('--logp', action='store_true',
                     help="Suma el constraint 1 <= logP <= 4.")
 

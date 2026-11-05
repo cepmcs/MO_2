@@ -1,6 +1,6 @@
 """
-Orquestador de los experimentos: por defecto exp4, QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ 0.3.
-Con --exp-name, --vae, --pchembl y --logp corre las variantes (ver experimento.py).
+Orquestador de los experimentos (rama exp6): SA(↓) Docking(↓) pChEMBL(↑) | Fsp3 ≥ 0.3, sin QED.
+Con --exp-name, --vae y --logp corre las variantes (ver experimento.py).
 """
 
 import os
@@ -27,7 +27,7 @@ MUT_PROBS = [MUT_PROB, 0.012]   # probabilidad de mutación por gen
 # ─── Definición de tareas ─────────────────────────────────────────────────────
 
 def build_tasks(n_runs, opciones):
-    """Lista de tareas del grid.  opciones (exp_name, vae, pchembl, logp) va en cada tarea."""
+    """Lista de tareas del grid.  opciones (exp_name, vae, logp) va en cada tarea."""
     return [dict(alg=alg, cx=cx, mut=mut, run=run, **opciones)
             for alg in ALGORITMOS for cx in CRUCES for mut in MUT_PROBS
             for run in range(n_runs)]
@@ -66,7 +66,8 @@ def run_one(t, device, threads):
            "--crossover", t['cx'], "--mut_prob", str(t['mut']),
            "--run_id", str(t['run']), "--device", device,
            "--exp_name", t['exp_name'], "--vae", t['vae']]
-    cmd += [f"--{op}" for op in ("pchembl", "logp") if t[op]]
+    if t['logp']:
+        cmd.append("--logp")
 
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ROOT, env=env,
@@ -128,7 +129,6 @@ def main():
     ap.add_argument("--exp-name", default="exp4", help="Carpeta de resultados: results/<exp-name>.")
     ap.add_argument("--vae", choices=list(VAE_PATHS), default="original",
                     help="VAE cuyo espacio latente se optimiza.")
-    ap.add_argument("--pchembl", action="store_true", help="Suma pChEMBL como cuarto objetivo.")
     ap.add_argument("--logp", action="store_true", help="Suma el constraint 1 <= logP <= 4.")
     args = ap.parse_args()
 
@@ -143,14 +143,14 @@ def main():
     parallel = args.parallel or default_parallel(device)
     threads  = max(1, (os.cpu_count() or 1) // parallel)
 
-    opciones = dict(exp_name=args.exp_name, vae=args.vae, pchembl=args.pchembl, logp=args.logp)
+    opciones = dict(exp_name=args.exp_name, vae=args.vae, logp=args.logp)
     tasks   = build_tasks(args.n_runs, opciones)
     pending = [t for t in tasks if not is_done(t)]
     total, done0 = len(tasks), len(tasks) - len(pending)
     n_configs = len(ALGORITMOS) * len(CRUCES) * len(MUT_PROBS)
 
     print("=" * 54)
-    objetivos = "QED(↑) SA(↓) Docking(↓)" + (" pChEMBL(↑)" if args.pchembl else "")
+    objetivos = "SA(↓) Docking(↓) pChEMBL(↑)"
     restricciones = f"Fsp3 ≥ {FSP3_MIN}" + (" y 1 ≤ logP ≤ 4" if args.logp else "")
     print(f"  {args.exp_name} — {objetivos} | {restricciones}")
     print(f"  VAE            : {args.vae}")

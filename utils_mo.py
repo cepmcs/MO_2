@@ -62,19 +62,14 @@ FSP3_MIN = 0.3
 LOGP_MIN = 1.0
 LOGP_MAX = 4.0
 
-# Bounds de [-QED, SA, dock] para normalizar el HV a [0,1]^3.
-F_MIN     = np.array([-1.0, 1.0, DOCK_BEST])
-F_RANGE   = np.array([ 1.0, 9.0, DOCK_WORST - DOCK_BEST])
+# Los objetivos son [SA, dock, -pChEMBL] (se minimiza; pChEMBL se maximiza).  QED ya
+# no es objetivo: se sigue calculando y guardando como propiedad.
+# Bounds para normalizar el HV a [0,1]^3.
+F_MIN     = np.array([1.0, DOCK_BEST, -PCHEMBL_MAX])
+F_RANGE   = np.array([9.0, DOCK_WORST - DOCK_BEST, PCHEMBL_MAX - PCHEMBL_MIN])
 HV_REF    = np.array([1.1, 1.1, 1.1])   # 10% más allá del peor; HV ∈ [0, 1.331]
-INVALID_F = [1.0, 12.0, DOCK_WORST]     # penalización de las inválidas
+INVALID_F = [12.0, DOCK_WORST, -PCHEMBL_MIN]     # penalización de las inválidas
 INVALID_G = 1.0                    # una inválida nunca es factible
-
-# Con pChEMBL como cuarto objetivo (se minimiza -pChEMBL): las mismas cotas con una dimensión más.
-F_MIN_4     = np.append(F_MIN, -PCHEMBL_MAX)
-F_RANGE_4   = np.append(F_RANGE, PCHEMBL_MAX - PCHEMBL_MIN)
-HV_REF_4    = np.append(HV_REF, 1.1)    # HV ∈ [0, 1.4641]
-INVALID_F_4 = INVALID_F + [-PCHEMBL_MIN]
-ESCALAS = {3: (F_MIN, F_RANGE, HV_REF), 4: (F_MIN_4, F_RANGE_4, HV_REF_4)}   # por nº de objetivos
 
 SMILES_REGEX = re.compile(
     r"(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|\=|#|-|\+|\\\\|\/|:|~|@|\?|>|<|\*|\$|%[0-9]{2}|[0-9])"
@@ -268,7 +263,7 @@ def calc_properties(smi):
     qp = QED_module.properties(mol)
     return {
         'smiles': smi,
-        'qed':   QED_module.qed(mol, qedProperties=qp),   # objetivo (↑)
+        'qed':   QED_module.qed(mol, qedProperties=qp),   # solo reporte (no es objetivo)
         'sa':    sascorer.calculateScore(mol),            # objetivo (↓)
         'fsp3':  rdMolDescriptors.CalcFractionCSP3(mol),  # constraint (↑)
         'alogp': qp.ALOGP,   # de acá para abajo, solo reporte
@@ -283,17 +278,17 @@ def calc_properties(smi):
 class MolecularLatentProblem(Problem):
     """Optimización multiobjetivo con constraints en el espacio latente del VAE.
 
-    F = [-QED, SA, dock]          → minimizar.  Con pchembl=True se suma -pChEMBL.
+    F = [SA, dock, -pChEMBL]      → minimizar.  (QED ya no es objetivo: solo se reporta.)
     G = [FSP3_MIN - Fsp3]         → factible si ≤ 0.  Con logp=True se suman
         [LOGP_MIN - logP, logP - LOGP_MAX].  Solo las factibles se dockean."""
 
-    def __init__(self, model, stoi, itos, latent_dim, pchembl=False, logp=False):
+    def __init__(self, model, stoi, itos, latent_dim, logp=False):
         self.model, self.stoi, self.itos = model, stoi, itos
         self.eval_log = []
         self.dock = DockingCache()
-        self.pchembl = PChEMBLPredictor() if pchembl else None
+        self.pchembl = PChEMBLPredictor()
         self.logp = logp
-        super().__init__(n_var=latent_dim, n_obj=3 + bool(pchembl),
+        super().__init__(n_var=latent_dim, n_obj=3,
                          n_ieq_constr=1 + 2 * bool(logp), xl=-5.0, xu=5.0)
 
     def _factible(self, props):
@@ -306,32 +301,30 @@ class MolecularLatentProblem(Problem):
         feasibles = [s for s in smiles if (p := calc_properties(s)) and self._factible(p)]
         dock = dict(zip(feasibles, self.dock(feasibles)))
         validos = [s for s in smiles if calc_properties(s)]
-        pchembl = dict(zip(validos, self.pchembl(validos))) if self.pchembl else {}
+        pchembl = dict(zip(validos, self.pchembl(validos)))
         F = np.empty((len(smiles), self.n_obj), dtype=float)
         G = np.empty((len(smiles), self.n_ieq_constr), dtype=float)
         for i, smi in enumerate(smiles):
             props = calc_properties(smi)
             if props is None:
-                F[i] = INVALID_F_4 if self.pchembl else INVALID_F
+                F[i] = INVALID_F
                 G[i] = INVALID_G
                 self.eval_log.append({
                     'smiles': None, 'qed': None, 'sa': None,
                     'fsp3': None, 'dock': None, 'valid': False, 'feasible': False,
-                    **({'pchembl': None} if self.pchembl else {}),
+                    'pchembl': None,
                     **({'logp': None} if self.logp else {}),
                 })
             else:
-                F[i, :3] = (-props['qed'], props['sa'], dock.get(smi, DOCK_WORST))
+                F[i] = (props['sa'], dock.get(smi, DOCK_WORST), -pchembl[smi])
                 G[i, 0] = FSP3_MIN - props['fsp3']
-                if self.pchembl:
-                    F[i, 3] = -pchembl[smi]
                 if self.logp:
                     G[i, 1:] = (LOGP_MIN - props['alogp'], props['alogp'] - LOGP_MAX)
                 self.eval_log.append({
                     'smiles': props['smiles'], 'qed': props['qed'],
                     'sa': props['sa'], 'fsp3': props['fsp3'], 'dock': dock.get(smi),
                     'valid': True, 'feasible': bool(self._factible(props)),
-                    **({'pchembl': pchembl[smi]} if self.pchembl else {}),
+                    'pchembl': pchembl[smi],
                     **({'logp': props['alogp']} if self.logp else {}),
                 })
         out["F"] = F
@@ -385,10 +378,9 @@ class GenerationTracker(Callback):
         if len(pop_feasible) == 0:
             hv = 0.0
         else:
-            f_min, f_range, hv_ref = ESCALAS[self.problem.n_obj]
-            F = (pop_feasible.get("F") - f_min) / f_range
+            F = (pop_feasible.get("F") - F_MIN) / F_RANGE
             try:
-                hv = float(HV(ref_point=hv_ref)(F))
+                hv = float(HV(ref_point=HV_REF)(F))
             except Exception:
                 hv = 0.0
 
@@ -439,9 +431,8 @@ def _non_dominated_front(F):
 
 
 def _objetivos(results):
-    """Matriz [-QED, SA, dock] de los resultados, con -pChEMBL al final si lo traen."""
-    return np.array([[-r['qed'], r['sa'], r['dock']] + ([-r['pchembl']] if 'pchembl' in r else [])
-                     for r in results], dtype=float)
+    """Matriz [SA, dock, -pChEMBL] de los resultados: los objetivos, a minimizar."""
+    return np.array([[r['sa'], r['dock'], -r['pchembl']] for r in results], dtype=float)
 
 
 def non_dominated(results):
@@ -453,15 +444,12 @@ def non_dominated(results):
 
 
 def compute_hv(pareto):
-    """Hypervolume del frente de Pareto sobre objetivos normalizados a [0,1]^n
-    (n = 3, o 4 si el frente trae pChEMBL)."""
+    """Hypervolume del frente de Pareto sobre [SA, dock, -pChEMBL] normalizados a [0,1]^3."""
     if not pareto:
         return 0.0
-    F = _objetivos(pareto)
-    f_min, f_range, hv_ref = ESCALAS[F.shape[1]]
-    F = (F - f_min) / f_range
+    F = (_objetivos(pareto) - F_MIN) / F_RANGE
     try:
-        return float(HV(ref_point=hv_ref)(F))
+        return float(HV(ref_point=HV_REF)(F))
     except Exception:
         return 0.0
 
@@ -502,8 +490,8 @@ def build_pareto(eval_log):
         if smi not in seen:
             seen[smi] = {
                 'smiles': smi, 'qed': e['qed'],
-                'sa': e['sa'], 'fsp3': e['fsp3'], 'dock': e['dock'],
-                **{k: e[k] for k in ('pchembl', 'logp') if k in e},
+                'sa': e['sa'], 'fsp3': e['fsp3'], 'dock': e['dock'], 'pchembl': e['pchembl'],
+                **({'logp': e['logp']} if 'logp' in e else {}),
             }
     validity = round(n_valid / len(eval_log), 4) if eval_log else 0.0
     feasibility = round(n_feasible / n_valid, 4) if n_valid else 0.0
@@ -587,11 +575,9 @@ def postprocess_run(alg_name, pop_size, n_gen, run_id, problem, tracker, elapsed
         'mean_fsp3': round(float(np.mean([r['fsp3'] for r in pareto])), 4) if pareto else float('nan'),
         'time_sec': round(elapsed, 1),
     }
-    # columnas de más cuando el experimento usa pChEMBL (objetivo) o logP (constraint)
-    extras = []
-    if problem.pchembl:
-        extras.append('pchembl')
-        metrics['best_pchembl'] = round(max(r['pchembl'] for r in pareto), 4) if pareto else float('nan')
+    # pChEMBL es objetivo siempre; logP (constraint) solo si el experimento lo usa
+    extras = ['pchembl']
+    metrics['best_pchembl'] = round(max(r['pchembl'] for r in pareto), 4) if pareto else float('nan')
     if problem.logp:
         extras.append('logp')
         metrics['mean_logp'] = round(float(np.mean([r['logp'] for r in pareto])), 4) if pareto else float('nan')

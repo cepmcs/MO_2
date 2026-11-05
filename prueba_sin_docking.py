@@ -4,7 +4,7 @@ con el docking reemplazado por puntajes falsos (deterministas, por hash del SMIL
 comprobar el entorno (pymoo, scikit-learn, VAE, pChEMBL, restricciones) antes de gastar cola.
 
 Acepta los mismos argumentos que experimento.py; por defecto, --device cpu, --n_gen 2 y --run_id 0.
-    python prueba_sin_docking.py --alg NSGA3 --vae mrp1 --pchembl --logp
+    python prueba_sin_docking.py --alg NSGA3 --vae mrp1 --logp
 Escribe en results/prueba_sin_docking y lo borra al terminar.
 """
 import hashlib
