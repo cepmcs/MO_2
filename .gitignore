@@ -94,3 +94,7 @@ Thumbs.db
 
 # Notas internas
 justificacion_operadores.md
+
+# Benchmarks y resultados del exp5
+benchmarks/
+resultados_exp5/
