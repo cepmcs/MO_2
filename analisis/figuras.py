@@ -703,17 +703,15 @@ def _cmap_recortada(nombre, hasta):
 
 
 
-# Variantes de color del grid QED vs SA.  Misma geometría, preguntas distintas,
-# así que salen como archivos separados (el sufijo va en el nombre):
+# Variantes de color del grid QED vs SA (el sufijo va en el nombre del archivo):
 #   nruns → ¿el hallazgo se repite entre semillas, o lo vio una sola?
-#   fsp3  → ¿qué margen sobre el umbral tiene cada punto?
-# El valor va solo en el color; todos los marcadores miden lo mismo.  'entero'
-# marca las escalas que cuentan cosas: una molécula no aparece en 2.5 runs.
+# Existió una variante 'fsp3' (margen sobre el umbral de cada punto); se quitó
+# porque no se usaba.  El valor va solo en el color; todos los marcadores miden
+# lo mismo.  'entero' marca las escalas que cuentan cosas: una molécula no
+# aparece en 2.5 runs.
 GRID_COLOR_MODES = {
     'nruns': dict(col='n_runs_appeared', cmap=_cmap_recortada('plasma', 0.72),
                   label='Nº de ejecuciones en que aparece', entero=True),
-    'fsp3':  dict(col='fsp3', cmap='viridis',
-                  label=f'Fsp3 (restricción $\\geq$ {FSP3_MIN:g})'),
 }
 
 
@@ -752,18 +750,9 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
         print("  ⚠ Sin datos de Pareto para grid QED vs SA")
         return
 
-    if color_by == 'fsp3':
-        # Escala absoluta para comparar paneles, pero arrancando en el umbral: el
-        # tramo [0, FSP3_MIN) no puede recibir puntos y gastarlo aplanaría todo
-        # el frente en un mismo tono.  El tope sale de los datos, acotado por
-        # abajo para que la banda no degenere.
-        fsp3_max = max((p['fsp3'].max() for _, p, _ in paretos), default=1.0)
-        norm = mcolors.Normalize(vmin=FSP3_MIN,
-                                 vmax=max(float(fsp3_max), FSP3_MIN + 0.1))
-    else:
-        # 1 run → violeta, max_runs → amarillo
-        global_max_runs = max(nr for _, _, nr in paretos)
-        norm = mcolors.Normalize(vmin=1, vmax=max(global_max_runs, 2))
+    # 1 run → violeta, max_runs → amarillo
+    global_max_runs = max(nr for _, _, nr in paretos)
+    norm = mcolors.Normalize(vmin=1, vmax=max(global_max_runs, 2))
 
     n_plots = len(paretos)
     # Con 4 series (los combos de operadores) una grilla 2×2 queda pareja; con
@@ -1096,8 +1085,8 @@ def _generate_report(series, pop_size, output_dir, report_label):
 
 
 
-    # 9. Grid QED vs SA: los N algoritmos separados en una sola imagen, en sus
-    #    dos variantes de color (reproducibilidad entre semillas y la restricción).
-    print("🧩 Grid QED vs SA por algoritmo (una imagen por variante de color)...")
+    # 9. Grid QED vs SA: los N algoritmos separados en una sola imagen, con el
+    #    color según la reproducibilidad entre semillas.
+    print("🧩 Grid QED vs SA por algoritmo...")
     for modo in GRID_COLOR_MODES:
         plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by=modo)
