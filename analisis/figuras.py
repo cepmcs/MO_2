@@ -275,6 +275,27 @@ BOXPLOT_CHEM_CONFIGS = [
 
 
 
+def _ejes_centrados(n, ncols, figsize):
+    """Figura con n paneles en filas de ncols, con la última fila CENTRADA
+    cuando queda incompleta (5 paneles en 3 columnas: 3 arriba y 2 abajo, estos
+    dos en el centro y no pegados a la izquierda).
+
+    Usa una grilla del doble de columnas y cada panel ocupa dos, así que una
+    fila con menos paneles se corre media columna por cada hueco.
+    Devuelve (fig, lista de ejes en orden de lectura)."""
+    nrows = math.ceil(n / ncols)
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(nrows, 2 * ncols)
+    axes = []
+    for i in range(n):
+        r, k = divmod(i, ncols)
+        en_fila = min(ncols, n - r * ncols)
+        inicio = (ncols - en_fila) + 2 * k
+        axes.append(fig.add_subplot(gs[r, inicio:inicio + 2]))
+    return fig, axes
+
+
+
 def plot_boxplots(series, output_dir, get_values, plot_configs,
                   fname, suptitle):
     """Boxplots comparativos de un grupo de métricas finales.
@@ -289,9 +310,7 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
     n_plots = len(available)
     ncols = min(3, n_plots)
     nrows = math.ceil(n_plots / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 6 * nrows),
-                             squeeze=False)
-    axes = axes.flatten()
+    fig, axes = _ejes_centrados(n_plots, ncols, figsize=(5 * ncols, 6 * nrows))
 
     for ax, (col, label, _) in zip(axes, available):
         data, labels, colors = [], [], []
@@ -498,6 +517,24 @@ def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
 
 
 
+def _dibujar_frente_conjunto(ax, atr, xcol, ycol, tam=MARCADOR_DENSO,
+                             tam_pie=18):
+    """Un panel del frente conjunto: un scatter por grupo en su color y el
+    marcador 'pastel' donde coincidieron dos o más (ver _pie_marker)."""
+    at, paleta, compartida = atr['at'], atr['paleta'], atr['compartida']
+    grupos = [g for g in paleta if g != compartida]
+    for g in grupos:
+        df_g = at[at[f'en_{g}']]
+        ax.scatter(df_g[xcol], df_g[ycol], c=paleta[g], marker=PARETO_MARKER,
+                   s=tam, alpha=0.55, edgecolors='none',
+                   linewidths=0, zorder=3)
+    for _, row in at[at['origen'] == compartida].iterrows():
+        cols = [paleta[g] for g in grupos if row[f'en_{g}']]
+        _pie_marker(ax, row[xcol], row[ycol], cols, size=tam_pie)
+    ax.set_xlabel(OBJECTIVE_LABELS.get(xcol, xcol))
+    ax.set_ylabel(OBJECTIVE_LABELS.get(ycol, ycol))
+
+
 def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia):
     """El frente no dominado conjunto en el espacio de objetivos (ver
     PLANOS_FRENTE): un scatter por grupo en su color, con un marcador
@@ -506,8 +543,7 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     atr = _atribucion_por_origen(series, pf_df, grupo_de)
     if atr is None:
         return
-    at, paleta, compartida = atr['at'], atr['paleta'], atr['compartida']
-    grupos = [g for g in paleta if g != compartida]
+    at = atr['at']
 
     planos = [(x, y) for x, y in PLANOS_FRENTE
               if x in at.columns and y in at.columns]
@@ -516,23 +552,67 @@ def plot_frente_conjunto(series, pop_size, output_dir, pf_df, grupo_de=_familia)
     n = len(planos)
     fig, axes = plt.subplots(1, n, figsize=(6.4 * n, 5.8), squeeze=False)
     for ax, (xcol, ycol) in zip(axes[0], planos):
-        for g in grupos:
-            df_g = at[at[f'en_{g}']]
-            ax.scatter(df_g[xcol], df_g[ycol], c=paleta[g], marker=PARETO_MARKER,
-                       s=MARCADOR_DENSO, alpha=0.55, edgecolors='none',
-                       linewidths=0, zorder=3)
-        for _, row in at[at['origen'] == compartida].iterrows():
-            cols = [paleta[g] for g in grupos if row[f'en_{g}']]
-            _pie_marker(ax, row[xcol], row[ycol], cols, size=18)
-        ax.set_xlabel(OBJECTIVE_LABELS.get(xcol, xcol))
-        ax.set_ylabel(OBJECTIVE_LABELS.get(ycol, ycol))
-        ax.set_title('Espacio de objetivos')
+        _dibujar_frente_conjunto(ax, atr, xcol, ycol)
         ax.set_xlim(*_pad_lim(at[xcol].values))
         ax.set_ylim(*_pad_lim(at[ycol].values))
 
     _leyenda_y_titulo_origen(fig, atr, output_dir, 0.01, 1.0)
-    plt.tight_layout(rect=[0, 0.09, 1, 0.97])
-    fname = f"frente_conjunto_pop{pop_size}.png"
+    plt.tight_layout(rect=[0, 0.09, 1, 1.0])
+    fname = f"frente_conjunto_pop{pop_size}.pdf"
+    plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  ✓ {fname}")
+
+
+
+# Marcadores de la figura de cuatro paneles: más grandes que MARCADOR_DENSO, que
+# está pensado para el panel único.  El pastel va más grande que el punto para
+# que se vea el reparto de colores.
+TAM_FRENTE_MULTI = 35
+TAM_PIE_MULTI = 45
+
+
+def plot_frente_conjunto_multi(paneles, output_dir, fname):
+    """Los frentes conjuntos de varios algoritmos en una sola figura, un panel
+    por algoritmo (2 columnas).
+
+    paneles: lista de (nombre, atr), con atr de _atribucion_por_origen.  Cada
+    panel lleva «(a) Nombre».  Todos comparten límites: son el mismo plano QED-SA y, si cada panel se
+    auto-escalara, dos frentes de distinta extensión parecerían iguales.  La
+    leyenda es única, con los colores de los grupos."""
+    paneles = [(n, a) for n, a in paneles if a is not None]
+    if not paneles:
+        return
+    xcol, ycol = PLANOS_FRENTE[0]
+    xs = np.concatenate([a['at'][xcol].values for _, a in paneles])
+    ys = np.concatenate([a['at'][ycol].values for _, a in paneles])
+
+    ncols = 2 if len(paneles) > 1 else 1
+    nrows = math.ceil(len(paneles) / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6.4 * ncols, 5.8 * nrows),
+                             squeeze=False)
+    axes = axes.flatten()
+    for i, (ax, (nombre, atr)) in enumerate(zip(axes, paneles)):
+        _dibujar_frente_conjunto(ax, atr, xcol, ycol, tam=TAM_FRENTE_MULTI,
+                                 tam_pie=TAM_PIE_MULTI)
+        ax.set_xlim(*_pad_lim(xs))
+        ax.set_ylim(*_pad_lim(ys))
+        ax.set_title(f'({chr(ord("a") + i)}) {nombre}', fontsize=13,
+                     fontweight='bold')
+    for ax in axes[len(paneles):]:
+        ax.set_visible(False)
+
+    # Los grupos y sus colores son los mismos en todos los paneles.
+    _, atr0 = paneles[0]
+    handles = [mpatches.Patch(facecolor=atr0['paleta'][g], edgecolor='white',
+                              label=g)
+               for g in atr0['paleta'] if g != atr0['compartida']]
+    fig.legend(handles=handles, loc='lower center', ncol=len(handles),
+               framealpha=0.9, edgecolor='#cccccc', fontsize=11,
+               bbox_to_anchor=(0.5, 0.012))
+    fig.suptitle(f'Frente no dominado conjunto por {atr0["por"]}',
+                 fontsize=14, fontweight='bold', y=1.0)
+    plt.tight_layout(rect=[0, 0.045, 1, 1.0])
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -599,7 +679,7 @@ def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
     # partir en filas la figura crece y el porcentaje reservaría de más.
     margen = 0.09 / len(filas)
     plt.tight_layout(rect=[0, margen, 1, 1 - margen / 3])
-    fname = f"pareto_comparison_pop{pop_size}.png"
+    fname = f"pareto_comparison_pop{pop_size}.pdf"
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -736,7 +816,7 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
 
     fig.suptitle(title,
                  fontsize=14, fontweight='bold')
-    fname = f"pareto_qed_sa_grid_{color_by}_pop{pop_size}.png"
+    fname = f"pareto_qed_sa_grid_{color_by}_pop{pop_size}.pdf"
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -984,7 +1064,7 @@ def _generate_report(series, pop_size, output_dir, report_label):
                 (PANELES_QUIM, 'chemical', 'Convergencia de Indicadores Químicos')]:
             _plot_convergence_grid(
                 series, output_dir, specs, curvas, mapas_eval,
-                f"convergence_{base}_evals_pop{pop_size}.png", titulo)
+                f"convergence_{base}_evals_pop{pop_size}.pdf", titulo)
         escribir_curvas_csv(series, curvas, mapas_eval, output_dir, pop_size)
 
     # 5. Boxplots + tablas (requiere ≥2 series).  Comparten un único getter
@@ -994,12 +1074,12 @@ def _generate_report(series, pop_size, output_dir, report_label):
 
         print("📊 Boxplots multiobjetivo (HV, Espaciamiento, IGD+, ε+, Pareto)...")
         plot_boxplots(series, output_dir, get_values, BOXPLOT_MO_CONFIGS,
-                      f"boxplots_mo_pop{pop_size}.png",
+                      f"boxplots_mo_pop{pop_size}.pdf",
                       "Distribución de Indicadores Multiobjetivo")
         print("📊 Boxplots químicos (QED, SA, Fsp3, Validez, "
               "Unicidad, Novedad)...")
         plot_boxplots(series, output_dir, get_values, BOXPLOT_CHEM_CONFIGS,
-                      f"boxplots_chemical_pop{pop_size}.png",
+                      f"boxplots_chemical_pop{pop_size}.pdf",
                       "Distribución de Indicadores Químicos")
 
         print("📋 Tabla estadística...")

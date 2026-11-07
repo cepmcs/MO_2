@@ -34,6 +34,9 @@ plt.rcParams.update({
     'grid.alpha': 0.25,
     'grid.linestyle': '--',
     'grid.color': 'grey',
+    # Los PDF llevan las fuentes como TrueType (42) y no Type 3, el default de
+    # matplotlib: así el texto es seleccionable y las revistas/LaTeX no se quejan.
+    'pdf.fonttype': 42,
 })
 
 

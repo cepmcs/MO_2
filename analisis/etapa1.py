@@ -286,7 +286,7 @@ def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
     fig.suptitle(f'Selección de hiperparámetros: {label.lower()} contra validez',
                  fontsize=15, fontweight='bold')
     fig.tight_layout(rect=[0.01, 0.02, 1, 0.98])
-    fname = f'{metric}_vs_validity.png'
+    fname = f'{metric}_vs_validity.pdf'
     fig.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -392,7 +392,7 @@ def plot_efectos_hp(df, metric, out_dir):
     fig.suptitle(f'Efecto de los hiperparámetros sobre {label.lower()}',
                  fontsize=13, fontweight='bold', y=1.04)
     fig.tight_layout()
-    fname = f'efectos_{metric}.png'
+    fname = f'efectos_{metric}.pdf'
     fig.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
