@@ -82,7 +82,7 @@ PARETO_MARKER = 'o'
 # Tamaño del marcador en los frentes 2D, según la densidad del panel:
 #   pareto_comparison superpone las 5 series      → ~58 pts/in²
 #   el grid QED-SA y el frente conjunto, un frente → ~12-15 pts/in²
-MARCADOR_DENSO  = 13    # varias series superpuestas en el panel
+MARCADOR_DENSO  = 24    # varias series superpuestas en el panel
 
 MARCADOR_NORMAL = 23    # un frente por panel
 

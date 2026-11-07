@@ -19,7 +19,6 @@ import matplotlib.pyplot as plt
 from .comun import (
     ALGORITHM_ORDER,
     DISPLAY,
-    FSP3_MIN,
     GA_ALGS,
     OUT_FRENTE,
     PSO_ALG,
@@ -50,7 +49,7 @@ from .indicadores import (
     load_reference_front,
     write_contribucion_table,
 )
-from .figuras import SA_MAX, plot_frente_conjunto, render, top_por_qed
+from .figuras import plot_frente_conjunto, render
 from .etapa2 import COMBO_DIRS, MUT_STD
 
 
@@ -299,22 +298,37 @@ def analisis_frente_conjunto(args):
 # ═══════════════════════════════════════════════════════════════════════════
 #   Moléculas representativas
 #
-#   Las moléculas de mayor QED del frente de cada algoritmo.  El frente junta las
-#   20 ejecuciones de sus DOS ramas de cruce (las del pool), deduplica por SMILES
-#   y recalcula la dominancia.  Va con el frente conjunto porque ilustra el
-#   material que llega a la fase de afinidad, no lo que comparó la etapa 3.
+#   Los extremos del frente de cada algoritmo.  El frente junta las 20 ejecuciones
+#   de sus DOS ramas de cruce (las del pool), deduplica por SMILES y recalcula la
+#   dominancia.  Va con el frente conjunto porque ilustra el material que llega a
+#   la fase de afinidad, no lo que comparó la etapa 3.
+#
+#   Mostrar las 5 de mayor QED no discriminaba: en el techo (~0.948) casi todos
+#   los algoritmos convergen a las mismas ureas con piperazina.  Se muestran en
+#   cambio los puntos que marcan hasta dónde llega cada frente, SIN restricciones
+#   sobre QED ni SA: el extremo de menor SA (que en un frente es también el de
+#   menor QED), la molécula de mayor QED y el extremo de mayor SA.
 # ═══════════════════════════════════════════════════════════════════════════
 
 MOLECULAS_OUT = os.path.join(OUT_FRENTE, "moleculas_representativas.png")
 
 
-N_MOLECULAS = 5      # por algoritmo
+def puntos_frente(front):
+    """Los tres puntos que se muestran de un frente, como [(nombre, fila)].
 
-
-# Ventana de interés farmacológico.  Ya no lleva banda de Fsp3: el constraint la
-# garantiza.  Queda el corte de SA (figuras.SA_MAX), que desempata entre las
-# decenas de moléculas empatadas en el QED máximo y lo comparte con la figura de
-# moléculas por operador.
+    Ordenar por un solo objetivo deja empates: en el techo de QED hay decenas de
+    moléculas con el mismo valor.  Cada punto se desempata con el otro objetivo
+    a favor de la que sea mejor en él, con el QED redondeado a 3 decimales (los
+    que publica el pie de la figura)."""
+    q = front.assign(_q=front.qed.round(3))
+    return [
+        ('Extremo de menor SA',
+         front.sort_values(['sa', 'qed'], ascending=[True, False]).iloc[0]),
+        ('Mayor QED',
+         q.sort_values(['_q', 'sa'], ascending=[False, True]).iloc[0]),
+        ('Extremo de mayor SA',
+         front.sort_values(['sa', 'qed'], ascending=[False, False]).iloc[0]),
+    ]
 
 
 
@@ -339,11 +353,33 @@ def load_front(alg, winners_dir, finalistas_dir):
 
 
 
-def pick(front, n=N_MOLECULAS):
-    """Las n moléculas de mayor QED con SA por debajo de SA_MAX, desempatando por
-    SA entre las que comparten QED.  Mismo criterio que la figura de moléculas
-    por operador: ver figuras.top_por_qed."""
-    return top_por_qed(front, n).reset_index(drop=True)
+def write_tabla_puntos(seleccion, path):
+    """Tabla LaTeX con QED, SA y Fsp3 de los tres puntos de cada algoritmo: es la
+    comparación en números de lo que la figura ilustra."""
+    nombres = [n for n, _ in next(iter(seleccion.values()))]
+    lines = [
+        r'\begin{table}[H]', r'\centering',
+        r'\caption{Moléculas en los extremos del frente de Pareto de cada '
+        r'algoritmo: la de menor SA (que en el frente es también la de menor '
+        r'QED), la de mayor QED y la de mayor SA.}',
+        r'\label{tab:moleculas_representativas}',
+        r'\resizebox{\textwidth}{!}{%',
+        r'\begin{tabular}{l' + 'ccc' * len(nombres) + '}', r'\toprule',
+        'Algoritmo & ' + ' & '.join(
+            f'\\multicolumn{{3}}{{c}}{{{n}}}' for n in nombres) + r' \\',
+    ]
+    lines.append(' '.join(f'\\cmidrule(lr){{{2 + 3 * i}-{4 + 3 * i}}}'
+                          for i in range(len(nombres))))
+    lines.append(' & ' + ' & '.join(['QED & SA & $F_{\\text{sp3}}$'] * len(nombres))
+                 + r' \\')
+    lines.append(r'\midrule')
+    for alg, puntos in seleccion.items():
+        celdas = [f'{m["qed"]:.3f} & {m["sa"]:.2f} & {m["fsp3"]:.2f}'
+                  for _, m in puntos]
+        lines.append(f'{_latex_escape(DISPLAY.get(alg, alg))} & '
+                     + ' & '.join(celdas) + r' \\')
+    lines += [r'\bottomrule', r'\end{tabular}%', '}', r'\end{table}']
+    _write_tex(lines, path)
 
 
 
@@ -356,41 +392,39 @@ def moleculas(args):
         print(f"No se encontraron frentes en {args.finalistas}")
         return
 
-    seleccion = {a: pick(f) for a, f in fronts.items()}
+    seleccion = {a: puntos_frente(f) for a, f in fronts.items()}
 
-    nrows, ncols = len(fronts), N_MOLECULAS
+    # Un algoritmo por columna y un punto del frente por fila: comparar
+    # algoritmos es leer una fila de izquierda a derecha, en el mismo orden que
+    # el resto de las figuras.
+    ncols, nrows = len(seleccion), 3
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.0 * ncols, 2.7 * nrows),
                              squeeze=False)
     fig.patch.set_facecolor('white')
 
-    for i, (alg, sel) in enumerate(seleccion.items()):
-        for j in range(ncols):
-            ax = axes[i][j]
+    for i, (alg, puntos) in enumerate(seleccion.items()):
+        for j, (nombre, m) in enumerate(puntos):
+            ax = axes[j][i]
             ax.set_xticks([]); ax.set_yticks([])
             for sp in ax.spines.values():
                 sp.set_edgecolor('#cccccc')
-            if j >= len(sel):
-                ax.set_visible(False)
-                continue
-
-            m = sel.iloc[j]
+            if j == 0:
+                ax.set_title(DISPLAY.get(alg, alg), fontsize=13,
+                             fontweight='bold', pad=8)
+            if i == 0:
+                ax.set_ylabel(nombre, fontsize=11, fontweight='bold',
+                              labelpad=10)
             img = render(m['smiles'])
             if img is not None:
                 ax.imshow(img)
             # Los dos objetivos más Fsp3: no seleccionó nada, pero deja ver con
             # cuánto margen sobre el umbral quedó cada estructura dibujada.
-            ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
-                          f"·  Fsp3 {m['fsp3']:.2f}",
-                          fontsize=9, labelpad=3)
-            if j == 0:
-                ax.set_ylabel(DISPLAY.get(alg, alg), fontsize=13,
-                              fontweight='bold', labelpad=10)
+            ax.set_xlabel(f"QED {m['qed']:.3f} · SA {m['sa']:.2f}\n"
+                          f"Fsp3 {m['fsp3']:.2f}", fontsize=9, labelpad=3)
 
-    fig.suptitle(f'Las {N_MOLECULAS} moléculas de mayor QED del frente de cada '
-                 f'algoritmo, con SA < {SA_MAX:g} '
-                 f'(todas cumplen Fsp3 ≥ {FSP3_MIN:g})',
-                 fontsize=14, fontweight='bold', y=0.995)
-    plt.tight_layout(rect=[0, 0, 1, 0.985])
+    fig.suptitle('Extremos del frente de cada algoritmo',
+                 fontsize=13, fontweight='bold')
+    plt.tight_layout(rect=[0, 0, 1, 1.0], h_pad=1.5, w_pad=1.0)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     plt.savefig(args.out, dpi=200, bbox_inches='tight', facecolor='white')
     plt.close(fig)
@@ -398,13 +432,15 @@ def moleculas(args):
 
     # Detalle de las moléculas elegidas
     rows = []
-    for alg, sel in seleccion.items():
-        for j, m in sel.iterrows():
-            rows.append({'algoritmo': DISPLAY.get(alg, alg), 'puesto': j + 1,
+    for alg, puntos in seleccion.items():
+        for nombre, m in puntos:
+            rows.append({'algoritmo': DISPLAY.get(alg, alg), 'punto': nombre,
                          'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
-                         'fsp3': m['fsp3'], 'smiles': m['smiles']})
+                         'fsp3': round(m['fsp3'], 3), 'smiles': m['smiles']})
     out = pd.DataFrame(rows)
-    csv = os.path.splitext(args.out)[0] + '.csv'
-    out.to_csv(csv, index=False)
-    print(f"✓ {csv}\n")
+    base = os.path.splitext(args.out)[0]
+    out.to_csv(base + '.csv', index=False)
+    print(f"✓ {base}.csv")
+    write_tabla_puntos(seleccion, base + '.tex')
+    print()
     print(out.to_string(index=False))

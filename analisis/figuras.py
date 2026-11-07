@@ -381,6 +381,11 @@ def _pie_marker(ax, x, y, colors, size):
 
 
 
+# Tamaño del marcador 'pastel' en los paneles densos (ver MARCADOR_DENSO): un
+# poco mayor que el punto, para que se distinga el reparto de colores.
+PIE_DENSO = 40
+
+
 # El frente es una curva en QED-SA: no hay más proyecciones que mirar.
 PARETO_PLANES = [('qed', 'sa')]
 
@@ -446,7 +451,7 @@ def _plot_pareto_plane(ax, series_order, combined_paretos, counts, xcol, ycol,
     for (xv, yv), cols in coord_colors.items():
         uniq = list(dict.fromkeys(cols))
         if len(uniq) >= 2:
-            _pie_marker(ax, xv, yv, uniq, size=18)
+            _pie_marker(ax, xv, yv, uniq, size=PIE_DENSO)
 
     xlabel = OBJECTIVE_LABELS.get(xcol, xcol)
     ylabel = OBJECTIVE_LABELS.get(ycol, ycol)
@@ -518,9 +523,10 @@ def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
 
 
 def _dibujar_frente_conjunto(ax, atr, xcol, ycol, tam=MARCADOR_DENSO,
-                             tam_pie=18):
+                             tam_pie=None):
     """Un panel del frente conjunto: un scatter por grupo en su color y el
     marcador 'pastel' donde coincidieron dos o más (ver _pie_marker)."""
+    tam_pie = PIE_DENSO if tam_pie is None else tam_pie
     at, paleta, compartida = atr['at'], atr['paleta'], atr['compartida']
     grupos = [g for g in paleta if g != compartida]
     for g in grupos:
