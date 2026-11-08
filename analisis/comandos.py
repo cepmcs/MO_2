@@ -5,9 +5,8 @@ Las seis configuraciones son tres algoritmos (NSGA-II, NSGA-III y AGE-MOEA) por 
 cruces (PCX y SBX).  Se analizan juntas:
 
   comparacion  las seis en una sola comparación: las tablas, la convergencia
-               de los indicadores, el contraste sobre el hipervolumen (Friedman y
-               grupos homogéneos, por consola), los frentes de cada configuración y la
-               distribución de sus propiedades.
+               de los indicadores, los frentes de cada configuración y la
+               distribución de sus propiedades.  Sin tests estadísticos (pocas corridas).
   candidatos   el frente conjunto de las seis, de dónde sale y las 15 de mejor
                docking.  Escribe además los frentes en CSV (carpeta frentes).
 
@@ -23,10 +22,7 @@ import matplotlib.pyplot as plt
 
 from .comun import (
     FSP3_MIN,
-    _build_series_value_getter,
     _num_es,
-    compare_indicator,
-    homogeneous_groups,
     load_metrics,
     load_pareto_molecules,
     series_pool,
@@ -45,14 +41,6 @@ from .figuras import (
     plot_frente_conjunto,
     render,
 )
-
-
-METRICA = 'hypervolume'
-
-METRICA_LABEL = 'hipervolumen'
-
-MAYOR_ES_MEJOR = True
-
 
 
 def _algoritmo(label):
@@ -103,25 +91,7 @@ def comparacion(args):
     _generate_report(series, out, 'Comparación de las configuraciones', frente,
                      completo=args.completo)
 
-    labels = [s.label for s in series]
-    get = _build_series_value_getter(series)
-    res = compare_indicator(get, labels, METRICA)
-    if res is None:
-        print(f"  ⚠ sin datos de {METRICA}")
-        return
-    groups = homogeneous_groups(res, labels, res['medians'], MAYOR_ES_MEJOR)
-    print(f"\n  Friedman p = {res['p_omnibus']:.3g}; "
-          f"{sum(p['p_holm'] < 0.05 for p in res['pairs'])} de "
-          f"{len(res['pairs'])} pares significativos tras Holm")
-    for lab in sorted(labels, key=lambda l: -res['medians'][l]):
-        print(f"    {lab:16s} mediana = {res['medians'][lab]:.5f}")
-    print("  grupos: " + ' > '.join('{' + ', '.join(g) + '}' for g in groups))
-
-    if args.completo:
-        pd.DataFrame([{'a': p['a'], 'b': p['b'], 'p_raw': p['p_raw'],
-                       'p_holm': p['p_holm'], 'significativo': p['p_holm'] < 0.05}
-                      for p in res['pairs']]).to_csv(
-            os.path.join(out, 'tablas', 'tests_pares.csv'), index=False)
+    # Sin contraste estadístico: con 5 corridas por configuración no alcanza para hacer tests.
     print(f"\n✅ Comparación: {out}\n")
 
 

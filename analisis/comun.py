@@ -87,6 +87,10 @@ MARCADOR_NORMAL = 23    # un frente por panel
 # así que una divergencia es detectable en el dato y no queda muda.
 FSP3_MIN = 0.3
 
+# Rango de la restricción de logP, espejo de utils_mo.LOGP_MIN / LOGP_MAX (solo para las leyendas).
+LOGP_MIN = 1.0
+LOGP_MAX = 4.0
+
 
 # Etiqueta legible por eje.  Solo QED y SA son objetivos; Fsp3 aparece en las
 # figuras como propiedad de lo que el constraint dejó pasar, y su etiqueta lo
@@ -507,6 +511,10 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
     if len(series) < 2:
         return
 
+    usa_pchembl = tiene_pchembl(series)
+    usa_logp = any('logp' in m.columns and m['logp'].any()
+                   for m in (load_metrics(s.pop_dir) for s in series))
+
     multiobj_cfg = [
         ('Hipervolumen',     'hypervolume', '.4f', True),
         ('Espaciamiento',    'spacing',     '.4f', False),
@@ -525,6 +533,7 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
         ('Fsp3',          'mean_fsp3',   '.4f', None),
         ('Docking',       'mean_dock',   '.2f', False),
         ('pChEMBL',       'mean_pchembl', '.2f', True),    # solo si el experimento lo optimizó
+        ('logP',          'mean_logp',   '.2f', None),     # solo si hay restricción de logP
     ]
     gen_cfg = [
         ('Validez',       'validity',    '.4f', True),
@@ -534,16 +543,31 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
 
     _write_latex_comparison_table(
         series, col_values, multiobj_cfg,
-        'Comparación de indicadores multiobjetivo',
+        'Comparación de indicadores multiobjetivo.  El hipervolumen se calcula sobre los '
+        'objetivos normalizados a $[0,1]$ con punto de referencia 1.1 en cada eje; IGD$^+$ y '
+        '$\\epsilon^+$, contra el frente de referencia conjunto de todas las configuraciones',
         'tab:multiobjetivo', output_dir, '1_multiobjetivo.tex')
+
+    # La leyenda de propiedades sigue al experimento: pChEMBL (objetivo) y logP (restricción)
+    # solo aparecen si lo corrido los usó.
+    dock = 'docking (kcal/mol, energía de unión de Uni-Dock; más negativo es mejor)'
+    items = (['QED', 'SA', 'Fsp3'] + (['logP'] if usa_logp else []) + [dock]
+             + (['pChEMBL predicho por el modelo de Random Forest (más alto es mejor)']
+                if usa_pchembl else []))
+    lista = ', '.join(items[:-1]) + ' y ' + items[-1]
+    if usa_logp:
+        restr = (f'Fsp3 y logP se informan sin dirección de optimización: son restricciones '
+                 f'(Fsp3 $\\geq$ {FSP3_MIN:g} y {LOGP_MIN:g} $\\leq$ logP $\\leq$ {LOGP_MAX:g}), '
+                 f'no objetivos, y su valor dice dónde se estacionó la búsqueda respecto de '
+                 f'los umbrales')
+    else:
+        restr = (f'Fsp3 se informa sin dirección de optimización: es la restricción, no un '
+                 f'objetivo, y su valor dice dónde se estacionó la búsqueda respecto del '
+                 f'umbral ({FSP3_MIN:g})')
     _write_latex_comparison_table(
         series, col_values, prop_cfg,
-        f'Comparación de las propiedades del frente.  QED, SA, Fsp3 y '
-        f'docking (kcal/mol, energía de unión de Uni-Dock; más negativo es mejor) '
-        f'son la media del frente no dominado acumulado sobre la corrida completa.  '
-        f'Fsp3 se informa sin dirección de optimización: es la restricción, no un '
-        f'objetivo, y su valor dice dónde se estacionó la búsqueda respecto del '
-        f'umbral ({FSP3_MIN:g})',
+        f'Comparación de las propiedades del frente.  {lista} son la media del frente '
+        f'no dominado acumulado sobre la corrida completa.  {restr}',
         'tab:propiedades', output_dir, '2_propiedades.tex')
     # El alcance difiere: validez y novedad son de las evaluaciones de toda la
     # corrida; la unicidad, de las moléculas evaluadas en la última generación.
