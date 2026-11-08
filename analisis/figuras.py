@@ -668,39 +668,21 @@ def plot_kde_propiedades(series, output_dir, fname):
 
 
 # Las cuatro vistas del frente 3D: (elevación, azimut).
-VISTAS_3D = [(22, -58), (22, 32), (22, 122), (60, -58)]
-
-
-
-def plot_frente_3d(series, output_dir, fname, cruce):
-    """Frente de Pareto, en tres ejes (QED, SA y docking) con el pChEMBL predicho en el
-    color y visto desde cuatro ángulos, de la serie de ese cruce ('pcx' o 'sbx') con mayor
-    hipervolumen medio.  El frente es el de las runs de la serie juntas, con SMILES únicos
-    (ver _combined_pareto_fronts)."""
-    paretos, _, _ = _combined_pareto_fronts(series)
-    candidatas = [s for s in series
-                  if s.label in paretos and s.label.endswith(f'({cruce.upper()})')]
-    if not candidatas:
-        print("  ⚠ Sin datos de Pareto para el frente 3D")
-        return
-    mejor = max(candidatas, key=lambda s: load_metrics(s.pop_dir)['hypervolume'].mean())
-    df = paretos[mejor.label]
-    n_runs = len(glob.glob(os.path.join(mejor.pop_dir, 'run_*')))
-    _dibujar_frente_3d(df, f'Frente de Pareto de {mejor.label} ({len(df)} moléculas, {n_runs} corridas), '
-                           f'color = pChEMBL predicho', output_dir, fname)
+VISTAS_3D = [(15, -20), (40, -30), (22, 32), (30, 55)]
 
 
 
 def plot_frente_3d_conjunto(series, frente, output_dir, fname):
-    """Lo mismo para el frente conjunto de todas las series: las soluciones no dominadas de las
-    runs de todas juntas, con SMILES únicos (el frente de referencia, ver build_reference_front)."""
+    """Frente conjunto de todas las series en tres ejes (QED, SA y docking), con el pChEMBL
+    predicho en el color y visto desde cuatro ángulos: las soluciones no dominadas de las runs de
+    todas juntas, con SMILES únicos (el frente de referencia, ver build_reference_front)."""
     pf_df = frente[1] if frente else None
     if pf_df is None or pf_df.empty or 'pchembl' not in pf_df.columns:
         print("  ⚠ Sin frente conjunto para el gráfico 3D")
         return
     os.makedirs(output_dir, exist_ok=True)
-    _dibujar_frente_3d(pf_df, f'Frente de Pareto conjunto de las {len(series)} configuraciones '
-                              f'({len(pf_df)} moléculas), color = pChEMBL predicho', output_dir, fname)
+    _dibujar_frente_3d(pf_df, f'Frente de Pareto conjunto de las {len(series)} configuraciones',
+                       output_dir, fname)
 
 
 
@@ -716,7 +698,6 @@ def _dibujar_frente_3d(df, titulo, output_dir, fname):
         ax.set_xlabel('QED')
         ax.set_ylabel('SA')
         ax.set_zlabel('Docking (kcal/mol)')
-        ax.set_title(f'elev {elev}°, azim {azim}°', fontsize=10)
     fig.suptitle(titulo, fontsize=14, y=0.95)
     fig.subplots_adjust(right=0.88)
     barra = fig.colorbar(puntos, cax=fig.add_axes([0.93, 0.25, 0.015, 0.5]))
@@ -979,7 +960,8 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
     else:
         paneles = [(PANELES_MO, '1_convergencia_multiobjetivo.pdf',
                     'Convergencia de Indicadores Multiobjetivo'),
-                   (PANELES_QUIM, '2_convergencia_quimica.pdf',
+                   # La unicidad no se dibuja (queda en curvas_convergencia.csv).
+                   ([p for p in PANELES_QUIM if p[0] != 'uniqueness'], '2_convergencia_quimica.pdf',
                     'Convergencia de Indicadores Químicos')]
         for specs, fname, titulo in paneles:
             _plot_convergence_grid(series, figuras, specs, curvas, mapas_eval,
@@ -1010,7 +992,7 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
         generate_latex_comparison_tables(series, tablas, get_values)
 
     # 7. Los frentes de cada serie por separado: un panel por configuración, en
-    #    pares (una fila por algoritmo: PCX a la izquierda, SBX a la derecha), QED
+    #    pares (una fila por algoritmo: SBX a la izquierda, PCX a la derecha), QED
     #    vs SA con el docking en el color.  Con completo, también los otros colores
     #    del grid y las seis superpuestas.
     print("🧩 Frentes por configuración...")
@@ -1019,9 +1001,7 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
     print("📈 Distribución de las propiedades del frente (KDE)...")
     plot_kde_propiedades(series, figuras, "4_distribucion_propiedades.pdf")
     if tiene_pchembl(series):
-        print("🧊 Frentes en 3D con el pChEMBL en el color (uno por cruce)...")
-        for cruce in CRUCES:
-            plot_frente_3d(series, figuras, f"5_frente_3d_pchembl_{cruce}.pdf", cruce)
+        print("🧊 Frente conjunto en 3D con el pChEMBL en el color...")
         plot_frente_3d_conjunto(series, frente, os.path.join(figuras, 'frente_conjunto'),
                                 "5_frente_3d_pchembl_conjunto.pdf")
     if completo:

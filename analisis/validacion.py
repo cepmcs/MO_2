@@ -49,18 +49,22 @@ PALETA = {
 }
 
 # Estilo como en las figuras de analisis/: el color es el algoritmo y el cruce se distingue por el
-# trazo (PCX sólido, SBX rayado).  Los cuatro modelos generativos llevan colores propios.
+# trazo (SBX sólido, PCX rayado).  Los cuatro modelos generativos llevan colores propios.
 COLOR_ALGORITMO = {'NSGA2': '#E69F00', 'NSGA3': '#7B1FA2', 'AGEMOEA': '#008000'}   # = comun.COLORS
 COLOR_MODELO = {'vae': '#D62728', 'vae_ft': '#F29B9B', 'gan': '#1F77B4', 'gan_ft': '#9ECAE1'}
 
 
 def estilo(variante):
-    """(color, rayado) de una variante: 'NSGA3_sbx_vae_pch_logp' → (violeta, '//')."""
+    """(color, rayado) de una variante: 'NSGA3_pcx_vae_pch_logp' → (violeta, '//')."""
     if variante in COLOR_MODELO:
         return COLOR_MODELO[variante], None
     algoritmo, cruce = variante.split('_')[:2]
-    return COLOR_ALGORITMO[algoritmo], ('//' if cruce == 'sbx' else None)
+    return COLOR_ALGORITMO[algoritmo], ('//' if cruce == 'pcx' else None)
 
+
+# Orden de las filas de las tablas y de las barras de PoseBusters: SBX antes que PCX en cada algoritmo.
+ORDEN_TABLA = [f'{a}_{c}_vae_pch_logp' for a in ('AGEMOEA', 'NSGA2', 'NSGA3') for c in ('sbx', 'pcx')] + [
+    'vae', 'vae_ft', 'gan', 'gan_ft']
 
 # Orden de arriba hacia abajo en las distribuciones (ADMET).
 ORDEN = ['AGEMOEA_sbx_vae_pch_logp', 'NSGA2_sbx_vae_pch_logp', 'NSGA3_sbx_vae_pch_logp',
@@ -89,7 +93,7 @@ def admet():
             dens = dens / dens.max() * 0.8
             color, rayado = estilo(alg)
             ax.fill_between(x, i, i + dens, color=color, alpha=0.45, linewidth=0)
-            if rayado:                  # SBX: el mismo color, rayado y línea discontinua
+            if rayado:                  # PCX: el mismo color, rayado y línea discontinua
                 ax.fill_between(x, i, i + dens, facecolor='none', edgecolor=color, hatch=rayado,
                                 alpha=0.6, linewidth=0)
             ax.plot(x, i + dens, color=color, linewidth=1.5, linestyle='--' if rayado else '-')
@@ -104,8 +108,8 @@ def admet():
     fig.suptitle('Distribuciones KDE de las propiedades ADMET por algoritmo',
                  fontsize=16, fontweight='bold')
     # Leyenda en la esquina inferior derecha de la figura; constrained_layout le reserva el lugar.
-    fig.legend(handles=[Patch(facecolor='#999999', edgecolor='white', label='PCX'),
-                        Patch(facecolor='#999999', edgecolor='white', hatch='//', label='SBX')],
+    fig.legend(handles=[Patch(facecolor='#999999', edgecolor='white', label='SBX'),
+                        Patch(facecolor='#999999', edgecolor='white', hatch='//', label='PCX')],
                loc='outside lower right', ncol=2, frameon=True)
     plt.savefig(os.path.join(SALIDA, 'admet_ranks.pdf'))
     plt.close(fig)
@@ -145,7 +149,7 @@ def pchembl():
         dens = dens / dens.max() * 0.75
         color, rayado = estilo(alg)
         ax.fill_between(x_grid, i, i + dens, color=color, alpha=0.30, linewidth=0)
-        if rayado:                      # SBX: el mismo color, rayado y línea discontinua
+        if rayado:                      # PCX: el mismo color, rayado y línea discontinua
             ax.fill_between(x_grid, i, i + dens, facecolor='none', edgecolor=color, hatch=rayado,
                             alpha=0.55, linewidth=0)
         ax.plot(x_grid, i + dens, color=color, linewidth=1.5, linestyle='--' if rayado else '-')
@@ -159,8 +163,8 @@ def pchembl():
     ax.set_title('Distribución de pChEMBL predicho por algoritmo')
     leyenda = [Line2D([0], [0], color='black', linestyle='--', linewidth=1.5,
                       label=r'Umbral de actividad ($pChEMBL \geq 5$)'),
-               Patch(facecolor='#999999', edgecolor='white', label='PCX'),
-               Patch(facecolor='#999999', edgecolor='white', hatch='//', label='SBX')]
+               Patch(facecolor='#999999', edgecolor='white', label='SBX'),
+               Patch(facecolor='#999999', edgecolor='white', hatch='//', label='PCX')]
     ax.set_xlim(x_min, x_max + (x_max - x_min) * 0.33)      # el margen de la derecha es para las etiquetas
     ax.grid(axis='x', alpha=0.2)
     plt.tight_layout()
@@ -177,7 +181,7 @@ def posebusters():
     comprobaciones = [c for c in df.columns
                       if c not in ('archivo', 'algorithm', 'pose_index', 'PBValidity')]
     df['PBValidity'] = df[comprobaciones].eq(True).all(axis=1)       # válida = pasa todas
-    resumen = df.groupby('algorithm')['PBValidity'].agg(['count', 'mean']).reset_index()
+    resumen = df.groupby('algorithm')['PBValidity'].agg(['count', 'mean']).reindex(ORDEN_TABLA).dropna().reset_index()
     resumen['PBValidity_pct'] = resumen['mean'] * 100
 
     sns.set_theme(style='whitegrid', context='notebook')
@@ -196,8 +200,8 @@ def posebusters():
     ax.tick_params(axis='x', rotation=90)
     plt.tight_layout()
     # Leyenda en la esquina inferior derecha de la figura, en horizontal: no quita espacio al gráfico.
-    fig.legend(handles=[Patch(facecolor='#999999', edgecolor='white', label='PCX'),
-                        Patch(facecolor='#999999', edgecolor='white', hatch='//', label='SBX')],
+    fig.legend(handles=[Patch(facecolor='#999999', edgecolor='white', label='SBX'),
+                        Patch(facecolor='#999999', edgecolor='white', hatch='//', label='PCX')],
                loc='lower right', ncol=2, frameon=True)
     plt.savefig(os.path.join(SALIDA, 'posebuster.pdf'), format='pdf')
     plt.close(fig)
@@ -237,7 +241,7 @@ def tabla_admet():
     columnas = [c for c, _ in PROPIEDADES_TABLA]
     for c in columnas:
         df[c] = pd.to_numeric(df[c], errors='coerce')
-    medias = df.groupby('algoritmo')[columnas].mean().reindex([a for a in PALETA if a in set(df['algoritmo'])])
+    medias = df.groupby('algoritmo')[columnas].mean().reindex([a for a in ORDEN_TABLA if a in set(df['algoritmo'])])
     for parte, (desde, hasta) in enumerate([(0, 6), (6, len(columnas))], 1):
         cols = columnas[desde:hasta]
         _escribir_tabla(
@@ -251,7 +255,7 @@ def tabla_pchembl():
     """Estadísticos descriptivos del pChEMBL predicho por variante."""
     df = _predicciones_pchembl()
     stats = (df.groupby('algoritmo')['predicted_pchembl'].describe()
-             .reindex([a for a in PALETA if a in set(df['algoritmo'])]))
+             .reindex([a for a in ORDEN_TABLA if a in set(df['algoritmo'])]))
     columnas = ['count', 'mean', 'std', 'min', '25%', '50%', '75%', 'max']
     encabezados = ['Moléculas', 'Media', 'Desv.', 'Mín.', 'Q1', 'Mediana', 'Q3', 'Máx.']
     _escribir_tabla(
@@ -319,7 +323,7 @@ def tabla_benchmarks():
 
     filas = []
     for alg in ('NSGA2', 'NSGA3', 'AGEMOEA'):
-        for cruce in ('pcx', 'sbx'):
+        for cruce in ('sbx', 'pcx'):
             c = _corridas(alg, cruce)
             filas.append((f'{nombres[alg]} ({cruce.upper()})', c.mean().to_dict(), c.std().to_dict()))
     for carpeta, nombre, prefijo in REFERENCIAS:

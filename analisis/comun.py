@@ -521,7 +521,6 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
         ('IGD$^+$',          'igd_plus',    '.3f', False),
         (r'$\epsilon^+$',    'epsilon',     '.3f', False),
         ('Tamaño de Pareto', 'n_pareto',    '.1f', True),
-        ('Dockeadas',        'n_docked',    '.0f', None),
         ('Tiempo (s)',       'time_sec',    '.1f', False),
     ]
     # Fsp3 entra con higher_better=None: se reporta pero no se compite por ella,
@@ -583,7 +582,7 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
 # ─── Construcción de series ─────────────────────────────────────────────────
 
 # Orden de los cruces en tablas y leyendas.
-CRUCES = ['pcx', 'sbx']
+CRUCES = ['sbx', 'pcx']
 
 
 
@@ -601,8 +600,8 @@ def cfg_dir(results, alg, cruce):
 
 
 # Trazo y relleno de cada cruce: el color lo pone el algoritmo.
-ESTILO_CRUCE = {'pcx': dict(linestyle='-', hatch=None, marker='o'),
-                'sbx': dict(linestyle='--', hatch='//', marker='^')}
+ESTILO_CRUCE = {'sbx': dict(linestyle='-', hatch=None, marker='^'),
+                'pcx': dict(linestyle='--', hatch='//', marker='o')}
 
 
 
