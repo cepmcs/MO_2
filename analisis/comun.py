@@ -516,10 +516,10 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
                    for m in (load_metrics(s.pop_dir) for s in series))
 
     multiobj_cfg = [
-        ('Hipervolumen',     'hypervolume', '.4f', True),
-        ('Espaciamiento',    'spacing',     '.4f', False),
-        ('IGD$^+$',          'igd_plus',    '.4f', False),
-        (r'$\epsilon^+$',    'epsilon',     '.4f', False),
+        ('Hipervolumen',     'hypervolume', '.3f', True),
+        ('Espaciamiento',    'spacing',     '.3f', False),
+        ('IGD$^+$',          'igd_plus',    '.3f', False),
+        (r'$\epsilon^+$',    'epsilon',     '.3f', False),
         ('Tamaño de Pareto', 'n_pareto',    '.1f', True),
         ('Dockeadas',        'n_docked',    '.0f', None),
         ('Tiempo (s)',       'time_sec',    '.1f', False),
@@ -528,17 +528,17 @@ def generate_latex_comparison_tables(series, output_dir, col_values):
     # así que la tabla no debe poner en negrita a «la mejor».  El resto de las
     # columnas sí tienen dirección y la conservan.
     prop_cfg = [
-        ('QED',           'mean_qed',    '.4f', True),
-        ('SA',            'mean_sa',     '.2f', False),
-        ('Fsp3',          'mean_fsp3',   '.4f', None),
-        ('Docking',       'mean_dock',   '.2f', False),
-        ('pChEMBL',       'mean_pchembl', '.2f', True),    # solo si el experimento lo optimizó
-        ('logP',          'mean_logp',   '.2f', None),     # solo si hay restricción de logP
+        ('QED',           'mean_qed',    '.3f', True),
+        ('SA',            'mean_sa',     '.3f', False),
+        ('Fsp3',          'mean_fsp3',   '.3f', None),
+        ('Docking',       'mean_dock',   '.3f', False),
+        ('pChEMBL',       'mean_pchembl', '.3f', True),    # solo si el experimento lo optimizó
+        ('logP',          'mean_logp',   '.3f', None),     # solo si hay restricción de logP
     ]
     gen_cfg = [
-        ('Validez',       'validity',    '.4f', True),
-        ('Novedad',       'novelty',     '.4f', True),
-        ('Unicidad',      'uniqueness',  '.4f', True),
+        ('Validez',       'validity',    '.3f', True),
+        ('Novedad',       'novelty',     '.3f', True),
+        ('Unicidad',      'uniqueness',  '.3f', True),
     ]
 
     _write_latex_comparison_table(

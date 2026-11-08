@@ -161,10 +161,10 @@ def moleculas(args, out_dir):
                  f'(todas cumplen Fsp3 ≥ {FSP3_MIN:g})',
                  fontsize=14, fontweight='bold', y=0.995)
     plt.tight_layout(rect=[0, 0, 1, 0.97], h_pad=1.5)
-    png = os.path.join(out_dir, '6_moleculas_representativas.png')
+    png = os.path.join(out_dir, '6_moleculas_representativas.pdf')
     plt.savefig(png, dpi=200, bbox_inches='tight', facecolor='white')
     plt.close(fig)
-    print("  ✓ 6_moleculas_representativas.png")
+    print("  ✓ 6_moleculas_representativas.pdf")
 
     sel.to_csv(os.path.join(out_dir, '6_moleculas_representativas.csv'), index=False)
     print("  ✓ 6_moleculas_representativas.csv")
@@ -240,7 +240,7 @@ def candidatos(args):
                              etiqueta='Configuración', nota=_nota_pool(series))
     # Se agrupa por algoritmo: lo que interesa es quién puso cada molécula, no de
     # qué operador salió cada región.
-    plot_frente_conjunto(series, figuras, '5_frente_conjunto.png', pf_df,
+    plot_frente_conjunto(series, figuras, '5_frente_conjunto.pdf', pf_df,
                          grupo_de=_algoritmo)
 
     moleculas(args, figuras)

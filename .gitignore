@@ -99,3 +99,6 @@ justificacion_operadores.md
 
 # Benchmarks: se ignora todo hasta que esté listo
 benchmarks/
+
+# Carpeta de validación del tutor (cuadernos, poses, frentes y modelos; 345 MB)
+ANALISIS_MOLECULAS/

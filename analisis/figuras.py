@@ -33,6 +33,7 @@ from .comun import (
     generate_statistical_table,
     get_color,
     load_convergence_data,
+    load_metrics,
     load_pareto_molecules,
     tiene_pchembl,
     unicas,
@@ -632,8 +633,12 @@ def plot_kde_propiedades(series, output_dir, fname):
              if all(p[0] in df.columns for df in paretos.values())]
     nombres = {'qed': 'QED', 'sa': 'SA', 'dock': 'docking', 'pchembl': 'pChEMBL'}
     lista = [nombres[p[0]] for p in props]
-    fig, axes = plt.subplots(1, len(props), figsize=(6.4 * len(props), 5.2), squeeze=False)
+    # Cuadrícula de dos columnas: con cuatro propiedades, QED y SA arriba y docking y pChEMBL abajo.
+    filas = -(-len(props) // 2)
+    fig, axes = plt.subplots(filas, 2, figsize=(12.8, 5.2 * filas), squeeze=False)
     axes = axes.flatten()
+    for ax in axes[len(props):]:
+        ax.set_visible(False)
     for ax, (col, etiqueta, (lo, hi)) in zip(axes, props):
         todo = np.concatenate([df[col].values for df in paretos.values()])
         pad = 0.05 * (todo.max() - todo.min())
@@ -647,25 +652,76 @@ def plot_kde_propiedades(series, output_dir, fname):
             color = get_color(s.color_key, idx)
             ax.plot(x, y, color=color, linestyle=s.linestyle, linewidth=2.2,
                     label=s.label, zorder=3)
-            # Solo las discontinuas (SBX) llevan sombra: seis rellenos superpuestos
-            # se mezclan en un gris, y así el cruce se distingue también por el
-            # relleno.
-            if s.linestyle != '-':
-                ax.fill_between(x, y, color=color, alpha=0.08, linewidth=0, zorder=2)
-            # La mediana, con el marcador del cruce, sobre el eje.
-            ax.plot(np.median(valores), 0, marker=s.marker, color=color, markersize=9,
-                    markeredgecolor='white', markeredgewidth=0.8, linestyle='none',
-                    clip_on=False, zorder=5)
         ax.set_xlabel(etiqueta)
         ax.set_ylabel('Densidad')
         ax.grid(True, linestyle='--', alpha=0.3)
-        ax.set_ylim(-0.025 * ax.get_ylim()[1], None)
+        ax.set_ylim(0, None)
     axes[0].legend(frameon=True, fontsize=10)
     fig.suptitle(f'Distribución de {", ".join(lista[:-1])} y {lista[-1]} en el frente de cada '
-                 'configuración (los marcadores sobre el eje son la mediana)',
+                 'configuración',
                  fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  ✓ {fname}")
+
+
+
+# Las cuatro vistas del frente 3D: (elevación, azimut).
+VISTAS_3D = [(22, -58), (22, 32), (22, 122), (60, -58)]
+
+
+
+def plot_frente_3d(series, output_dir, fname, cruce):
+    """Frente de Pareto, en tres ejes (QED, SA y docking) con el pChEMBL predicho en el
+    color y visto desde cuatro ángulos, de la serie de ese cruce ('pcx' o 'sbx') con mayor
+    hipervolumen medio.  El frente es el de las runs de la serie juntas, con SMILES únicos
+    (ver _combined_pareto_fronts)."""
+    paretos, _, _ = _combined_pareto_fronts(series)
+    candidatas = [s for s in series
+                  if s.label in paretos and s.label.endswith(f'({cruce.upper()})')]
+    if not candidatas:
+        print("  ⚠ Sin datos de Pareto para el frente 3D")
+        return
+    mejor = max(candidatas, key=lambda s: load_metrics(s.pop_dir)['hypervolume'].mean())
+    df = paretos[mejor.label]
+    n_runs = len(glob.glob(os.path.join(mejor.pop_dir, 'run_*')))
+    _dibujar_frente_3d(df, f'Frente de Pareto de {mejor.label} ({len(df)} moléculas, {n_runs} corridas), '
+                           f'color = pChEMBL predicho', output_dir, fname)
+
+
+
+def plot_frente_3d_conjunto(series, frente, output_dir, fname):
+    """Lo mismo para el frente conjunto de todas las series: las soluciones no dominadas de las
+    runs de todas juntas, con SMILES únicos (el frente de referencia, ver build_reference_front)."""
+    pf_df = frente[1] if frente else None
+    if pf_df is None or pf_df.empty or 'pchembl' not in pf_df.columns:
+        print("  ⚠ Sin frente conjunto para el gráfico 3D")
+        return
+    os.makedirs(output_dir, exist_ok=True)
+    _dibujar_frente_3d(pf_df, f'Frente de Pareto conjunto de las {len(series)} configuraciones '
+                              f'({len(pf_df)} moléculas), color = pChEMBL predicho', output_dir, fname)
+
+
+
+def _dibujar_frente_3d(df, titulo, output_dir, fname):
+    """Un frente en tres ejes (QED, SA y docking), color = pChEMBL, visto desde cuatro ángulos."""
+    fig = plt.figure(figsize=(15, 12))
+    vmin, vmax = df['pchembl'].min(), df['pchembl'].max()
+    for k, (elev, azim) in enumerate(VISTAS_3D, 1):
+        ax = fig.add_subplot(2, 2, k, projection='3d')
+        puntos = ax.scatter(df['qed'], df['sa'], df['dock'], c=df['pchembl'], cmap='viridis',
+                            vmin=vmin, vmax=vmax, s=14, alpha=0.75, linewidths=0)
+        ax.view_init(elev=elev, azim=azim)
+        ax.set_xlabel('QED')
+        ax.set_ylabel('SA')
+        ax.set_zlabel('Docking (kcal/mol)')
+        ax.set_title(f'elev {elev}°, azim {azim}°', fontsize=10)
+    fig.suptitle(titulo, fontsize=14, y=0.95)
+    fig.subplots_adjust(right=0.88)
+    barra = fig.colorbar(puntos, cax=fig.add_axes([0.93, 0.25, 0.015, 0.5]))
+    barra.set_label('pChEMBL predicho')
+    plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
 
@@ -921,9 +977,9 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
         print("  ⚠ sin n_eval en convergence.csv: se omiten las curvas de "
               "convergencia (el eje de evaluaciones sale de ahí)")
     else:
-        paneles = [(PANELES_MO, '1_convergencia_multiobjetivo.png',
+        paneles = [(PANELES_MO, '1_convergencia_multiobjetivo.pdf',
                     'Convergencia de Indicadores Multiobjetivo'),
-                   (PANELES_QUIM, '2_convergencia_quimica.png',
+                   (PANELES_QUIM, '2_convergencia_quimica.pdf',
                     'Convergencia de Indicadores Químicos')]
         for specs, fname, titulo in paneles:
             _plot_convergence_grid(series, figuras, specs, curvas, mapas_eval,
@@ -938,12 +994,12 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
         if completo:
             print("📊 Boxplots multiobjetivo (HV, Espaciamiento, IGD+, ε+, Pareto)...")
             plot_boxplots(series, figuras, get_values, BOXPLOT_MO_CONFIGS,
-                          "cajas_multiobjetivo.png",
+                          "cajas_multiobjetivo.pdf",
                           "Distribución de Indicadores Multiobjetivo")
             print("📊 Boxplots químicos (QED, SA, Docking, Fsp3, Validez, "
                   "Unicidad, Novedad)...")
             plot_boxplots(series, figuras, get_values, BOXPLOT_CHEM_CONFIGS,
-                          "cajas_quimicas.png",
+                          "cajas_quimicas.pdf",
                           "Distribución de Indicadores Químicos")
 
             print("📋 Tabla estadística...")
@@ -958,14 +1014,20 @@ def _generate_report(series, out_dir, report_label, frente=None, completo=False)
     #    vs SA con el docking en el color.  Con completo, también los otros colores
     #    del grid y las seis superpuestas.
     print("🧩 Frentes por configuración...")
-    plot_pareto_qed_sa_grid(series, figuras, "3_frentes_por_configuracion.png",
+    plot_pareto_qed_sa_grid(series, figuras, "3_frentes_por_configuracion.pdf",
                             color_by='dock', ncols=len(CRUCES))
     print("📈 Distribución de las propiedades del frente (KDE)...")
-    plot_kde_propiedades(series, figuras, "4_distribucion_propiedades.png")
+    plot_kde_propiedades(series, figuras, "4_distribucion_propiedades.pdf")
+    if tiene_pchembl(series):
+        print("🧊 Frentes en 3D con el pChEMBL en el color (uno por cruce)...")
+        for cruce in CRUCES:
+            plot_frente_3d(series, figuras, f"5_frente_3d_pchembl_{cruce}.pdf", cruce)
+        plot_frente_3d_conjunto(series, frente, os.path.join(figuras, 'frente_conjunto'),
+                                "5_frente_3d_pchembl_conjunto.pdf")
     if completo:
         for modo in GRID_COLOR_MODES:
             if modo != 'dock':
-                plot_pareto_qed_sa_grid(series, figuras, f"grid_qed_sa_{modo}.png",
+                plot_pareto_qed_sa_grid(series, figuras, f"grid_qed_sa_{modo}.pdf",
                                         color_by=modo, ncols=len(CRUCES))
         if len(series) >= 2:
-            plot_pareto_comparison(series, figuras, "frentes_superpuestos.png")
+            plot_pareto_comparison(series, figuras, "frentes_superpuestos.pdf")
