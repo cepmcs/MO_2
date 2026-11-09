@@ -244,8 +244,6 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
     for ax in axes[n_plots:]:
         ax.set_visible(False)
 
-    fig.suptitle(f'{suptitle}',
-                 fontsize=14, fontweight='bold', y=1.02)
     # Leyenda única compartida al pie de la figura
     if legend_handles:
         fig.legend(legend_handles, legend_labels, loc='lower center',
@@ -657,9 +655,6 @@ def plot_kde_propiedades(series, output_dir, fname):
         ax.grid(True, linestyle='--', alpha=0.3)
         ax.set_ylim(0, None)
     axes[0].legend(frameon=True, fontsize=10)
-    fig.suptitle(f'Distribución de {", ".join(lista[:-1])} y {lista[-1]} en el frente de cada '
-                 'configuración',
-                 fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
@@ -698,7 +693,6 @@ def _dibujar_frente_3d(df, titulo, output_dir, fname):
         ax.set_xlabel('QED')
         ax.set_ylabel('SA')
         ax.set_zlabel('Docking (kcal/mol)')
-    fig.suptitle(titulo, fontsize=14, y=0.95)
     fig.subplots_adjust(right=0.88)
     barra = fig.colorbar(puntos, cax=fig.add_axes([0.93, 0.25, 0.015, 0.5]))
     barra.set_label('pChEMBL predicho')
@@ -838,12 +832,6 @@ def plot_pareto_qed_sa_grid(series, output_dir, fname, color_by='nruns', ncols=3
             cbar.set_ticks(sorted({1, hi} | set(range(paso, hi, paso)) - {0}))
         cbar.set_label(modo['label'], fontsize=11)
 
-    title = 'Frentes de Pareto QED vs SA por configuración'
-    # Qué codifica el color no va en el título: lo dice la colorbar, y el detalle
-    # va en el pie de figura del documento.
-
-    fig.suptitle(title,
-                 fontsize=14, fontweight='bold')
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")

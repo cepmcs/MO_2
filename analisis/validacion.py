@@ -105,8 +105,6 @@ def admet():
         ax.grid(axis='x', linestyle='--', alpha=0.25)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-    fig.suptitle('Distribuciones KDE de las propiedades ADMET por algoritmo',
-                 fontsize=16, fontweight='bold')
     # Leyenda en la esquina inferior derecha de la figura; constrained_layout le reserva el lugar.
     fig.legend(handles=[Patch(facecolor='#999999', edgecolor='white', label='SBX'),
                         Patch(facecolor='#999999', edgecolor='white', hatch='//', label='PCX')],
@@ -160,7 +158,6 @@ def pchembl():
     ax.set_yticks([])
     ax.set_xlabel(r'$pChEMBL$ predicho')
     ax.set_ylabel('')
-    ax.set_title('Distribución de pChEMBL predicho por algoritmo')
     leyenda = [Line2D([0], [0], color='black', linestyle='--', linewidth=1.5,
                       label=r'Umbral de actividad ($pChEMBL \geq 5$)'),
                Patch(facecolor='#999999', edgecolor='white', label='SBX'),
@@ -193,7 +190,6 @@ def posebusters():
     ax.set_xticklabels(resumen['algorithm'].str.replace('_vae_pch_logp', '', regex=False))
     ax.set_xlabel('Método')
     ax.set_ylabel('Poses válidas (%)')
-    ax.set_title('PoseBusters validity en el top 100 de cada método')
     ax.set_ylim(0, 110)
     for contenedor in ax.containers:
         ax.bar_label(contenedor, fmt='%.1f%%', padding=3)
