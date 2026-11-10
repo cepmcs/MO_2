@@ -1,10 +1,6 @@
 """
-Predictor de pChEMBL para MRP1: Random Forest sobre huellas de Morgan (radio 2, 2048 bits),
-entregado por el tutor (data/random_forest_ic50.pkl).  pChEMBL = -log10(IC50 en M).
+Predictor de pChEMBL para MRP1: Random Forest sobre huellas de Morgan 
 
-El modelo es un bosque de regresión: su salida es un promedio de valores de hojas, así que
-nunca sale del rango de las hojas (4.02 a 8.41).  PCHEMBL_MIN y PCHEMBL_MAX son esas cotas
-redondeadas, con las que utils_mo normaliza el hipervolumen.
 """
 
 import os

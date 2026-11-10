@@ -1,6 +1,4 @@
 """
-Orquestador de los experimentos: por defecto exp4, QED(↑) SA(↓) Docking(↓) | Fsp3 ≥ 0.3.
-Con --exp-name, --vae, --pchembl y --logp corre las variantes (ver experimento.py).
 """
 
 import os

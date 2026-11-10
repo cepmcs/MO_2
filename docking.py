@@ -1,12 +1,6 @@
 """
 Docking de exp4: puntaje por molécula.
 
-El puntaje es la energía de unión (kcal/mol, menor es mejor) que calcula Uni-Dock en
-modo balance.  DOCK_BEST y DOCK_WORST son las cotas con que utils_mo normaliza el
-hipervolumen.
-
-Todo corre en el entorno del optimizador (RDKit y meeko).  Del entorno de Uni-Dock
-(UNIDOCK_PREFIX) solo se usa el ejecutable unidock.
 """
 
 import os

@@ -1,12 +1,7 @@
 """
 Los tres algoritmos de la comparación (NSGA-II, NSGA-III y AGE-MOEA) y el cuerpo
-de una corrida.
+de una ejecucion.
 
-Para agregar un algoritmo se suma a la tabla ALGORITMOS; si necesita argumentos
-propios, como NSGA-III con sus ref_dirs, se agregan en correr.  Las perillas son
-las mismas en los tres: --crossover --cx_prob --mut_prob (la mutación es siempre PM).
-
-Corre UNA configuración por vez; el grid lo lanza run_experiments.py.
 """
 import argparse
 import os
