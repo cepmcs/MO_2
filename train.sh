@@ -20,8 +20,6 @@
 #  La etapa 1 corre acá para no bajar el grid entero y volver al cluster a buscar
 #  las ganadoras.  El grid no entra en las 12 h de la partición: los jobs
 #  intermedios terminan sin exportar y el tar sale cuando está completo.
-#
-#  Las baselines NO están acá: se corren y se analizan en el PC.
 # ══════════════════════════════════════════════════════════════════════════════
 
 source /etc/profile

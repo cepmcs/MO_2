@@ -1,14 +1,13 @@
 """
 Línea de comandos del análisis.
 
-Las cinco etapas encadenadas (cada una lee lo que dejó la anterior) más las
+Las etapas encadenadas (cada una lee lo que dejó la anterior) más las
 figuras comparativas, que son el otro entregable y no dependen de las etapas.
 
   etapa1     resultados/grid/all_metrics.csv          →  plots/hiperparametros/
   etapa2     resultados/winners/                      →  plots/operadores/
   etapa3     resultados/finalistas/                   →  plots/comparacion_final/
                                                       +  plots/frente_conjunto/
-  etapa4     resultados/finalistas/ + .../baselines/  →  plots/baselines/
   moleculas  resultados/finalistas/                   →  plots/frente_conjunto/
   figuras    resultados/finalistas/                    →  plots/comparacion_final/
 
@@ -16,7 +15,6 @@ Uso:
     python -m analisis etapa1 [--algorithms NSGA2 CMOPSO] [--metric spacing]
     python -m analisis etapa2 [--algorithms NSGA2 MOEAD] [--metric igd_plus]
     python -m analisis etapa3 [--finalistas otra_carpeta]
-    python -m analisis etapa4 [--metric igd_plus]
     python -m analisis moleculas [--out figura.png]
     python -m analisis figuras [--algorithms NSGA2 NSGA3]
 """
@@ -25,15 +23,14 @@ import argparse
 import os
 
 from .comun import (
-    ALGORITHM_ORDER, BASELINES_DIR, FINALISTAS_DIR, METRICS_CSV, OUT_ALGORITMOS,
-    OUT_BASELINES, OUT_FRENTE, OUT_HP, OUT_OPERADORES, PLOTS_DIR, RESULTADOS_DIR,
+    ALGORITHM_ORDER, FINALISTAS_DIR, METRICS_CSV, OUT_ALGORITMOS,
+    OUT_FRENTE, OUT_HP, OUT_OPERADORES, PLOTS_DIR, RESULTADOS_DIR,
     WINNERS_DIR, _has_runs, build_finalist_series, winner_cfg_dir,
 )
 from .figuras import _generate_report
 from .etapa1 import HP_METRICS, etapa1
 from .etapa2 import OP_INDICATORS, etapa2
 from .etapa3 import MOLECULAS_OUT, etapa3, moleculas
-from .etapa4 import etapa4
 
 
 # ─── Las figuras comparativas ────────────────────────────────────────────────
@@ -65,7 +62,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Análisis de los experimentos multiobjetivo.")
     sub = ap.add_subparsers(dest='etapa', required=True,
-                            metavar='etapa1|etapa2|etapa3|etapa4|moleculas|figuras')
+                            metavar='etapa1|etapa2|etapa3|moleculas|figuras')
     fmt = argparse.ArgumentDefaultsHelpFormatter
 
     p1 = sub.add_parser('etapa1', formatter_class=fmt,
@@ -98,15 +95,6 @@ def main():
     p3.add_argument('--winners', default=WINNERS_DIR,
                     help="De acá salen las dos ramas de cruce del pool.")
     p3.set_defaults(func=etapa3)
-
-    p4 = sub.add_parser('etapa4', formatter_class=fmt,
-                        help="Baselines vs algoritmos multiobjetivo.")
-    p4.add_argument('--finalistas', default=FINALISTAS_DIR)
-    p4.add_argument('--baselines', default=BASELINES_DIR)
-    p4.add_argument('--out', default=OUT_BASELINES)
-    p4.add_argument('--metric', default='hypervolume')
-    p4.add_argument('--metric-label', default='hipervolumen')
-    p4.set_defaults(func=etapa4)
 
     pm = sub.add_parser('moleculas', formatter_class=fmt,
                         help="Moléculas representativas del frente de cada "

@@ -67,7 +67,6 @@ ALGORITHM_ORDER = ['NSGA2', 'NSGA3', 'MOEAD', 'AGEMOEA', 'CMOPSO']
 
 
 # Nombres de presentación para los captions de las figuras: solo algoritmos.
-# DISPLAY, más abajo, es el de las etapas e incluye las baselines.
 DISPLAY_ALG = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
                'AGEMOEA': 'AGE-MOEA', 'CMOPSO': 'CMOPSO'}
 
@@ -584,7 +583,6 @@ def build_operator_series_winners(alg, winners_dir, combos=None):
 #                sus runs completas (incluido all_molecules.csv.gz).
 #   finalistas/  symlinks relativos a la ganadora de cada algoritmo en winners/.
 #                Lo armás vos en el PC, después de la etapa 2.
-#   baselines/   NO viene del cluster: las baselines se corren y se analizan acá.
 RESULTADOS_DIR = os.path.join(ROOT_DIR, "results", "main")
 
 METRICS_CSV    = os.path.join(RESULTADOS_DIR, "grid", "all_metrics.csv")
@@ -593,15 +591,11 @@ WINNERS_DIR    = os.path.join(RESULTADOS_DIR, "winners")
 
 FINALISTAS_DIR = os.path.join(RESULTADOS_DIR, "finalistas")
 
-BASELINES_DIR  = os.path.join(RESULTADOS_DIR, "baselines")
-
-OUT_HP         = os.path.join(PLOTS_DIR, "hiperparametros")
+OUT_HP        = os.path.join(PLOTS_DIR, "hiperparametros")
 
 OUT_OPERADORES = os.path.join(PLOTS_DIR, "operadores")
 
 OUT_ALGORITMOS = os.path.join(PLOTS_DIR, "comparacion_final")
-
-OUT_BASELINES  = os.path.join(PLOTS_DIR, "baselines")
 
 # El frente conjunto va aparte: no compara algoritmos entre sí como el resto de
 # la etapa 3, sino que caracteriza qué moléculas sobreviven al unirlos y de dónde
@@ -611,9 +605,7 @@ OUT_FRENTE     = os.path.join(PLOTS_DIR, "frente_conjunto")
 
 # Nombres para el documento (los directorios usan la forma corta).
 DISPLAY = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'MOEAD': 'MOEA/D',
-           'AGEMOEA': 'AGE-MOEA', 'CMOPSO': 'CMOPSO',
-           'RANDOM': 'Aleatorio', 'WEIGHTED_GA': 'GA ponderado',
-           'SCREENING': 'Cribado MOSES', 'HILL_CLIMBER': 'Escalador'}
+           'AGEMOEA': 'AGE-MOEA', 'CMOPSO': 'CMOPSO'}
 
 
 # El algoritmo de enjambre.  Se nombra una sola vez: al no tener operadores de
