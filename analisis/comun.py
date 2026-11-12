@@ -42,9 +42,10 @@ plt.rcParams.update({
 # El paquete cuelga de la raíz del repo, de ahí el dirname doble.
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Cada experimento publica en su subcarpeta (plots/main, plots/exp3, plots/exp4),
-# igual que en results/.
-PLOTS_DIR = os.path.join(ROOT_DIR, "plots", "exp4")
+# Cada experimento publica en su subcarpeta (plots/main, plots/exp5), igual que en
+# results/.  Por defecto, la variante de referencia de exp5; las otras se piden con
+# --results y --out.
+PLOTS_DIR = os.path.join(ROOT_DIR, "plots", "exp5", "exp5_vae_pchembl_logp")
 
 
 # Paleta de colores distinguibles.  Para algoritmos se usa el nombre como clave;
@@ -618,17 +619,17 @@ def series_pool(results):
 
 
 
-# Los resultados de este experimento viven en results/exp4, con una
-# configuración por algoritmo y cruce:
+# Los resultados de la variante de referencia viven en results/exp5/exp5_vae_pchembl_logp,
+# con una configuración por algoritmo y cruce:
 #   <ALG>/<cruce>_<mutacion>/<config>/run_XX/
-RESULTADOS_DIR = os.path.join(ROOT_DIR, "results", "exp4")
+RESULTADOS_DIR = os.path.join(ROOT_DIR, "results", "exp5", "exp5_vae_pchembl_logp")
 
 # El análisis son dos comandos sobre las seis configuraciones juntas, que escriben
 # en la misma carpeta (tablas/, figuras/ y frentes/):
 #   comparacion  tablas, cajas, convergencia, frentes y el contraste entre todos
 #                los pares
 #   candidatos   frente conjunto y moléculas representativas
-OUT_DIR = os.path.join(PLOTS_DIR, "resultados")
+OUT_DIR = PLOTS_DIR
 
 
 
