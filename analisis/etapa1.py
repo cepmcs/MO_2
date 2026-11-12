@@ -356,7 +356,7 @@ def plot_efectos_hp(df, metric, out_dir):
                    ancho, color=EFECTO_COLOR[cx], hatch=EFECTO_TRAMA[mu],
                    edgecolor='white', linewidth=0.6, zorder=3)
         ax.set_xticks(x)
-        ax.set_xticklabels([e for _, e in EFECTO_F_GA], fontsize=9)
+        ax.set_xticklabels([e for _, e in EFECTO_F_GA], fontsize=12)
         ax.set_title(DISPLAY.get(alg, alg), fontsize=11, fontweight='bold', pad=8)
 
     if con_pso:
@@ -367,7 +367,7 @@ def plot_efectos_hp(df, metric, out_dir):
                color=EFECTO_COLOR['pso'], edgecolor='white', linewidth=0.6,
                zorder=3)
         ax.set_xticks(x)
-        ax.set_xticklabels([e for _, e in EFECTO_F_PSO], fontsize=9)
+        ax.set_xticklabels([e for _, e in EFECTO_F_PSO], fontsize=12)
         ax.set_title(DISPLAY.get(PSO_ALG, PSO_ALG), fontsize=11,
                      fontweight='bold', pad=8)
 

@@ -98,3 +98,6 @@ justificacion_operadores.md
 # Benchmarks y resultados del exp5
 benchmarks/
 resultados_exp5/
+
+# Análisis de moléculas del tutor (datos y notebooks, no es código del proyecto)
+ANALISIS_MOLECULAS/
