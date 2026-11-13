@@ -451,7 +451,7 @@ def write_selection_summary(per_alg, metric, out_dir):
         lines.append(
             f"{alg_cell} & {_latex_escape(r['operators']) or '---'} & "
             f"{cfg} & {_num(r['avg_rank'], 2)} & "
-            f"{_num(r['mean'], 4)} $\\pm$ {_num(r['std'], 4)} \\\\")
+            f"{_num(r['mean'], 3)} $\\pm$ {_num(r['std'], 3)} \\\\")
     lines += [r'\bottomrule', r'\end{tabular}', r'\end{table}']
     _write_tex(lines, os.path.join(out_dir, 'selected_configs.tex'))
 

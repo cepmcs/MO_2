@@ -83,7 +83,7 @@ def write_tabla_operadores(res, groups, labels, alg, out_dir, get_values, col):
     campeon = next((l for l in top if l.endswith(f'_{MUT_STD}')),
                    max(top, key=lambda l: res['medians'][l]))
     vals = {l: np.asarray(get_values(l, col), dtype=float) for l in labels}
-    medianas = ', '.join(f'{_latex_escape(l)} {_num(res["medians"][l], 4)}'
+    medianas = ', '.join(f'{_latex_escape(l)} {_num(res["medians"][l], 3)}'
                          for l in orden)
 
     lines = [

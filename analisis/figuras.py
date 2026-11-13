@@ -922,7 +922,7 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
             ax.set_xlabel(f"QED {m['qed']:.3f}  ·  SA {m['sa']:.2f}  "
                           f"·  Fsp3 {m['fsp3']:.2f}", fontsize=10, labelpad=3)
             filas.append({'algoritmo': alg, 'combo': s.label, 'puesto': j + 1,
-                          'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
+                          'qed': round(m['qed'], 3), 'sa': round(m['sa'], 2),
                           'fsp3': round(m['fsp3'], 3),
                           'semillas': int(semillas.get(m['smiles'], 0)),
                           'smiles': m['smiles']})

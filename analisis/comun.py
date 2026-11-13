@@ -474,10 +474,10 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
         return
 
     multiobj_cfg = [
-        ('Hipervolumen',     'hypervolume', '.4f', True),
-        ('Espaciamiento',    'spacing',     '.4f', False),
-        ('IGD$^+$',          'igd_plus',    '.4f', False),
-        (r'$\epsilon^+$',    'epsilon',     '.4f', False),
+        ('Hipervolumen',     'hypervolume', '.3f', True),
+        ('Espaciamiento',    'spacing',     '.3f', False),
+        ('IGD$^+$',          'igd_plus',    '.3f', False),
+        (r'$\epsilon^+$',    'epsilon',     '.3f', False),
         ('Tamaño de Pareto', 'n_pareto',    '.1f', True),
         ('Tiempo (s)',       'time_sec',    '.1f', False),
     ]
@@ -485,13 +485,13 @@ def generate_latex_comparison_tables(series, pop_size, output_dir, col_values):
     # así que la tabla no debe poner en negrita a «la mejor».  El resto de las
     # columnas sí tienen dirección y la conservan.
     chem_cfg = [
-        ('QED',           'mean_qed',    '.4f', True),
+        ('QED',           'mean_qed',    '.3f', True),
         ('SA',            'mean_sa',     '.2f', False),
-        ('Factibilidad',  'feasibility', '.4f', True),
-        ('Fsp3',          'mean_fsp3',   '.4f', None),
-        ('Validez',       'validity',    '.4f', True),
-        ('Unicidad',      'uniqueness',  '.4f', True),
-        ('Novedad',       'novelty',     '.4f', True),
+        ('Factibilidad',  'feasibility', '.3f', True),
+        ('Fsp3',          'mean_fsp3',   '.3f', None),
+        ('Validez',       'validity',    '.3f', True),
+        ('Unicidad',      'uniqueness',  '.3f', True),
+        ('Novedad',       'novelty',     '.3f', True),
     ]
 
     # El contexto sale de pop_size, que es la etiqueta del reporte: el nombre

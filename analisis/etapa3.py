@@ -433,7 +433,7 @@ def moleculas(args):
     for alg, puntos in seleccion.items():
         for nombre, m in puntos:
             rows.append({'algoritmo': DISPLAY.get(alg, alg), 'punto': nombre,
-                         'qed': round(m['qed'], 4), 'sa': round(m['sa'], 2),
+                         'qed': round(m['qed'], 3), 'sa': round(m['sa'], 2),
                          'fsp3': round(m['fsp3'], 3), 'smiles': m['smiles']})
     out = pd.DataFrame(rows)
     base = os.path.splitext(args.out)[0]
