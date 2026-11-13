@@ -211,9 +211,7 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
     n_plots = len(panels)
     ncols = min(3, n_plots)
     nrows = math.ceil(n_plots / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 5.5 * nrows),
-                             squeeze=False)
-    axes = axes.flatten()
+    fig, axes = _ejes_centrados(n_plots, ncols, figsize=(6 * ncols, 5.5 * nrows))
 
     # Recolectar handles/labels para leyenda compartida (sin duplicados)
     legend_handles, legend_labels = [], []
@@ -234,11 +232,6 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
         ax.set_title(title)
         ax.set_ylim(bottom=0)
 
-    for ax in axes[n_plots:]:
-        ax.set_visible(False)
-
-    fig.suptitle(f'{suptitle}',
-                 fontsize=14, fontweight='bold', y=1.02)
     # Leyenda única compartida al pie de la figura
     if legend_handles:
         fig.legend(legend_handles, legend_labels, loc='lower center',
@@ -342,9 +335,6 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
     for ax in axes[n_plots:]:
         ax.set_visible(False)
 
-    fig.suptitle(f'{suptitle}',
-                 fontsize=14, fontweight='bold', y=1.02)
-                 
     legend_handles = []
     legend_labels = []
     # Usamos series original para que la leyenda esté en el orden de definición
@@ -515,10 +505,6 @@ def _leyenda_y_titulo_origen(fig, atr, output_dir, leyenda_y, titulo_y):
                    framealpha=0.9, edgecolor='#cccccc', fontsize=11,
                    bbox_to_anchor=(0.5, leyenda_y))
 
-    alg = _alg_from_output_dir(output_dir)
-    fig.suptitle(f'Frente no dominado conjunto por {atr["por"]}'
-                 + (f' - {alg}' if alg else ''),
-                 fontsize=14, fontweight='bold', y=titulo_y)
 
 
 
@@ -616,8 +602,6 @@ def plot_frente_conjunto_multi(paneles, output_dir, fname):
     fig.legend(handles=handles, loc='lower center', ncol=len(handles),
                framealpha=0.9, edgecolor='#cccccc', fontsize=11,
                bbox_to_anchor=(0.5, 0.012))
-    fig.suptitle(f'Frente no dominado conjunto por {atr0["por"]}',
-                 fontsize=14, fontweight='bold', y=1.0)
     plt.tight_layout(rect=[0, 0.045, 1, 1.0])
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
@@ -657,7 +641,7 @@ def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
         for c, plano in enumerate(PARETO_PLANES):
             h = _plot_pareto_plane(axes[r][c], fila, combined_paretos, counts,
                                    *plano, lims=lims.get(plano),
-                                   con_titulo=(r == 0))
+                                   con_titulo=False)
             if c == 0:
                 handles.extend(h)
         if nombre:
@@ -674,13 +658,6 @@ def plot_pareto_comparison(series, pop_size, output_dir, groups=None):
                    framealpha=0.9, edgecolor='#cccccc', fontsize=11,
                    bbox_to_anchor=(0.5, 0.01))
 
-    title = 'Frentes de Pareto Globales'
-    alg = _alg_from_output_dir(output_dir)
-    if alg:
-        title += f' - {alg}'
-
-    fig.suptitle(title,
-                 fontsize=14, fontweight='bold', y=1.0)
     # El aire para leyenda y título es una altura fija, no una fracción: al
     # partir en filas la figura crece y el porcentaje reservaría de más.
     margen = 0.09 / len(filas)
@@ -765,10 +742,9 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
     # 3 columnas sobraría una celda vacía.  Con 5 (los algoritmos) 3+2 es lo mejor.
     ncols = 2 if n_plots == 4 else min(3, n_plots)
     nrows = math.ceil(n_plots / ncols)
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(6.5 * ncols, 5.5 * nrows),
-                             squeeze=False, constrained_layout=True)
-    axes_flat = axes.flatten()
+    fig, axes_flat = _ejes_centrados(n_plots, ncols,
+                                     figsize=(6.5 * ncols, 5.5 * nrows))
+    fig.set_layout_engine('constrained')
 
     sc = None
     for ax, (s, pareto, n_runs) in zip(axes_flat, paretos):
@@ -785,12 +761,9 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
                      fontsize=12, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.25, color='grey')
 
-    for ax in axes_flat[n_plots:]:
-        ax.axis('off')
-
     # Colorbar compartida horizontal abajo
     if sc is not None:
-        cbar = fig.colorbar(sc, ax=axes.ravel().tolist(), orientation='horizontal',
+        cbar = fig.colorbar(sc, ax=axes_flat, orientation='horizontal',
                             shrink=0.6, pad=0.06, aspect=35)
         if modo.get('entero'):
             # Marcas enteras con paso redondo, y siempre los dos extremos: 1 (la
@@ -802,15 +775,6 @@ def plot_pareto_qed_sa_grid(series, pop_size, output_dir, color_by='nruns'):
             cbar.set_ticks(sorted({1, hi} | set(range(paso, hi, paso)) - {0}))
         cbar.set_label(modo['label'], fontsize=11)
 
-    title = 'Frentes de Pareto QED vs SA por algoritmo'
-    alg = _alg_from_output_dir(output_dir)
-    if alg:
-        title = f'Frentes de Pareto QED vs SA por operador - {alg}'
-    # Qué codifica el color no va en el título: lo dice la colorbar, y el detalle
-    # va en el pie de figura del documento.
-
-    fig.suptitle(title,
-                 fontsize=14, fontweight='bold')
     fname = f"pareto_qed_sa_grid_{color_by}_pop{pop_size}.pdf"
     plt.savefig(os.path.join(output_dir, fname), dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -963,9 +927,6 @@ def plot_moleculas_operadores(series, alg, output_dir, n=N_MOLECULAS_OP,
                           'semillas': int(semillas.get(m['smiles'], 0)),
                           'smiles': m['smiles']})
 
-    fig.suptitle(f'Frente por combinación de operadores — {DISPLAY.get(alg, alg)}\n'
-                 f'Las {n} moléculas de mayor QED con SA < {sa_max:g}',
-                 fontsize=13, fontweight='bold', y=0.998)
     # h_pad explícito: el imshow fija el aspecto de la celda, así que el eje
     # queda más alto que la estructura y su pie se mete en el recuadro de abajo.
     plt.tight_layout(rect=[0, 0, 1, 0.95], h_pad=2.5)

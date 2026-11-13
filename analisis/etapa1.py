@@ -283,8 +283,6 @@ def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
     fig.supxlabel('Validez (fracción de moléculas válidas) →', fontsize=12,
                   y=0.042)
     fig.supylabel(f'{label} →', fontsize=12)
-    fig.suptitle(f'Selección de hiperparámetros: {label.lower()} contra validez',
-                 fontsize=15, fontweight='bold')
     fig.tight_layout(rect=[0.01, 0.02, 1, 0.98])
     fname = f'{metric}_vs_validity.pdf'
     fig.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')
@@ -389,8 +387,6 @@ def plot_efectos_hp(df, metric, out_dir):
     fig.legend(manos, etiqs, loc='lower center', ncol=len(etiqs), frameon=False,
                fontsize=9.5, bbox_to_anchor=(0.5, -0.13))
 
-    fig.suptitle(f'Efecto de los hiperparámetros sobre {label.lower()}',
-                 fontsize=13, fontweight='bold', y=1.04)
     fig.tight_layout()
     fname = f'efectos_{metric}.pdf'
     fig.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches='tight')

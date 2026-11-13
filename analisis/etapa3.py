@@ -422,8 +422,6 @@ def moleculas(args):
             ax.set_xlabel(f"QED {m['qed']:.3f} · SA {m['sa']:.2f}\n"
                           f"Fsp3 {m['fsp3']:.2f}", fontsize=9, labelpad=3)
 
-    fig.suptitle('Extremos del frente de cada algoritmo',
-                 fontsize=13, fontweight='bold')
     plt.tight_layout(rect=[0, 0, 1, 1.0], h_pad=1.5, w_pad=1.0)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     plt.savefig(args.out, dpi=200, bbox_inches='tight', facecolor='white')
