@@ -83,23 +83,11 @@ def write_tabla_operadores(res, groups, labels, alg, out_dir, get_values, col):
     campeon = next((l for l in top if l.endswith(f'_{MUT_STD}')),
                    max(top, key=lambda l: res['medians'][l]))
     vals = {l: np.asarray(get_values(l, col), dtype=float) for l in labels}
-    medianas = ', '.join(f'{_latex_escape(l)} {_num(res["medians"][l], 3)}'
-                         for l in orden)
-
     lines = [
         r'\begin{table}[htbp]', r'\centering',
         f'\\caption{{Comparación de operadores en '
-        f'{_latex_escape(DISPLAY.get(alg, alg))} sobre hipervolumen.  Test de '
-        f'Friedman con las 20 semillas como bloques '
-        f'($p$ = {_fmt_p(res["p_omnibus"])}), seguido de las comparaciones por '
-        f'pares con Wilcoxon de rangos con signo y corrección de Holm '
-        f'($\\alpha = {_num(0.05, 2)}$); $r_{{rb}}$ es la correlación '
-        f'rango-biserial de '
-        f'pares emparejados, con signo positivo cuando gana el primero del par.  '
-        f'Medianas: {medianas}.  Grupos homogéneos, de mejor a peor: '
-        f'{fmt_groups(groups)}.  Como el post-hoc no separa a los miembros del '
-        f'grupo ganador, se selecciona el de mutación polinomial por ser la '
-        f'estándar ({_latex_escape(campeon)}).}}',
+        f'\\acrshort{{{alg.lower()}}} sobre hipervolumen.  Grupos '
+        f'homogéneos: {fmt_groups(groups)}.}}',
         f'\\label{{tab:ops_{alg.lower()}}}',
         r'\begin{tabular}{lrrl}', r'\toprule',
         r'Par & $p$ (Holm) & $r_{rb}$ & Mejor \\', r'\midrule',
