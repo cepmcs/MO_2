@@ -198,7 +198,7 @@ def posebusters():
     # Leyenda en la esquina inferior derecha de la figura, en horizontal: no quita espacio al gráfico.
     fig.legend(handles=[Patch(facecolor='#999999', edgecolor='white', label='SBX'),
                         Patch(facecolor='#999999', edgecolor='white', hatch='//', label='PCX')],
-               loc='lower right', ncol=2, frameon=True)
+               loc='lower right', ncol=2, frameon=True, fontsize=14, handlelength=2.2, handleheight=1.3, borderpad=0.7)
     plt.savefig(os.path.join(SALIDA, 'posebuster.pdf'), format='pdf')
     plt.close(fig)
     print('  ✓ posebuster.pdf')
@@ -265,10 +265,8 @@ def tabla_pchembl():
 RESULTADOS = os.path.join(ROOT, 'results', 'exp5', 'exp5_vae_pchembl_logp')
 BENCHMARKS = os.path.join(ROOT, 'benchmarks')
 DOCK_WORST = 1.0            # puntaje de las moléculas cuyo docking falló: no entran al promedio
-N_GENERADAS = 100_000       # moléculas que generó cada modelo de referencia
-# (carpeta, nombre en la tabla, prefijo de sus archivos)
-REFERENCIAS = [('vae_moses', 'VAE', 'vae'), ('vae_mrp1', 'VAE con fine-tuning', 'vae-ft'),
-               ('gan_moses', 'GAN', 'gan'), ('gan_mrp1', 'GAN con fine-tuning', 'gan-ft')]
+# (tipo en benchmarks/generadas_100k/metricas_por_modelo_100k.csv, nombre en la tabla)
+REFERENCIAS = [('vae', 'VAE'), ('vae_ft', 'VAE con fine-tuning'), ('gan', 'GAN'), ('gan_ft', 'GAN con fine-tuning')]
 # Columnas: (clave, encabezado, decimales)
 COLUMNAS_BENCH = [('qed', r'QED $\uparrow$', 3), ('sa', r'SA $\downarrow$', 3),
                   ('dock', r'Dock $\downarrow$', 3), ('pchembl', r'pChEMBL $\uparrow$', 3),
@@ -293,28 +291,19 @@ def _corridas(alg, cruce):
     return pd.DataFrame(filas)
 
 
-def _referencia(carpeta, prefijo, predictor, entrenamiento):
-    """Medias y desviaciones (entre moléculas) de un modelo de referencia, y sus tres tasas de
-    generación sobre las 100 000 moléculas que produjo."""
-    df = pd.read_csv(os.path.join(BENCHMARKS, carpeta, f'{prefijo}_10k.csv'))
-    df = df[df.valida.astype(bool)]
-    df = df[df.dock < DOCK_WORST].assign(pchembl=lambda d: predictor(d.smiles.tolist()))[
-        ['qed', 'sa', 'dock', 'pchembl']]
-    with open(os.path.join(BENCHMARKS, carpeta, 'moleculas.smi')) as f:
-        smi = [l.strip() for l in f if l.strip()]
-    tasas = {'validez': len(smi) / N_GENERADAS, 'unicidad': len(set(smi)) / len(smi),
-             'novedad': sum(s not in entrenamiento for s in smi) / len(smi)}
-    return df.mean().to_dict() | tasas, df.std().to_dict()
+def _referencia(tipo):
+    """Media y desviación entre las 5 réplicas del modelo (el original y las semillas 1 a 4) de cada columna.
+    Cada réplica se evaluó sobre 100 000 moléculas generadas: QED, SA, pChEMBL y dock son promedios de sus
+    moléculas válidas (dock, solo las de docking exitoso); validez, unicidad y novedad son tasas."""
+    m = pd.read_csv(os.path.join(BENCHMARKS, 'generadas_100k', 'metricas_por_modelo_100k.csv'))
+    m = m[m.tipo == tipo][[k for k, _, _ in COLUMNAS_BENCH]]
+    return m.mean().to_dict(), m.std().to_dict()
 
 
 def tabla_benchmarks():
     """Las seis configuraciones de exp5_vae_pchembl_logp contra los cuatro modelos de referencia.
     Configuraciones: media ± desviación entre sus corridas de la media del frente final.
-    Referencias: media ± desviación entre moléculas; validez, unicidad y novedad sin desviación."""
-    from pchembl import PChEMBLPredictor
-    predictor = PChEMBLPredictor()
-    entrenamiento = set(pd.read_pickle(os.path.join(ROOT, 'data', 'moses_train_smiles.pkl.gz'),
-                                       compression='gzip'))
+    Referencias: media ± desviación entre sus 5 réplicas, cada una con 100 000 moléculas generadas."""
     nombres = {'NSGA2': 'NSGA-II', 'NSGA3': 'NSGA-III', 'AGEMOEA': 'AGE-MOEA'}
 
     filas = []
@@ -322,8 +311,8 @@ def tabla_benchmarks():
         for cruce in ('sbx', 'pcx'):
             c = _corridas(alg, cruce)
             filas.append((f'{nombres[alg]} ({cruce.upper()})', c.mean().to_dict(), c.std().to_dict()))
-    for carpeta, nombre, prefijo in REFERENCIAS:
-        media, sd = _referencia(carpeta, prefijo, predictor, entrenamiento)
+    for tipo, nombre in REFERENCIAS:
+        media, sd = _referencia(tipo)
         filas.append((nombre, media, sd))
 
     # El mejor valor de cada columna (entre las diez filas) va en negrita; si varias filas empatan al
