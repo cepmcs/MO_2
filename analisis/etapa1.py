@@ -21,6 +21,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import stats
 
+from .figuras import _ejes_centrados
 from .comun import (
     ALGORITHM_ORDER,
     DISPLAY,
@@ -260,7 +261,7 @@ def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
     if not algs:
         return
 
-    ncols = 3
+    ncols = 2
     nrows = math.ceil((len(algs) + 1) / ncols)     # +1: la celda de la leyenda
     fig, axes = plt.subplots(nrows, ncols, figsize=(5.7 * ncols, 4.9 * nrows),
                              squeeze=False, sharex=True)
@@ -339,9 +340,12 @@ def plot_efectos_hp(df, metric, out_dir):
         return
 
     n = len(algs) + (1 if con_pso else 0)
-    fig, axes = plt.subplots(1, n, figsize=(3 * n, 3.6), squeeze=False,
-                             sharey=True)
-    axes = axes[0]
+    # Dos paneles por fila (2-2-1, el último centrado): con los textos del eje a
+    # 12 pt, cinco paneles en una sola fila quedaban apretados.  Todos comparten
+    # el eje vertical para que las alturas sean comparables.
+    fig, axes = _ejes_centrados(n, 2, figsize=(4.6 * 2, 3.4 * math.ceil(n / 2)))
+    for ax in axes[1:]:
+        ax.sharey(axes[0])
     ancho = 0.20
 
     for ax, alg in zip(axes, algs):
@@ -375,7 +379,7 @@ def plot_efectos_hp(df, metric, out_dir):
         for lado in ('top', 'right'):
             ax.spines[lado].set_visible(False)
 
-    axes[0].set_ylabel(f'Efecto sobre {label.lower()}', fontsize=10)
+    fig.supylabel(f'Efecto sobre {label.lower()}', fontsize=11)
     manos = [plt.Rectangle((0, 0), 1, 1, facecolor=EFECTO_COLOR[cx],
                            hatch=EFECTO_TRAMA[mu], edgecolor='white',
                            linewidth=0.6) for cx, mu in EFECTO_COMBOS]
