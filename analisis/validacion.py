@@ -258,10 +258,10 @@ def tabla_pchembl():
     df = _predicciones_pchembl()
     stats = (df.groupby('algoritmo')['predicted_pchembl'].describe()
              .reindex([a for a in ORDEN_TABLA if a in set(df['algoritmo'])]))
-    columnas = ['count', 'mean', 'std', 'min', '25%', '50%', '75%', 'max']
-    encabezados = ['Moléculas', 'Media', 'Desv.', 'Mín.', 'Q1', 'Mediana', 'Q3', 'Máx.']
+    columnas = ['mean', 'std', 'min', '25%', '50%', '75%', 'max']
+    encabezados = ['Media', 'Desv.', 'Mín.', 'Q1', 'Mediana', 'Q3', 'Máx.']
     _escribir_tabla(
-        stats, columnas, encabezados, lambda x, c: f'${x:.0f}$' if c == 'count' else f'${x:.3f}$',
+        stats, columnas, encabezados, lambda x, c: f'${x:.3f}$',
         'Estadísticos descriptivos del pChEMBL predicho de cada variante, sobre sus moléculas',
         'tab:pchembl_predicho', 'pchembl.tex')
 
