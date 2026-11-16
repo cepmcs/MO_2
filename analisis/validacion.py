@@ -76,9 +76,18 @@ ORDEN = ['AGEMOEA_sbx_vae_pch_logp', 'NSGA2_sbx_vae_pch_logp', 'NSGA3_sbx_vae_pc
 METRICAS_ADMET = ['Caco2_Wang', 'Bioavailability_Ma', 'Solubility_AqSolDB', 'ClinTox', 'LD50_Zhu', 'logP']
 
 
-def admet():
-    """Cuadrícula de 2 × 4 con una distribución KDE (ridgeline) por variante y propiedad."""
+def _datos_admet():
+    """Propiedades ADMET de cada molécula.  Algoritmos: df_combinado_admet.csv (ANALISIS_MOLECULAS).  Los cuatro modelos
+    generativos: sus moléculas válidas y únicas de las 5 réplicas con 100 000 generadas cada una
+    (benchmarks/scripts/admet_100k.py), en lugar de las ~10 000 de ese archivo."""
     df = pd.read_csv(os.path.join(ENTRADA, 'df_combinado_admet.csv'))
+    modelos = pd.read_csv(os.path.join(BENCHMARKS, 'admet_100k', 'admet_baselines_100k.csv'))
+    return pd.concat([df[~df['algoritmo'].isin(set(modelos['algoritmo']))], modelos], ignore_index=True)
+
+
+def admet():
+    """Cuadrícula de 2 × 3 con una distribución KDE (ridgeline) por variante y propiedad."""
+    df = _datos_admet()
     for m in METRICAS_ADMET:
         df[m] = pd.to_numeric(df[m], errors='coerce')
 
@@ -239,7 +248,7 @@ def _escribir_tabla(df, columnas, encabezados, formato, caption, label, archivo)
 
 def tabla_admet():
     """Media de cada propiedad por variante, en dos tablas (la figura de ADMET las resume en curvas)."""
-    df = pd.read_csv(os.path.join(ENTRADA, 'df_combinado_admet.csv'))
+    df = _datos_admet()
     columnas = [c for c, _ in PROPIEDADES_TABLA]
     for c in columnas:
         df[c] = pd.to_numeric(df[c], errors='coerce')
