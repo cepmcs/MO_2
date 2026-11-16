@@ -191,7 +191,8 @@ def escribir_curvas_csv(series, curvas, mapas, output_dir, pop_size):
 
 def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
                            suptitle):
-    """Dibuja una grilla de paneles de convergencia (3 por fila).
+    """Dibuja una grilla de paneles de convergencia (2 por fila, la última
+    fila centrada: 3 paneles → 2-1, 5 paneles → 2-2-1).
 
     specs: lista de (col, ylabel, title, ventana) — ver PANELES_MO / PANELES_QUIM.
     curvas: {col: {label: (gens, vals crudos)}}.
@@ -212,9 +213,9 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
     xlabel = 'Evaluaciones (miles)'
 
     n_plots = len(panels)
-    ncols = min(3, n_plots)
+    ncols = min(2, n_plots)
     nrows = math.ceil(n_plots / ncols)
-    fig, axes = _ejes_centrados(n_plots, ncols, figsize=(6 * ncols, 5.5 * nrows))
+    fig, axes = _ejes_centrados(n_plots, ncols, figsize=(6 * ncols, 5 * nrows))
 
     # Recolectar handles/labels para leyenda compartida (sin duplicados)
     legend_handles, legend_labels = [], []
