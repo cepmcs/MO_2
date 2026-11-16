@@ -115,12 +115,18 @@ def admet():
 
 
 def _predicciones_pchembl():
-    """Moléculas de cada variante con su pChEMBL predicho (columna predicted_pchembl)."""
+    """Moléculas de cada variante con su pChEMBL predicho (columna predicted_pchembl).
+    Algoritmos: frente final de cada corrida (ANALISIS_MOLECULAS/fronts).  Los cuatro modelos generativos: las moléculas
+    válidas y únicas de sus 5 réplicas con 100 000 generadas cada una (benchmarks/scripts/pchembl_100k.py)."""
     from pchembl import PChEMBLPredictor        # el mismo Random Forest del cuaderno del tutor
     predictor = PChEMBLPredictor()
+    modelos = pd.read_csv(os.path.join(BENCHMARKS, 'pchembl_100k', 'pchembl_baselines_100k.csv'))
 
     partes = []
     for alg in PALETA:
+        if alg in set(modelos['algoritmo']):
+            partes.append(modelos[modelos['algoritmo'] == alg])
+            continue
         df = pd.read_csv(os.path.join(ENTRADA, 'fronts', f'frente_{alg}.csv'))
         df['algoritmo'] = alg
         df['predicted_pchembl'] = predictor(df['smiles'].tolist())
