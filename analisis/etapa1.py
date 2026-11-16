@@ -261,7 +261,7 @@ def plot_seleccion_grid(df, algs, metric, out_dir, per_alg):
     if not algs:
         return
 
-    ncols = 2
+    ncols = 3
     nrows = math.ceil((len(algs) + 1) / ncols)     # +1: la celda de la leyenda
     fig, axes = plt.subplots(nrows, ncols, figsize=(5.7 * ncols, 4.9 * nrows),
                              squeeze=False, sharex=True)
