@@ -192,7 +192,7 @@ def escribir_curvas_csv(series, curvas, mapas, output_dir):
 
 def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
                            suptitle):
-    """Dibuja una grilla de paneles de convergencia (2 por fila; el último, si queda solo, centrado).
+    """Dibuja una grilla de paneles de convergencia (3 por fila).
 
     specs: lista de (col, ylabel, title, ventana) — ver PANELES_MO / PANELES_QUIM.
     curvas: {col: {label: (gens, vals crudos)}}.
@@ -212,21 +212,12 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
         return
     xlabel = 'Evaluaciones (miles)'
 
-    # Dos paneles por fila; si en la última queda uno solo, va centrado.  Cada panel ocupa
-    # dos columnas de una grilla de cuatro, y el panel suelto las dos del medio.
     n_plots = len(panels)
-    ncols = min(2, n_plots)
+    ncols = min(3, n_plots)
     nrows = math.ceil(n_plots / ncols)
-    fig = plt.figure(figsize=(6 * ncols, 5.5 * nrows))
-    grilla = fig.add_gridspec(nrows, 2 * ncols)
-    axes = []
-    for i in range(n_plots):
-        fila, col = divmod(i, ncols)
-        if fila == nrows - 1 and n_plots % ncols == 1:
-            col_ini = ncols - 1 if ncols > 1 else 0         # el panel suelto, al centro
-            axes.append(fig.add_subplot(grilla[fila, col_ini:col_ini + 2]))
-        else:
-            axes.append(fig.add_subplot(grilla[fila, 2 * col:2 * col + 2]))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 5.5 * nrows),
+                             squeeze=False)
+    axes = axes.flatten()
 
     # Recolectar handles/labels para leyenda compartida (sin duplicados)
     legend_handles, legend_labels = [], []
@@ -249,6 +240,9 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
         # pChEMBL (4 a 8) también: desde 0 la curva queda aplastada arriba.
         if 'pChEMBL' not in ylabel and all(np.nanmin(v) >= 0 for _, v in curves.values()):
             ax.set_ylim(bottom=0)
+
+    for ax in axes[n_plots:]:
+        ax.set_visible(False)
 
     # Leyenda única compartida al pie de la figura
     if legend_handles:
