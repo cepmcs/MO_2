@@ -48,6 +48,9 @@ from .indicadores import (
 
 # ─── Gráficas ────────────────────────────────────────────────────────────────
 
+# Tamaño de la leyenda al pie de las figuras de convergencia y de boxplots.
+LEYENDA_FUENTE = 15
+
 def _smooth(values, window):
     """Media móvil para suavizar curvas de convergencia."""
     return pd.Series(values).rolling(window=window, min_periods=1).mean().values
@@ -236,8 +239,11 @@ def _plot_convergence_grid(series, output_dir, specs, curvas, mapas, fname,
     if legend_handles:
         fig.legend(legend_handles, legend_labels, loc='lower center',
                    ncol=len(legend_labels), framealpha=0.9, edgecolor='#cccccc',
-                   fontsize=11, bbox_to_anchor=(0.5, -0.02))
-    plt.tight_layout(rect=[0, 0.04, 1, 1])
+                   fontsize=LEYENDA_FUENTE, handlelength=2.5,
+                   bbox_to_anchor=(0.5, -0.02))
+    # El aire para la leyenda es una altura fija, no una fracción: con una sola
+    # fila de paneles la figura es baja y el porcentaje no alcanzaría.
+    plt.tight_layout(rect=[0, 0.5 / fig.get_figheight(), 1, 1])
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
@@ -348,9 +354,9 @@ def plot_boxplots(series, output_dir, get_values, plot_configs,
     if legend_handles:
         fig.legend(handles=legend_handles, labels=legend_labels, loc='lower center',
                    ncol=len(legend_labels), framealpha=0.9, edgecolor='#cccccc',
-                   fontsize=11, bbox_to_anchor=(0.5, -0.02))
+                   fontsize=LEYENDA_FUENTE, bbox_to_anchor=(0.5, -0.02))
 
-    plt.tight_layout(rect=[0, 0.04, 1, 1])
+    plt.tight_layout(rect=[0, 0.5 / fig.get_figheight(), 1, 1])
     plt.savefig(os.path.join(output_dir, fname), dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"  ✓ {fname}")
